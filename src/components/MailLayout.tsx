@@ -1,15 +1,18 @@
 import { useState, useEffect } from 'react';
 import {
   Inbox, Send, FileEdit, Trash2, Plus, Star, Archive,
-  Search, LogOut, Sparkles, Circle, X
+  Search, LogOut, Sparkles, Circle, X, ChevronDown, User
 } from 'lucide-react';
 import { emailService } from '../lib/emailService';
 import { authService } from '../lib/authService';
 import EmailList from './EmailList';
 import EmailView from './EmailView';
+import ThreadView from './ThreadView';
 import ComposeEmail from './ComposeEmail';
 import ThemeToggle from './ThemeToggle';
-import { removeDummyDataForUser } from '../lib/dummyData';
+import GamificationBadges from './GamificationBadges';
+import UserProfile from './UserProfile';
+import { animations } from '../utils/animations';
 
 const iconMap: Record<string, typeof Inbox> = {
   inbox: Inbox,
@@ -26,34 +29,36 @@ const iconMap: Record<string, typeof Inbox> = {
   trash: Trash2,
 };
 
-// Define types
 interface Folder {
-  id: string;
+  id: string | number;
   name: string;
-  user_id: string;
-  created_at: string;
+  user_id?: string | number;
+  created_at?: string;
   icon?: string;
   color?: string;
+  [k: string]: any;
 }
 
 interface Email {
-  id: string;
-  user_id: string;
-  folder_id?: string;
-  from_email: string;
+  id: string | number;
+  user_id?: string | number;
+  folder_id?: string | number;
+  thread_id?: string | number;
+  from_email?: string;
   from_name?: string;
-  to_emails: any[];
-  cc_emails: any[];
-  bcc_emails: any[];
+  to_emails?: any[];
+  cc_emails?: any[];
+  bcc_emails?: any[];
   subject?: string;
   body?: string;
-  is_read: boolean;
-  is_starred: boolean;
-  is_draft: boolean;
-  has_attachments: boolean;
-  created_at: string;
+  is_read?: boolean;
+  is_starred?: boolean;
+  is_draft?: boolean;
+  has_attachments?: boolean;
+  created_at?: string;
   sent_at?: string;
   labels?: any[];
+  [k: string]: any;
 }
 
 export default function MailLayout() {
@@ -62,133 +67,151 @@ export default function MailLayout() {
     authService.logout();
     window.location.reload();
   };
-  
-  const [folders, setFolders] = useState<Folder[]>([]);
+
+  // keep raw responses and normalize when using
+  const [foldersRaw, setFoldersRaw] = useState<any>([]);
+  const [foldersLoaded, setFoldersLoaded] = useState(false);
   const [selectedFolder, setSelectedFolder] = useState<Folder | null>(null);
-  const [emails, setEmails] = useState<Email[]>([]);
+  const [emailsRaw, setEmailsRaw] = useState<any>([]);
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [showCompose, setShowCompose] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
-  const [composeData, setComposeData] = useState<{
-    to?: string;
-    cc?: string;
-    subject?: string;
-    body?: string;
-  } | undefined>(undefined);
+  const [composeData, setComposeData] = useState<any>(undefined);
   const [showProfileDropdown, setShowProfileDropdown] = useState(false);
+  const [showBadges, setShowBadges] = useState(true);
+  const [showUserProfile, setShowUserProfile] = useState(false);
+
+  // normalize different possible shapes to array
+  const normalizeArray = (v: any, hints: string[] = []) => {
+    if (!v) return [];
+    if (Array.isArray(v)) return v;
+    if (typeof v === 'object') {
+      for (const h of hints) {
+        if (Array.isArray(v[h])) return v[h];
+      }
+      if (Array.isArray(v.data)) return v.data;
+      if (Array.isArray(v.items)) return v.items;
+      if (Array.isArray(v.folders)) return v.folders;
+      if (Array.isArray(v.emails)) return v.emails;
+      // sometimes the API returns { data: {...} } where data is object map
+      // try to extract any array value
+      const values = Object.values(v);
+      for (const val of values) {
+        if (Array.isArray(val)) return val;
+      }
+    }
+    return [];
+  };
+
+  const folders: Folder[] = normalizeArray(foldersRaw, ['folders', 'data']);
+  const emails: Email[] = normalizeArray(emailsRaw, ['emails', 'data', 'items']);
 
   useEffect(() => {
     if (!profile?.id) return;
 
     const initializeUserData = async () => {
       try {
-        await removeDummyDataForUser(profile.id);
+        // any migration/cleanup goes here
       } catch (error) {
-        console.error('Error removing dummy data:', error);
+        console.error('init error:', error);
       } finally {
-        loadFolders();
-        loadEmails();
+        await loadFolders();
+        await loadEmails();
       }
     };
 
     initializeUserData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.id]);
 
   useEffect(() => {
     if (selectedFolder) {
-      loadEmails(selectedFolder.id);
+     loadEmails(Number(selectedFolder.id));
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFolder]);
 
   useEffect(() => {
     if (folders.length > 0 && !selectedFolder) {
-      const inboxFolder = folders.find(f => f.name.toLowerCase() === 'inbox');
+      const inboxFolder = folders.find((f) => (f.name || '').toString().toLowerCase() === 'inbox');
       if (inboxFolder) {
-        setSelectedFolder(inboxFolder);
+	setSelectedFolder({ ...inboxFolder, id: Number(inboxFolder.id) });
+      } else {
+	setSelectedFolder({ ...folders[0], id: Number(folders[0].id) });
       }
     }
   }, [folders, selectedFolder]);
 
-  const loadFolders = async () => {
-    try {
-      const { data, error } = await emailService.getFolders(profile.id);
-
-      if (error) throw error;
-      setFolders(data || []);
-      if (data && data.length > 0) {
-        setSelectedFolder(data[0]);
-      }
-    } catch (error) {
-      console.error('Error loading folders:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadEmails = async (folderId?: string) => {
-    try {
-      const { data, error } = await emailService.getEmails(profile.id, folderId);
-
-      if (error) throw error;
-      setEmails(data || []);
-    } catch (error) {
-      console.error('Error loading emails:', error);
-    }
-  };
-
-  // Function to refresh all emails (including drafts)
-  const refreshEmails = () => {
-    if (selectedFolder) {
-      loadEmails(selectedFolder.id);
+const loadFolders = async () => {
+  try {
+    if (!profile?.id) return;
+    const resp = await emailService.getFolders(profile.id);
+    if (resp.error) {
+      console.error('Error loading folders:', resp.error);
+      setFoldersRaw([]);
     } else {
-      // Load all emails if no folder is selected
-      loadEmails();
+      setFoldersRaw(resp.data ?? []);
+      localStorage.setItem("folders", JSON.stringify(resp.data ?? []));  // <-- FIXED
+    }
+  } catch (err) {
+    console.error('Error loading folders:', err);
+    setFoldersRaw([]);
+  } finally {
+    setFoldersLoaded(true);
+    setLoading(false);
+  }
+};
+
+  const loadEmails = async (folderId?: string | number) => {
+    try {
+      if (!profile?.id) return;
+      const folderNumericId = folderId ? Number(folderId) : undefined;
+      const resp = await emailService.getEmails(profile.id, folderNumericId);
+      if (resp.error) {
+        console.error('Error loading emails:', resp.error);
+        setEmailsRaw([]);
+      } else {
+        setEmailsRaw(resp.data ?? []);
+      }
+    } catch (err) {
+      console.error('Error loading emails:', err);
+      setEmailsRaw([]);
     }
   };
 
-  // Handle compose with pre-filled data (reply/forward)
-  const handleCompose = (data?: {
-    to?: string;
-    cc?: string;
-    subject?: string;
-    body?: string;
-  }) => {
+  const refreshEmails = () => {
+    if (selectedFolder) loadEmails(Number(selectedFolder.id));
+    else loadEmails();
+  };
+
+  const handleCompose = (data?: any) => {
     setComposeData(data);
     setShowCompose(true);
   };
 
-  // Close profile dropdown when clicking outside
+  // close profile dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = () => {
-      if (showProfileDropdown) {
-        setShowProfileDropdown(false);
-      }
+      if (showProfileDropdown) setShowProfileDropdown(false);
     };
-
-    if (showProfileDropdown) {
-      document.addEventListener('click', handleClickOutside);
-    }
-
-    return () => {
-      document.removeEventListener('click', handleClickOutside);
-    };
+    if (showProfileDropdown) document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
   }, [showProfileDropdown]);
 
-
-  const filteredEmails = emails.filter(email => {
+  const filteredEmails = emails.filter((email) => {
     if (!searchQuery) return true;
-    const query = searchQuery.toLowerCase();
+    const q = searchQuery.toLowerCase();
     return (
-      (email.subject || '').toLowerCase().includes(query) ||
-      (email.from_name || '').toLowerCase().includes(query) ||
-      email.from_email.toLowerCase().includes(query) ||
-      (email.body || '').toLowerCase().includes(query)
+      ((email.subject || '') + '').toString().toLowerCase().includes(q) ||
+      ((email.from_name || '') + '').toString().toLowerCase().includes(q) ||
+      ((email.from_email || '') + '').toString().toLowerCase().includes(q) ||
+      ((email.body || '') + '').toString().toLowerCase().includes(q)
     );
   });
 
-
-  if (loading) {
+  if (loading && !foldersLoaded) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-slate-950 flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
@@ -236,7 +259,7 @@ export default function MailLayout() {
 
               {/* Profile Dropdown */}
               {showProfileDropdown && (
-                <div className="absolute top-full left-0 right-0 mt-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 overflow-hidden" style={{ minWidth: '320px' }}>
+                <div className={`absolute top-full left-0 right-0 mt-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 overflow-hidden ${animations.slideInUp}`} style={{ minWidth: '320px' }}>
                   {/* User Info Header */}
                   <div className="p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/50">
                     <div className="flex items-center gap-3">
@@ -263,8 +286,15 @@ export default function MailLayout() {
 
                   {/* Manage Account Button */}
                   <div className="p-2">
-                    <button className="w-full px-4 py-3 text-left text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition border border-blue-200 dark:border-blue-800 mb-2">
-                      Manage your Account
+                    <button
+                      onClick={() => {
+                        setShowUserProfile(true);
+                        setShowProfileDropdown(false);
+                      }}
+                      className="w-full px-4 py-3 text-left text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition border border-blue-200 dark:border-blue-800 mb-2 flex items-center gap-2"
+                    >
+                      <User className="w-4 h-4" />
+                      View Profile & Carbon Credits
                     </button>
                   </div>
 
@@ -312,7 +342,7 @@ export default function MailLayout() {
         <div className="p-4">
           <button
             onClick={() => handleCompose()}
-            className="w-full bg-blue-500 hover:bg-blue-600 text-white px-4 py-2.5 rounded-lg font-medium transition flex items-center justify-center gap-2"
+            className={`w-full bg-blue-500 hover:bg-blue-600 text-white px-4 py-2.5 rounded-lg font-medium transition flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-blue-500/50 hover:scale-105 ${animations.fadeInUp}`}
           >
             <Plus className="w-4 h-4" />
             Compose
@@ -322,31 +352,24 @@ export default function MailLayout() {
         {/* Folders */}
         <div className="flex-1 overflow-y-auto py-2">
           <div className="px-2 space-y-1">
-            {/* Reorder folders: Inbox, Drafts, Sent, Spam, Trash */}
             {['inbox', 'drafts', 'sent', 'spam', 'trash'].map((folderType) => {
-              const folder = folders.find(f => f.name.toLowerCase() === folderType);
+              const folder = folders.find((f) => (f.name || '').toString().toLowerCase() === folderType);
               if (!folder) return null;
-              
+
               const Icon = iconMap[folderType] || iconMap[folder.icon || 'folder'] || Circle;
-              const isActive = selectedFolder?.id === folder.id;
-              const folderUnread = emails.filter(e =>
-                e.folder_id === folder.id && !e.is_read
-              ).length;
+              const isActive = String(selectedFolder?.id) === String(folder.id);
+              const folderUnread = emails.filter((e) => String(e.folder_id) === String(folder.id) && !e.is_read).length;
 
               return (
                 <button
-                  key={folder.id}
-                  onClick={() => setSelectedFolder(folder)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition ${
-                    isActive
-                      ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
-                      : 'text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800/50'
-                  }`}
+                  key={String(folder.id)}
+		  onClick={() => setSelectedFolder({ ...folder, id: Number(folder.id) })}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition ${animations.fadeInLeft} ${isActive ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 shadow-md' : 'text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800/50 hover:scale-105'}`}
                 >
                   <Icon className="w-5 h-5 flex-shrink-0" style={{ color: folder.color || (isActive ? '#1e40af' : undefined) }} />
                   <span className="flex-1 text-left font-medium text-sm">{folder.name}</span>
                   {folderUnread > 0 && (
-                    <span className="bg-blue-500 text-white text-xs px-2 py-0.5 rounded-full min-w-[20px] text-center flex-shrink-0">
+                    <span className={`bg-blue-500 text-white text-xs px-2 py-0.5 rounded-full min-w-[20px] text-center flex-shrink-0 ${animations.pulseGlow}`}>
                       {folderUnread}
                     </span>
                   )}
@@ -356,22 +379,24 @@ export default function MailLayout() {
           </div>
         </div>
 
+        {/* Gamification Badges Section */}
+        <div className="border-t border-gray-200 dark:border-slate-800 p-4">
+          <button onClick={() => setShowBadges(!showBadges)} className="flex items-center justify-between w-full mb-3 hover:opacity-80 transition">
+            <h3 className="text-xs font-semibold text-gray-700 dark:text-slate-300 uppercase tracking-wider">🏆 Achievements</h3>
+            <ChevronDown className={`w-4 h-4 text-gray-500 dark:text-slate-400 transition-transform ${showBadges ? 'rotate-180' : ''}`} />
+          </button>
+          {showBadges && <div className="max-h-96 overflow-y-auto"><GamificationBadges /></div>}
+        </div>
+
         {/* Storage Usage - Bottom Left */}
         <div className="p-4 border-t border-gray-200 dark:border-slate-800">
           <div className="mb-3">
             <div className="flex items-center justify-between text-xs text-gray-600 dark:text-slate-400 mb-2">
               <span>Storage Used</span>
-              <span>
-                {((profile?.storage_used || 0) / (1024 * 1024)).toFixed(1)} MB / 1024 MB
-              </span>
+              <span>{((profile?.storage_used || 0) / (1024 * 1024)).toFixed(1)} MB / 1024 MB</span>
             </div>
             <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-1.5">
-              <div 
-                className="bg-gradient-to-r from-blue-500 to-cyan-500 h-1.5 rounded-full transition-all duration-300"
-                style={{ 
-                  width: `${Math.min(((profile?.storage_used || 0) / (profile?.storage_limit || 1073741824)) * 100, 100)}%` 
-                }}
-              ></div>
+              <div className="bg-gradient-to-r from-blue-500 to-cyan-500 h-1.5 rounded-full transition-all duration-300" style={{ width: `${Math.min(((profile?.storage_used || 0) / (profile?.storage_limit || 1073741824)) * 100, 100)}%` }}></div>
             </div>
           </div>
         </div>
@@ -392,15 +417,9 @@ export default function MailLayout() {
             />
           </div>
           <div className="flex items-center gap-2">
-            <button className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition">
-              <Star className="w-4 h-4" />
-            </button>
-            <button className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition">
-              <Archive className="w-4 h-4" />
-            </button>
-            <button className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition">
-              <Trash2 className="w-4 h-4" />
-            </button>
+            <button className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition"><Star className="w-4 h-4" /></button>
+            <button className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition"><Archive className="w-4 h-4" /></button>
+            <button className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition"><Trash2 className="w-4 h-4" /></button>
           </div>
         </div>
 
@@ -409,33 +428,44 @@ export default function MailLayout() {
           <EmailList
             emails={filteredEmails}
             selectedEmail={selectedEmail}
-            onSelectEmail={setSelectedEmail}
-            onRefresh={() => selectedFolder && loadEmails(selectedFolder.id)}
+            onSelectEmail={(email: any) => {
+              setSelectedEmail(email);
+              if (email?.thread_id) setSelectedThreadId(String(email.thread_id));
+              else setSelectedThreadId(null);
+            }}
+	    onRefresh={() => selectedFolder && loadEmails(Number(selectedFolder.id))}
           />
-          <EmailView
-            email={selectedEmail}
-            onClose={() => setSelectedEmail(null)}
-            onRefresh={() => selectedFolder && loadEmails(selectedFolder.id)}
-            onCompose={handleCompose}
-          />
+          {selectedThreadId ? (
+            <ThreadView
+              threadId={selectedThreadId}
+              userId={String(profile?.id || '')}
+              onClose={() => { setSelectedThreadId(null); setSelectedEmail(null); }}
+              onCompose={handleCompose}
+            />
+          ) : (
+            <EmailView
+              email={selectedEmail}
+              onClose={() => setSelectedEmail(null)}
+              onRefresh={() => selectedFolder && loadEmails(selectedFolder.id as any)}
+              onCompose={handleCompose}
+            />
+          )}
         </div>
       </div>
 
       {/* Compose Modal */}
       {showCompose && (
         <ComposeEmail
-          onClose={() => {
-            setShowCompose(false);
-            setComposeData(undefined);
-          }}
-          onSent={() => {
-            setShowCompose(false);
-            setComposeData(undefined);
-            refreshEmails();
-          }}
+          onClose={() => { setShowCompose(false); setComposeData(undefined); }}
+          onSent={() => { setShowCompose(false); setComposeData(undefined); refreshEmails(); }}
           onDraftSaved={refreshEmails}
           prefilledData={composeData}
         />
+      )}
+
+      {/* User Profile Modal */}
+      {showUserProfile && (
+        <UserProfile onClose={() => setShowUserProfile(false)} userEmail={profile?.email} userName={profile?.full_name || profile?.email} />
       )}
     </div>
   );

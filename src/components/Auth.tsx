@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Mail, Lock, User, Sparkles } from 'lucide-react';
 import { authService } from '../lib/authService';
 import ThemeToggle from './ThemeToggle';
+import { animations } from '../utils/animations';
 
 export default function Auth() {
   const [isSignUp, setIsSignUp] = useState(false);
@@ -49,17 +50,17 @@ export default function Auth() {
       </div>
 
       <div className="w-full max-w-md relative">
-        <div className="bg-white/90 dark:bg-white/10 backdrop-blur-xl rounded-3xl shadow-2xl border border-gray-200/50 dark:border-white/20 p-8">
-          <div className="flex items-center justify-center mb-8">
-            <div className="bg-gradient-to-br from-blue-400 to-cyan-400 p-4 rounded-2xl shadow-lg">
-              <Sparkles className="w-8 h-8 text-white" />
+        <div className={`bg-white/90 dark:bg-white/10 backdrop-blur-xl rounded-3xl shadow-2xl border border-gray-200/50 dark:border-white/20 p-8 ${animations.fadeInUp}`}>
+          <div className={`flex items-center justify-center mb-8 ${animations.bounceIn}`}>
+            <div className="bg-gradient-to-br from-blue-400 to-cyan-400 p-4 rounded-2xl shadow-lg hover:shadow-xl hover:shadow-blue-400/50 transition-all duration-300">
+              <Sparkles className="w-8 h-8 text-white animate-spin-slow" />
             </div>
           </div>
 
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white text-center mb-2">
+          <h1 className={`text-3xl font-bold text-gray-900 dark:text-white text-center mb-2 ${animations.fadeInDown}`}>
             {isSignUp ? 'Create Account' : 'Welcome Back'}
           </h1>
-          <p className="text-gray-600 dark:text-slate-300 text-center mb-8">
+          <p className={`text-gray-600 dark:text-slate-300 text-center mb-8 ${animations.fadeIn}`}>
             {isSignUp ? 'Start your journey with us' : 'Sign in to continue to access'}
           </p>
 
@@ -75,7 +76,7 @@ export default function Auth() {
                     type="text"
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
-                    className="w-full pl-11 pr-4 py-3 bg-gray-100 dark:bg-white/10 border border-gray-300 dark:border-white/20 rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition"
+                    className={`w-full pl-11 pr-4 py-3 bg-gray-100 dark:bg-white/10 border border-gray-300 dark:border-white/20 rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition hover:border-blue-400 dark:hover:border-blue-400/50 ${animations.fadeInLeft}`}
                     placeholder="John Doe"
                     required
                   />
@@ -93,7 +94,7 @@ export default function Auth() {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full pl-11 pr-4 py-3 bg-gray-100 dark:bg-white/10 border border-gray-300 dark:border-white/20 rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition"
+                  className={`w-full pl-11 pr-4 py-3 bg-gray-100 dark:bg-white/10 border border-gray-300 dark:border-white/20 rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition hover:border-blue-400 dark:hover:border-blue-400/50 ${animations.fadeInLeft} delay-100`}
                   placeholder="you@example.com"
                   required
                 />
@@ -110,7 +111,7 @@ export default function Auth() {
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-11 pr-4 py-3 bg-gray-100 dark:bg-white/10 border border-gray-300 dark:border-white/20 rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition"
+                  className={`w-full pl-11 pr-4 py-3 bg-gray-100 dark:bg-white/10 border border-gray-300 dark:border-white/20 rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition hover:border-blue-400 dark:hover:border-blue-400/50 ${animations.fadeInLeft} delay-200`}
                   placeholder="••••••••"
                   required
                 />
@@ -118,7 +119,7 @@ export default function Auth() {
             </div>
 
             {error && (
-              <div className="bg-red-100 dark:bg-red-500/20 border border-red-300 dark:border-red-500/50 text-red-800 dark:text-red-200 px-4 py-3 rounded-xl text-sm">
+              <div className={`bg-red-100 dark:bg-red-500/20 border border-red-300 dark:border-red-500/50 text-red-800 dark:text-red-200 px-4 py-3 rounded-xl text-sm ${animations.slideInUp}`}>
                 {error}
               </div>
             )}
@@ -126,22 +127,22 @@ export default function Auth() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-gradient-to-r from-blue-500 to-cyan-500 text-white py-3 rounded-xl font-semibold hover:from-blue-600 hover:to-cyan-600 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-slate-900 transition disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+              className={`w-full bg-gradient-to-r from-blue-500 to-cyan-500 text-white py-3 rounded-xl font-semibold hover:from-blue-600 hover:to-cyan-600 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-slate-900 transition disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl hover:scale-105 ${animations.fadeInUp} delay-300`}
             >
               {loading ? 'Please wait...' : isSignUp ? 'Sign Up' : 'Sign In'}
             </button>
           </form>
 
-          <div className="mt-6 text-center">
+          <div className={`mt-6 text-center ${animations.fadeIn}`}>
             <button
               onClick={() => {
                 setIsSignUp(!isSignUp);
                 setError('');
               }}
-              className="text-gray-600 dark:text-slate-300 hover:text-gray-800 dark:hover:text-white transition"
+              className="text-gray-600 dark:text-slate-300 hover:text-gray-800 dark:hover:text-white transition hover:scale-105 transform duration-300"
             >
               {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
-              <span className="text-blue-400 font-semibold">
+              <span className="text-blue-400 font-semibold hover:text-blue-500 transition">
                 {isSignUp ? 'Sign In' : 'Sign Up'}
               </span>
             </button>

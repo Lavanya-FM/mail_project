@@ -1,96 +1,202 @@
-import { dbOperations } from './database';
+// src/lib/emailService.ts
+type ApiResult<T> = Promise<{ data?: T; error?: any; status: number }>;
+
+// Automatically use same origin unless overridden
+const API_BASE = (process.env.REACT_APP_API_BASE || '').replace(/\/$/, '');
+const BASE = API_BASE || '';
+
+function apiUrl(path: string) {
+  return `${BASE}${path}`;
+}
+
+async function handleResp<T>(resp: Response): Promise<{ data?: T; error?: any; status: number }> {
+  const status = resp.status;
+  const text = await resp.text();
+
+  if (!text) {
+    return resp.ok ? { data: undefined as unknown as T, status } : { error: null, status };
+  }
+
+  try {
+    const json = JSON.parse(text);
+
+    if (json && typeof json === 'object' && json.hasOwnProperty('data')) {
+      return resp.ok ? { data: json.data as T, status } : { error: json, status };
+    }
+
+    return resp.ok ? { data: json as T, status } : { error: json, status };
+  } catch {
+    return resp.ok ? { data: text as unknown as T, status } : { error: text, status };
+  }
+}
+
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem('token') || (window as any).__authToken;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+// --- FIXED: PERFECT folder lookup ---
+export function getFolderIdByName(name: string): number | null {
+  const folders = JSON.parse(localStorage.getItem("folders") || "[]");
+  const search = name.toLowerCase();
+
+  const folder = folders.find((f: any) =>
+    (f.name && f.name.toLowerCase() === search) ||
+    (f.system_box && f.system_box.toLowerCase() === search)
+  );
+
+  return folder ? Number(folder.id) : null;
+}
 
 export const emailService = {
+  // -----------------------------------------------------
+  // GET FOLDERS
+  // -----------------------------------------------------
+  async getFolders(userId: number | string): ApiResult<any[]> {
+    const url = apiUrl(`/api/folders/${encodeURIComponent(String(userId))}`);
+    const resp = await fetch(url, { 
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      credentials: 'include'
+    });
 
-  // Email operations
-  createEmail: async (emailData: any) => {
-    try {
-      const emailId = crypto.randomUUID();
-      const result = await dbOperations.createEmail({
-        ...emailData,
-        id: emailId,
-      });
-      
-      if (result.success) {
-        // Get the created email
-        const email = await dbOperations.getEmail(emailId);
-        return { data: email, error: null };
-      } else {
-        return { data: null, error: result.error };
-      }
-    } catch (error) {
-      console.error('Error creating email:', error);
-      return { data: null, error };
+    const result = await handleResp<any[]>(resp);
+
+    let foldersArray: any[] = [];
+
+    if (result.data && Array.isArray(result.data)) {
+      foldersArray = result.data.map(f => ({
+        id: Number(f.id),
+        name: f.name || f.system_box || "unknown",
+        system_box: (f.system_box || f.name || "").toLowerCase()
+      }));
     }
+
+    // Save clean folder structure in localStorage
+    localStorage.setItem("folders", JSON.stringify(foldersArray));
+
+    return { data: foldersArray, status: result.status };
   },
 
-  updateEmail: async (id: string, updates: any) => {
-    try {
-      // Convert arrays to JSON strings for storage
-      const processedUpdates = { ...updates };
-      if (processedUpdates.to_emails) {
-        processedUpdates.to_emails = JSON.stringify(processedUpdates.to_emails);
-      }
-      if (processedUpdates.cc_emails) {
-        processedUpdates.cc_emails = JSON.stringify(processedUpdates.cc_emails);
-      }
-      if (processedUpdates.bcc_emails) {
-        processedUpdates.bcc_emails = JSON.stringify(processedUpdates.bcc_emails);
-      }
+  // -----------------------------------------------------
+  // GET EMAILS
+  // -----------------------------------------------------
+  async getEmails(userId: number | string, folderId?: string | number): ApiResult<any[]> {
+    let fid: number | null;
 
-      const result = await dbOperations.updateEmail(id, processedUpdates);
-      if (result.success) {
-        const email = await dbOperations.getEmail(id);
-        return { data: email, error: null };
-      } else {
-        return { data: null, error: result.error };
-      }
-    } catch (error) {
-      console.error('Error updating email:', error);
-      return { data: null, error };
+    if (!folderId) {
+      fid = getFolderIdByName("inbox");
+    } else if (isNaN(Number(folderId))) {
+      fid = getFolderIdByName(String(folderId));
+    } else {
+      fid = Number(folderId);
     }
+
+    if (!fid) {
+      console.error("Invalid folderId:", folderId);
+      return { error: "invalid folderId", status: 400 };
+    }
+
+    const url = apiUrl(`/api/emails/${encodeURIComponent(String(userId))}/${encodeURIComponent(fid)}`);
+    const resp = await fetch(url, { 
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      credentials: 'include' 
+    });
+
+const r = await handleResp<any>(resp);
+return { 
+  data: r.data?.data || [], 
+  count: r.data?.count || 0, 
+  unread: r.data?.unread || 0, 
+  status: r.status 
+};
   },
 
-  deleteEmail: async (id: string) => {
-    try {
-      const result = await dbOperations.deleteEmail(id);
-      return { error: result.success ? null : result.error };
-    } catch (error) {
-      console.error('Error deleting email:', error);
-      return { error };
-    }
+  // -----------------------------------------------------
+  // CREATE EMAIL (send / draft)
+  // -----------------------------------------------------
+  async createEmail(payload: any): ApiResult<any> {
+    const url = apiUrl('/api/email/create');
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    return handleResp<any>(resp);
   },
 
-  getEmails: async (userId: string, folderId?: string) => {
-    try {
-      const emails = await dbOperations.getEmails(userId, folderId);
-      return { data: emails, error: null };
-    } catch (error) {
-      console.error('Error getting emails:', error);
-      return { data: [], error };
-    }
+  // -----------------------------------------------------
+  // MOVE EMAIL
+  // -----------------------------------------------------
+  async moveEmail(email_id: number, user_id: number, target_folder: number): ApiResult<any> {
+    const url = apiUrl('/api/email/move');
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      credentials: 'include',
+      body: JSON.stringify({ email_id, user_id, target_folder }),
+    });
+    return handleResp<any>(resp);
   },
 
-  getDrafts: async (userId: string) => {
-    try {
-      const drafts = await dbOperations.getDrafts(userId);
-      return { data: drafts, error: null };
-    } catch (error) {
-      console.error('Error getting drafts:', error);
-      return { data: [], error };
-    }
+  // -----------------------------------------------------
+  // DELETE EMAIL
+  // -----------------------------------------------------
+  async deleteEmail(email_id: number, user_id: number): ApiResult<any> {
+    const url = apiUrl('/api/email/delete');
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      credentials: 'include',
+      body: JSON.stringify({ email_id, user_id }),
+    });
+    return handleResp<any>(resp);
   },
 
-  // Folder operations
-  getFolders: async (userId: string) => {
-    try {
-      const folders = await dbOperations.getFolders(userId);
-      return { data: folders, error: null };
-    } catch (error) {
-      console.error('Error getting folders:', error);
-      return { data: [], error };
-    }
+  // -----------------------------------------------------
+  // STAR EMAIL
+  // -----------------------------------------------------
+  async star(email_id: number, user_id: number, status: boolean): ApiResult<any> {
+    const url = apiUrl('/api/email/star');
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      credentials: 'include',
+      body: JSON.stringify({ email_id, user_id, status }),
+    });
+    return handleResp<any>(resp);
+  },
+
+// -----------------------------------------------------
+// UPDATE EMAIL (read, star, folder_id)
+// -----------------------------------------------------
+async updateEmail(emailId: number | string, data: any): ApiResult<any> {
+  const url = apiUrl('/api/email/update');
+  const payload = {
+    email_id: Number(emailId),
+    ...data
+  };
+
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  });
+
+  return handleResp<any>(resp);
+},
+
+  // -----------------------------------------------------
+  // CHECK IF USER EXISTS
+  // -----------------------------------------------------
+  async checkEmailExists(email: string): ApiResult<any> {
+    const url = apiUrl(`/api/users/email/${encodeURIComponent(email)}`);
+    const resp = await fetch(url, { 
+      headers: { 'Content-Type': 'application/json', ...authHeaders() }, 
+      credentials: 'include' 
+    });
+
+    return handleResp<any>(resp);
   }
 };
-
-export default emailService;

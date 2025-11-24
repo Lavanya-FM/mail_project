@@ -90,7 +90,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
 
   const markAsRead = async (emailId: string) => {
     try {
-      await emailService.updateEmail(emailId, { is_read: true });
+      await emailService.updateEmail(emailId, { user_id: currentUser.id, is_read: true });
       onRefresh();
     } catch (error) {
       console.error('Error marking email as read:', error);
@@ -100,7 +100,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
   const toggleStar = async () => {
     if (!email) return;
     try {
-      await emailService.updateEmail(email.id, { is_starred: !starred });
+      await emailService.updateEmail(email.id, { user_id: currentUser.id, is_starred: !starred });
       setStarred(!starred);
       onRefresh();
     } catch (error) {
@@ -111,23 +111,46 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
   const handleReply = () => {
     if (!email || !currentUser || !onCompose) return;
     const replySubject = email.subject?.startsWith('Re:') ? email.subject : `Re: ${email.subject || '(No subject)'}`;
-    const replyBody = `\n\n--- Original Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || 'me'}\nSubject: ${email.subject || '(No subject)'}\n\n${email.body || ''}`;
-    onCompose({ to: email.from_email, subject: replySubject, body: replyBody });
+    
+    const replyTo = email.from_email;
+    
+    const replyBody = `\n\n--- Original Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || currentUser.email}\nSubject: ${email.subject || '(No subject)'}\n\n${email.body || ''}`;
+    
+    onCompose({ to: replyTo, subject: replySubject, body: replyBody });
   };
 
   const handleReplyAll = () => {
     if (!email || !currentUser || !onCompose) return;
-    const allRecipients = [email.from_email, ...(email.to_emails?.map(to => to.email) || []), ...(email.cc_emails?.map(cc => cc.email) || [])]
-      .filter(emailAddr => emailAddr !== currentUser.email);
-    const replySubject = email.subject?.startsWith('Re:') ? email.subject : `Re: ${email.subject || '(No subject)'}`;
-    const replyBody = `\n\n--- Original Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || 'me'}\nSubject: ${email.subject || '(No subject)'}\n\n${email.body || ''}`;
-    onCompose({ to: allRecipients.join(', '), subject: replySubject, body: replyBody });
+
+    const allRecipients = [
+      email.from_email,
+      ...(email.to_emails?.map(t => t.email) || []),
+      ...(email.cc_emails?.map(cc => cc.email) || [])
+    ].filter(addr => addr && addr !== currentUser.email);
+
+    const uniqueRecipients = Array.from(new Set(allRecipients));
+
+    const replySubject = email.subject?.startsWith("Re:")
+      ? email.subject
+      : `Re: ${email.subject || "(No subject)"}`;
+
+    const replyBody = `\n\n--- Original Message ---\nFrom: ${
+      email.from_name || email.from_email
+    }\nTo: ${email.to_emails?.map(t => t.email).join(", ") || currentUser.email}\nSubject: ${
+      email.subject || "(No subject)"
+    }\n\n${email.body || ""}`;
+
+    onCompose({
+      to: uniqueRecipients.join(", "),
+      subject: replySubject,
+      body: replyBody,
+    });
   };
 
   const handleForward = () => {
     if (!email || !onCompose) return;
     const forwardSubject = email.subject?.startsWith('Fwd:') ? email.subject : `Fwd: ${email.subject || '(No subject)'}`;
-    const forwardBody = `\n\n--- Forwarded Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || 'me'}\nSubject: ${email.subject || '(No subject)'}\nDate: ${formatFullDate(email.sent_at || email.created_at)}\n\n${email.body || ''}`;
+    const forwardBody = `\n\n--- Forwarded Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || currentUser.email}\nSubject: ${email.subject || '(No subject)'}\nDate: ${formatFullDate(email.sent_at || email.created_at)}\n\n${email.body || ''}`;
     onCompose({ subject: forwardSubject, body: forwardBody });
   };
 
@@ -166,10 +189,14 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
         const trashFolder = folders?.find(f => f.name.toLowerCase() === 'trash');
 
         if (trashFolder) {
-          const { error: updateError } = await emailService.updateEmail(email.id, { folder_id: trashFolder.id });
+          const { error: updateError } = await emailService.updateEmail(email.id, {
+            user_id: currentUser.id,
+            folder_id: trashFolder.id
+          });
+
           if (updateError) throw updateError;
         } else {
-          const { error: deleteError } = await emailService.deleteEmail(email.id);
+          const { error: deleteError } = await emailService.deleteEmail(email.id, currentUser.id);
           if (deleteError) throw deleteError;
         }
 
@@ -201,7 +228,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
         const spamFolder = folders?.find(f => f.name.toLowerCase() === 'spam');
         if (!spamFolder) throw new Error('Spam folder not found');
 
-        const { error: updateError } = await emailService.updateEmail(email.id, { folder_id: spamFolder.id });
+        const { error: updateError } = await emailService.updateEmail(email.id, { user_id: currentUser.id, folder_id: spamFolder.id });
         if (updateError) throw updateError;
 
         onRefresh();
@@ -215,7 +242,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
     const toEmails = email.to_emails?.map(to => to.email).join(', ') || '';
     const ccEmails = email.cc_emails?.map(cc => cc.email).join(', ') || '';
     try {
-      await emailService.deleteEmail(email.id);
+      await emailService.deleteEmail(email.id, currentUser.id);
       onRefresh();
     } catch (error) {
       console.error('Error deleting draft:', error);
@@ -304,7 +331,9 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
                   <div className="flex items-start gap-2 text-xs">
                     <span className="w-16 font-semibold text-gray-500 dark:text-slate-400 shrink-0">to:</span>
                     <span className="text-gray-900 dark:text-slate-200 break-all">
-                      {email.to_emails && email.to_emails.length > 0 ? email.to_emails.map((to) => to.email).join(', ') : 'me'}
+                      {email.to_emails?.length
+                        ? email.to_emails.map(t => t.email).join(', ')
+                        : currentUser.email}
                     </span>
                   </div>
                   <div className="flex items-start gap-2 text-xs">
@@ -375,7 +404,10 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
                         </span>
                       </div>
                       <div className="text-sm text-gray-600 dark:text-slate-400 mt-1">
-                        to {email.to_emails && email.to_emails.length > 0 ? email.to_emails.map((to) => to.email).join(', ') : 'me'}
+                        to {email.to_emails?.length
+                          ? email.to_emails.map(t => t.email).join(', ')
+                          : currentUser.email
+                        }
                         {email.cc_emails && email.cc_emails.length > 0 && (
                           <span>, cc {email.cc_emails.map((cc) => cc.email).join(', ')}</span>
                         )}
@@ -443,6 +475,8 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
           </div>
         </div>
       </div>
+
+      {/* Confirm Dialog */}
       {confirmDialog.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
           <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-2xl shadow-2xl border border-gray-200 dark:border-slate-800 p-6">

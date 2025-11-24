@@ -80,14 +80,20 @@ export default function EmailList({
           <div className="divide-y divide-gray-200 dark:divide-slate-800">
             {emails.map((email) => {
               const isSelected = selectedEmail?.id === email.id;
-              const getInitials = (name: string) => {
-                return name
-                  .split(' ')
-                  .map((n) => n[0])
-                  .join('')
-                  .toUpperCase()
-                  .slice(0, 2);
-              };
+	      const getInitials = (name?: string) => {
+		  if (!name) return "U";
+
+		  const safe = String(name).trim();
+		  if (!safe) return "U";
+	
+		  return safe
+		    .split(" ")
+		    .filter(Boolean)
+		    .map((n) => n.charAt(0))
+		    .join("")
+		    .toUpperCase()
+		    .slice(0, 2);
+		};
 
               return (
                 <button
@@ -99,7 +105,7 @@ export default function EmailList({
                 >
                   <div className="flex items-start gap-3">
                     <div className="flex-shrink-0 w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-white text-sm font-semibold">
-                      {getInitials(email.from_name || email.from_email)}
+			{getInitials(email.from_name || email.from_email || 'User')}
                     </div>
 
                     <div className="flex-1 min-w-0">
