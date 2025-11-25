@@ -8,6 +8,8 @@ import {
   formatCO2eSavings,
   CARBON_BADGE_TIERS,
 } from '../lib/carbonService';
+import { authService } from '../lib/authService';
+import { emailService } from '../lib/emailService';
 
 interface CarbonBadgesProps {
   storageSavedGB?: number;
@@ -16,21 +18,59 @@ interface CarbonBadgesProps {
 }
 
 export default function CarbonBadges({
-  storageSavedGB = 500,
-  dataTransferReducedGB = 1000,
+  storageSavedGB,
+  dataTransferReducedGB,
   networkType = 'internet',
 }: CarbonBadgesProps) {
-  const [metrics, setMetrics] = useState(calculateCarbonMetrics(storageSavedGB, dataTransferReducedGB, networkType));
-  const [currentBadge, setCurrentBadge] = useState(getBadgeTierForCredits(metrics.carbonCreditsEarned));
-  const [progress, setProgress] = useState(getProgressToNextTier(metrics.carbonCreditsEarned));
+  const [metrics, setMetrics] = useState({ storageSavedGB: 0, dataTransferReducedGB: 0, totalCO2eSavedKg: 0, carbonCreditsEarned: 0 });
+  const [currentBadge, setCurrentBadge] = useState(getBadgeTierForCredits(0));
+  const [progress, setProgress] = useState(getProgressToNextTier(0));
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [submittedCredits, setSubmittedCredits] = useState(0);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const newMetrics = calculateCarbonMetrics(storageSavedGB, dataTransferReducedGB, networkType);
-    setMetrics(newMetrics);
-    setCurrentBadge(getBadgeTierForCredits(newMetrics.carbonCreditsEarned));
-    setProgress(getProgressToNextTier(newMetrics.carbonCreditsEarned));
+    const calculateRealMetrics = async () => {
+      try {
+        const profile = authService.getCurrentUser();
+        if (!profile) {
+          setLoading(false);
+          return;
+        }
+
+        // Get user's emails to calculate real metrics
+        const { data: emails } = await emailService.getEmails(profile.id);
+        
+        // Calculate storage saved (based on email count and average size)
+        const emailCount = emails?.length || 0;
+        const avgEmailSize = 0.05; // 50KB average per email
+        const realStorageSavedGB = (emailCount * avgEmailSize) / 1024;
+
+        // Calculate data transfer reduced (based on attachments)
+        const emailsWithAttachments = emails?.filter(e => e.has_attachments)?.length || 0;
+        const avgAttachmentSize = 2; // 2MB average
+        const realDataTransferReducedGB = (emailsWithAttachments * avgAttachmentSize) / 1024;
+
+        // Calculate real carbon metrics
+        const realMetrics = calculateCarbonMetrics(realStorageSavedGB, realDataTransferReducedGB, networkType);
+        setMetrics(realMetrics);
+        setCurrentBadge(getBadgeTierForCredits(realMetrics.carbonCreditsEarned));
+        setProgress(getProgressToNextTier(realMetrics.carbonCreditsEarned));
+      } catch (error) {
+        console.error('Error calculating carbon metrics:', error);
+        // Fallback to provided props if available
+        if (storageSavedGB !== undefined && dataTransferReducedGB !== undefined) {
+          const fallbackMetrics = calculateCarbonMetrics(storageSavedGB, dataTransferReducedGB, networkType);
+          setMetrics(fallbackMetrics);
+          setCurrentBadge(getBadgeTierForCredits(fallbackMetrics.carbonCreditsEarned));
+          setProgress(getProgressToNextTier(fallbackMetrics.carbonCreditsEarned));
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    calculateRealMetrics();
   }, [storageSavedGB, dataTransferReducedGB, networkType]);
 
   const handleSubmitToGovernment = () => {
@@ -42,6 +82,25 @@ export default function CarbonBadges({
     setShowSubmitModal(false);
     alert(`Successfully submitted ${formatCarbonCredits(metrics.carbonCreditsEarned)} carbon credits to government registry!`);
   };
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-xl p-6 border border-green-200 dark:border-green-800">
+          <div className="animate-pulse">
+            <div className="h-8 bg-gray-200 dark:bg-slate-700 rounded mb-4"></div>
+            <div className="grid grid-cols-3 gap-4 mb-6">
+              <div className="h-16 bg-white dark:bg-slate-800 rounded-lg"></div>
+              <div className="h-16 bg-white dark:bg-slate-800 rounded-lg"></div>
+              <div className="h-16 bg-white dark:bg-slate-800 rounded-lg"></div>
+            </div>
+            <div className="h-4 bg-gray-200 dark:bg-slate-700 rounded mb-2"></div>
+            <div className="h-2 bg-gray-200 dark:bg-slate-700 rounded"></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

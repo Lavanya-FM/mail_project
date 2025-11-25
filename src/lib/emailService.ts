@@ -2,7 +2,7 @@
 type ApiResult<T> = Promise<{ data?: T; error?: any; status: number }>;
 
 // Automatically use same origin unless overridden
-const API_BASE = (process.env.REACT_APP_API_BASE || '').replace(/\/$/, '');
+const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
 const BASE = API_BASE || '';
 
 function apiUrl(path: string) {

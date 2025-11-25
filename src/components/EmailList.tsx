@@ -1,24 +1,5 @@
 import { Star, Paperclip, Circle } from 'lucide-react';
-
-interface Email {
-  id: string;
-  user_id: string;
-  folder_id?: string;
-  from_email: string;
-  from_name?: string;
-  to_emails: any[];
-  cc_emails: any[];
-  bcc_emails: any[];
-  subject?: string;
-  body?: string;
-  is_read: boolean;
-  is_starred: boolean;
-  is_draft: boolean;
-  has_attachments: boolean;
-  created_at: string;
-  sent_at?: string;
-  labels?: any[];
-}
+import { Email } from '../types/email';
 
 type EmailListProps = {
   emails: Email[];
@@ -120,7 +101,7 @@ export default function EmailList({
                           {email.from_name || email.from_email}
                         </span>
                         <span className="text-xs text-gray-500 dark:text-slate-500 flex-shrink-0">
-                          {formatDate(email.sent_at || email.created_at)}
+                          {formatDate(email.sent_at || email.created_at || '')}
                         </span>
                       </div>
 

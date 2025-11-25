@@ -1,15 +1,60 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, Mail, Leaf, Settings } from 'lucide-react';
 import CarbonBadges from './CarbonBadges';
+import { authService } from '../lib/authService';
+import { emailService } from '../lib/emailService';
 
 interface UserProfileProps {
   onClose: () => void;
   userEmail?: string;
   userName?: string;
+  initialTab?: 'overview' | 'carbon' | 'settings';
 }
 
-export default function UserProfile({ onClose, userEmail = 'user@example.com', userName = 'User' }: UserProfileProps) {
-  const [activeTab, setActiveTab] = useState<'overview' | 'carbon' | 'settings'>('overview');
+export default function UserProfile({ onClose, userEmail = 'user@example.com', userName = 'User', initialTab = 'overview' }: UserProfileProps) {
+  const [activeTab, setActiveTab] = useState<'overview' | 'carbon' | 'settings'>(initialTab);
+  const [userStats, setUserStats] = useState({
+    emailCount: 0,
+    storageUsed: 0,
+    memberSince: 'Nov 2024'
+  });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchUserStats = async () => {
+      try {
+        const profile = authService.getCurrentUser();
+        if (!profile) {
+          setLoading(false);
+          return;
+        }
+
+        const { data: emails } = await emailService.getEmails(profile.id);
+        const emailCount = emails?.length || 0;
+        
+        // Calculate storage used (based on email count and average size)
+        const avgEmailSize = 0.05; // 50KB average per email
+        const storageUsedGB = (emailCount * avgEmailSize) / 1024;
+        
+        // Get member since date from profile or default
+        const memberSince = profile.created_at ? 
+          new Date(profile.created_at).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) :
+          'Nov 2024';
+
+        setUserStats({
+          emailCount,
+          storageUsed: storageUsedGB,
+          memberSince
+        });
+      } catch (error) {
+        console.error('Error fetching user stats:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchUserStats();
+  }, []);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
@@ -77,15 +122,21 @@ export default function UserProfile({ onClose, userEmail = 'user@example.com', u
               <div className="grid grid-cols-3 gap-4">
                 <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 border border-blue-200 dark:border-blue-800">
                   <p className="text-xs text-gray-600 dark:text-slate-400 uppercase tracking-wider mb-2">Emails Sent</p>
-                  <p className="text-3xl font-bold text-blue-600 dark:text-blue-400">156</p>
+                  <p className="text-3xl font-bold text-blue-600 dark:text-blue-400">
+                    {loading ? '...' : userStats.emailCount}
+                  </p>
                 </div>
                 <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-4 border border-green-200 dark:border-green-800">
                   <p className="text-xs text-gray-600 dark:text-slate-400 uppercase tracking-wider mb-2">Storage Used</p>
-                  <p className="text-3xl font-bold text-green-600 dark:text-green-400">2.4 GB</p>
+                  <p className="text-3xl font-bold text-green-600 dark:text-green-400">
+                    {loading ? '...' : userStats.storageUsed.toFixed(1)} GB
+                  </p>
                 </div>
                 <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-4 border border-purple-200 dark:border-purple-800">
                   <p className="text-xs text-gray-600 dark:text-slate-400 uppercase tracking-wider mb-2">Member Since</p>
-                  <p className="text-lg font-bold text-purple-600 dark:text-purple-400">Nov 2024</p>
+                  <p className="text-lg font-bold text-purple-600 dark:text-purple-400">
+                    {loading ? '...' : userStats.memberSince}
+                  </p>
                 </div>
               </div>
 
@@ -114,7 +165,7 @@ export default function UserProfile({ onClose, userEmail = 'user@example.com', u
           )}
 
           {activeTab === 'carbon' && (
-            <CarbonBadges storageSavedGB={500} dataTransferReducedGB={1000} networkType="internet" />
+            <CarbonBadges />
           )}
 
           {activeTab === 'settings' && (

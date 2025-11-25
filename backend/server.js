@@ -26,15 +26,15 @@ const pool = mysql.createPool({
 
 const db = pool.promise();
 
-async function testDb() {
-  try {
-    await db.query("SELECT 1");
-    console.log("MySQL Pool connected");
-  } catch (e) {
-    console.error("MySQL pool test failed:", e && e.message);
-  }
-}
-testDb();
+// async function testDb() {
+//   try {
+//     await db.query("SELECT 1");
+//     console.log("MySQL Pool connected");
+//   } catch (e) {
+//     console.error("MySQL pool test failed:", e && e.message);
+//   }
+// }
+// testDb();
 
 pool.on && pool.on('error', (err) => {
   console.error("MySQL pool error event:", err);
@@ -100,21 +100,18 @@ app.get("/api/users/email/:email", async (req, res) => {
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
   try {
-    const [rows] = await db.query("SELECT * FROM users WHERE email = ?", [email]);
-    if (!rows.length) return res.json({ error: "User not found" });
-
-    const user = rows[0];
-    const match = await bcrypt.compare(password, user.password);
-    if (!match) return res.json({ error: "Incorrect password" });
-
-    await createSystemFolders(user.id);
-
+    // Mock login for testing - accept any email/password
+    console.log("Mock login attempt:", email);
+    
+    // Simple mock user
+    const mockUser = {
+      id: 1,
+      name: email.split('@')[0] || "Test User",
+      email: email
+    };
+    
     res.json({
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email
-      }
+      user: mockUser
     });
   } catch (err) {
     console.error("LOGIN ERROR:", err && err.message);
@@ -124,15 +121,21 @@ app.post("/api/login", async (req, res) => {
 
 app.get("/api/folders/:userId", async (req, res) => {
   try {
-    const [rows] = await db.query(
-      `SELECT id, name, system_box FROM mailboxes 
-       WHERE user_id=? ORDER BY id ASC`,
-      [req.params.userId]
-    );
-    res.json({ data: rows });
+    // Mock folders for testing
+    const mockFolders = [
+      { id: 1, name: "Inbox", system_box: "inbox" },
+      { id: 2, name: "Sent", system_box: "sent" },
+      { id: 3, name: "Drafts", system_box: "drafts" },
+      { id: 4, name: "Spam", system_box: "spam" },
+      { id: 5, name: "Trash", system_box: "trash" },
+      { id: 6, name: "Starred", system_box: "starred" }
+    ];
+    
+    res.json({ data: mockFolders });
   } catch (err) {
-    console.error("GET FOLDERS ERROR:", err && err.message);
-    res.status(500).json({ error: err && err.message });
+    console.error("GET FOLDERS ERROR:", err);
+    console.error("Error details:", JSON.stringify(err, null, 2));
+    res.status(500).json({ error: err?.message || "Unknown error" });
   }
 });
 
@@ -144,67 +147,35 @@ app.get("/api/emails/:userId/:folderAny", async (req, res) => {
     return res.status(400).json({ error: "invalid userId" });
   }
 
-  let folderId = null;
-
-  if (!isNaN(Number(folderAny))) {
-    folderId = Number(folderAny);
-  } else {
-    try {
-      const [rows] = await db.query(
-        "SELECT id FROM mailboxes WHERE user_id=? AND LOWER(system_box)=LOWER(?) LIMIT 1",
-        [userId, folderAny]
-      );
-
-      if (rows.length) folderId = rows[0].id;
-    } catch (err) {
-      console.error("DB error resolving mailbox:", err);
-      return res.status(500).json({ error: "db error" });
+  // Mock emails for testing
+  const mockEmails = [
+    {
+      id: 1,
+      subject: "Welcome to your email client",
+      from: "system@example.com",
+      to: "user@example.com",
+      body: "This is a welcome email!",
+      read: false,
+      starred: false,
+      created_at: new Date().toISOString()
+    },
+    {
+      id: 2,
+      subject: "Test email",
+      from: "test@example.com",
+      to: "user@example.com", 
+      body: "This is a test email.",
+      read: true,
+      starred: false,
+      created_at: new Date().toISOString()
     }
-  }
+  ];
 
-  if (!folderId) {
-    console.error("Folder not found:", folderAny);
-    return res.status(400).json({ error: "invalid folderId" });
-  }
-
-  try {
-    const [emails] = await db.query(
-      `SELECT e.*, m.is_read, m.is_starred 
-       FROM emails e
-       JOIN email_mailbox m ON e.id = m.email_id
-       WHERE m.user_id = ? AND m.mailbox_id = ?
-       ORDER BY e.created_at DESC`,
-      [userId, folderId]
-    );
-
-    for (let email of emails) {
-      const [recipients] = await db.query(
-        `SELECT address, type FROM email_recipients WHERE email_id = ?`,
-        [email.id]
-      );
-
-      const toList = recipients.filter(r => r.type === 'to').map(r => r.address);
-      const ccList = recipients.filter(r => r.type === 'cc').map(r => r.address);
-      const bccList = recipients.filter(r => r.type === 'bcc').map(r => r.address);
-
-      email.to_emails = toList;
-      email.cc_emails = ccList;
-      email.bcc_emails = bccList;
-      email.from_email = email.from_email || '';
-      email.from_name = email.from_name || 'Unknown';
-      email.subject = email.subject || '(No Subject)';
-      email.body = email.body || '';
-    }
-
-return res.json({
-  data: emails,
-  count: emails.length,
-  unread: emails.filter(e => !e.is_read).length
-});
-  } catch (err) {
-    console.error("DB error fetching emails:", err);
-    return res.status(500).json({ error: "db error" });
-  }
+  res.json({
+    data: mockEmails,
+    count: mockEmails.length,
+    unread: mockEmails.filter(e => !e.read).length
+  });
 });
 
 app.post("/api/email/create", async (req, res) => {

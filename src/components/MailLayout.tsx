@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import {
   Inbox, Send, FileEdit, Trash2, Plus, Star, Archive,
-  Search, LogOut, Sparkles, Circle, X, ChevronDown, User
+  Search, LogOut, Sparkles, Circle, X, ChevronDown, User,
+  Clock, AlertTriangle, Tag, Mail
 } from 'lucide-react';
-import { emailService } from '../lib/emailService';
+import { emailService, getFolderIdByName } from '../lib/emailService';
 import { authService } from '../lib/authService';
 import EmailList from './EmailList';
 import EmailView from './EmailView';
@@ -12,7 +13,9 @@ import ComposeEmail from './ComposeEmail';
 import ThemeToggle from './ThemeToggle';
 import GamificationBadges from './GamificationBadges';
 import UserProfile from './UserProfile';
+import AddAccountModal from './AddAccountModal';
 import { animations } from '../utils/animations';
+import { Email, Folder } from '../types/email';
 
 const iconMap: Record<string, typeof Inbox> = {
   inbox: Inbox,
@@ -25,41 +28,21 @@ const iconMap: Record<string, typeof Inbox> = {
   folder: Circle,
   drafts: FileEdit,
   sent: Send,
-  spam: Archive,
+  spam: AlertTriangle,
   trash: Trash2,
+  snoozed: Clock,
 };
 
-interface Folder {
-  id: string | number;
-  name: string;
-  user_id?: string | number;
-  created_at?: string;
-  icon?: string;
-  color?: string;
-  [k: string]: any;
-}
-
-interface Email {
-  id: string | number;
-  user_id?: string | number;
-  folder_id?: string | number;
-  thread_id?: string | number;
-  from_email?: string;
-  from_name?: string;
-  to_emails?: any[];
-  cc_emails?: any[];
-  bcc_emails?: any[];
-  subject?: string;
-  body?: string;
-  is_read?: boolean;
-  is_starred?: boolean;
-  is_draft?: boolean;
-  has_attachments?: boolean;
-  created_at?: string;
-  sent_at?: string;
-  labels?: any[];
-  [k: string]: any;
-}
+// Color mapping for each folder type
+const folderColors: Record<string, string> = {
+  inbox: '#3b82f6',    // Blue
+  starred: '#fbbf24', // Yellow/Gold
+  snoozed: '#8b5cf6',  // Purple
+  sent: '#10b981',    // Green
+  drafts: '#f59e0b',  // Amber
+  spam: '#ef4444',     // Red
+  trash: '#6b7280',   // Gray
+};
 
 export default function MailLayout() {
   const profile = authService.getCurrentUser();
@@ -74,14 +57,22 @@ export default function MailLayout() {
   const [selectedFolder, setSelectedFolder] = useState<Folder | null>(null);
   const [emailsRaw, setEmailsRaw] = useState<any>([]);
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
-  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
-  const [showCompose, setShowCompose] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
-  const [composeData, setComposeData] = useState<any>(undefined);
   const [showProfileDropdown, setShowProfileDropdown] = useState(false);
   const [showBadges, setShowBadges] = useState(true);
   const [showUserProfile, setShowUserProfile] = useState(false);
+  const [showAddAccount, setShowAddAccount] = useState(false);
+  const [userProfileTab, setUserProfileTab] = useState<'overview' | 'carbon' | 'settings'>('carbon');
+  const [labels, setLabels] = useState([
+    { id: 1, name: 'Personal', color: '#10b981' },
+    { id: 2, name: 'Work', color: '#3b82f6' },
+    { id: 3, name: 'Travel', color: '#f59e0b' },
+  ]);
+  const [openedMailTabs, setOpenedMailTabs] = useState<Email[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [composeWindows, setComposeWindows] = useState<string[]>([]);
+  const [nextComposeId, setNextComposeId] = useState(1);
 
   // normalize different possible shapes to array
   const normalizeArray = (v: any, hints: string[] = []) => {
@@ -128,7 +119,17 @@ export default function MailLayout() {
 
   useEffect(() => {
     if (selectedFolder) {
-     loadEmails(Number(selectedFolder.id));
+      // Handle special folders differently
+      if (selectedFolder.id === 'starred') {
+        loadStarredEmails();
+      } else if (selectedFolder.id === 'archive') {
+        const archiveFolderId = getFolderIdByName('archive');
+        if (archiveFolderId) {
+          loadEmails(archiveFolderId);
+        }
+      } else {
+        loadEmails(Number(selectedFolder.id));
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFolder]);
@@ -182,13 +183,112 @@ const loadFolders = async () => {
   };
 
   const refreshEmails = () => {
-    if (selectedFolder) loadEmails(Number(selectedFolder.id));
-    else loadEmails();
+    if (selectedFolder) {
+      if (selectedFolder.id === 'starred') {
+        loadStarredEmails();
+      } else if (selectedFolder.id === 'archive') {
+        const archiveFolderId = getFolderIdByName('archive');
+        if (archiveFolderId) {
+          loadEmails(archiveFolderId);
+        }
+      } else {
+        loadEmails(Number(selectedFolder.id));
+      }
+    } else {
+      loadEmails();
+    }
   };
 
-  const handleCompose = (data?: any) => {
-    setComposeData(data);
-    setShowCompose(true);
+  const handleComposeFromEmail = () => {
+    handleOpenComposeWindow();
+  };
+
+  const handleAddAccount = () => {
+    setShowAddAccount(true);
+    setShowProfileDropdown(false);
+  };
+
+  const handleAccountAdded = (account: any) => {
+    // Store the new account (you can implement localStorage or backend storage)
+    const existingAccounts = JSON.parse(localStorage.getItem('additionalAccounts') || '[]');
+    existingAccounts.push(account);
+    localStorage.setItem('additionalAccounts', JSON.stringify(existingAccounts));
+    
+    // Show success message or switch to the new account
+    console.log('Account added:', account);
+  };
+
+  const handleViewProfile = () => {
+    setUserProfileTab('carbon'); // Set to carbon tab by default
+    setShowUserProfile(true);
+    setShowProfileDropdown(false);
+  };
+
+  const handleOpenMailInTab = (email: Email) => {
+    const existingTab = openedMailTabs.find(tab => tab.id === email.id);
+    if (!existingTab) {
+      setOpenedMailTabs([...openedMailTabs, email]);
+    }
+    setActiveTabId(String(email.id));
+    setSelectedEmail(null); // Clear the single email view
+  };
+
+  const handleCloseTab = (emailId: string) => {
+    setOpenedMailTabs(openedMailTabs.filter(tab => tab.id !== emailId));
+    if (activeTabId === emailId) {
+      const remainingTabs = openedMailTabs.filter(tab => tab.id !== emailId);
+      if (remainingTabs.length > 0) {
+        setActiveTabId(String(remainingTabs[0].id));
+      } else {
+        setActiveTabId(null);
+      }
+    }
+  };
+
+  const handleOpenComposeWindow = () => {
+    const newComposeId = `compose-${nextComposeId}`;
+    setComposeWindows([...composeWindows, newComposeId]);
+    setNextComposeId(nextComposeId + 1);
+  };
+
+  const handleCloseComposeWindow = (composeId: string) => {
+    setComposeWindows(composeWindows.filter(id => id !== composeId));
+  };
+
+  const handleFolderClick = (folderType: string, folder: Folder) => {
+    setSelectedFolder(folder);
+    
+    // Load emails based on folder type
+    if (folderType === 'starred') {
+      loadStarredEmails();
+    } else if (folderType === 'archive') {
+      const archiveFolderId = getFolderIdByName('archive');
+      if (archiveFolderId) {
+        loadEmails(archiveFolderId);
+      }
+    } else {
+      loadEmails(Number(folder.id));
+    }
+  };
+
+  const loadStarredEmails = async () => {
+    try {
+      if (!profile?.id) return;
+      // For now, load all emails and filter client-side for starred
+      // Backend teammate can implement proper starred endpoint
+      const resp = await emailService.getEmails(profile.id);
+      if (resp.error) {
+        console.error('Error loading emails:', resp.error);
+        setEmailsRaw([]);
+      } else {
+        const allEmails = resp.data ?? [];
+        const starredEmails = allEmails.filter((email: any) => email.is_starred);
+        setEmailsRaw(starredEmails);
+      }
+    } catch (err) {
+      console.error('Error loading starred emails:', err);
+      setEmailsRaw([]);
+    }
   };
 
   // close profile dropdown when clicking outside
@@ -287,10 +387,7 @@ const loadFolders = async () => {
                   {/* Manage Account Button */}
                   <div className="p-2">
                     <button
-                      onClick={() => {
-                        setShowUserProfile(true);
-                        setShowProfileDropdown(false);
-                      }}
+                      onClick={handleViewProfile}
                       className="w-full px-4 py-3 text-left text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition border border-blue-200 dark:border-blue-800 mb-2 flex items-center gap-2"
                     >
                       <User className="w-4 h-4" />
@@ -300,7 +397,10 @@ const loadFolders = async () => {
 
                   {/* Actions */}
                   <div className="p-2 space-y-1">
-                    <button className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg transition flex items-center gap-3">
+                    <button 
+                      onClick={handleAddAccount}
+                      className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg transition flex items-center gap-3"
+                    >
                       <Plus className="w-4 h-4 text-blue-500" />
                       Add account
                     </button>
@@ -341,8 +441,8 @@ const loadFolders = async () => {
         {/* Compose Button */}
         <div className="p-4">
           <button
-            onClick={() => handleCompose()}
-            className={`w-full bg-blue-500 hover:bg-blue-600 text-white px-4 py-2.5 rounded-lg font-medium transition flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-blue-500/50 hover:scale-105 ${animations.fadeInUp}`}
+            onClick={handleOpenComposeWindow}
+            className={`w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white px-4 py-2.5 rounded-xl font-medium transition-all duration-200 flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-blue-500/25 hover:scale-[1.02] ${animations.fadeInUp}`}
           >
             <Plus className="w-4 h-4" />
             Compose
@@ -352,30 +452,85 @@ const loadFolders = async () => {
         {/* Folders */}
         <div className="flex-1 overflow-y-auto py-2">
           <div className="px-2 space-y-1">
-            {['inbox', 'drafts', 'sent', 'spam', 'trash'].map((folderType) => {
-              const folder = folders.find((f) => (f.name || '').toString().toLowerCase() === folderType);
+            {['inbox', 'starred', 'snoozed', 'sent', 'drafts', 'spam', 'trash'].map((folderType) => {
+              let folder = folders.find((f) => (f.name || '').toString().toLowerCase() === folderType);
+              
+              // Create virtual folders for starred, snoozed if they don't exist in backend
+              if (!folder && (folderType === 'starred' || folderType === 'snoozed')) {
+                folder = {
+                  id: folderType === 'starred' ? 'starred' : 'snoozed',
+                  name: folderType.charAt(0).toUpperCase() + folderType.slice(1),
+                  icon: folderType === 'starred' ? 'star' : folderType,
+                  color: folderType === 'starred' ? '#fbbf24' : folderType === 'snoozed' ? '#8b5cf6' : '#6b7280'
+                };
+              }
+              
               if (!folder) return null;
 
-              const Icon = iconMap[folderType] || iconMap[folder.icon || 'folder'] || Circle;
+              const Icon = folderType === 'starred' ? Star : (iconMap[folderType] || iconMap[folder.icon || 'folder'] || Circle);
               const isActive = String(selectedFolder?.id) === String(folder.id);
-              const folderUnread = emails.filter((e) => String(e.folder_id) === String(folder.id) && !e.is_read).length;
+              const iconColor = folderColors[folderType] || (isActive ? '#1e40af' : undefined);
+              
+              // Calculate counts differently for special folders
+              let folderCount = 0;
+              if (folderType === 'starred') {
+                folderCount = emails.filter((e) => e.is_starred).length;
+              } else if (folderType === 'snoozed') {
+                folderCount = emails.filter((e) => e.is_snoozed).length;
+              } else if (folderType === 'drafts') {
+                folderCount = emails.filter((e) => String(e.folder_id) === String(folder.id)).length;
+              } else {
+                folderCount = emails.filter((e) => String(e.folder_id) === String(folder.id) && !e.is_read).length;
+              }
 
               return (
                 <button
                   key={String(folder.id)}
-		  onClick={() => setSelectedFolder({ ...folder, id: Number(folder.id) })}
+		  onClick={() => handleFolderClick(folderType, folder)}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition ${animations.fadeInLeft} ${isActive ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 shadow-md' : 'text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800/50 hover:scale-105'}`}
                 >
-                  <Icon className="w-5 h-5 flex-shrink-0" style={{ color: folder.color || (isActive ? '#1e40af' : undefined) }} />
+                  <Icon className="w-5 h-5 flex-shrink-0" style={{ color: iconColor }} />
                   <span className="flex-1 text-left font-medium text-sm">{folder.name}</span>
-                  {folderUnread > 0 && (
-                    <span className={`bg-blue-500 text-white text-xs px-2 py-0.5 rounded-full min-w-[20px] text-center flex-shrink-0 ${animations.pulseGlow}`}>
-                      {folderUnread}
+                  {folderCount > 0 && folderType === 'drafts' && (
+                    <span className={`bg-gray-500 text-white text-xs px-2 py-0.5 rounded-full min-w-[20px] text-center flex-shrink-0 ${animations.pulseGlow}`}>
+                      {folderCount}
                     </span>
                   )}
                 </button>
               );
             })}
+            
+          </div>
+
+          {/* Labels Section */}
+          <div className="px-2 mt-4">
+            <div className="flex items-center justify-between mb-3 px-3">
+              <h3 className="text-xs font-semibold text-gray-700 dark:text-slate-300 uppercase tracking-wider">Labels</h3>
+              <button
+                onClick={() => {
+                  const newLabel = {
+                    id: labels.length + 1,
+                    name: `Label ${labels.length + 1}`,
+                    color: ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'][labels.length % 5]
+                  };
+                  setLabels([...labels, newLabel]);
+                }}
+                className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+            </div>
+            <div className="space-y-1">
+              {labels.map((label) => (
+                <button
+                  key={label.id}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg transition text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800/50 hover:scale-105"
+                >
+                  <Tag className="w-4 h-4 flex-shrink-0" style={{ color: label.color }} />
+                  <span className="flex-1 text-left text-sm">{label.name}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -403,9 +558,9 @@ const loadFolders = async () => {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col bg-gray-50 dark:bg-slate-950">
         {/* Top Bar */}
-        <div className="h-16 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 flex items-center px-6 gap-4">
+        <div className="h-16 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 flex items-center px-6 gap-4 shadow-sm">
           <div className="flex-1 max-w-xl relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-slate-500" />
             <input
@@ -416,12 +571,37 @@ const loadFolders = async () => {
               className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
             />
           </div>
-          <div className="flex items-center gap-2">
-            <button className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition"><Star className="w-4 h-4" /></button>
-            <button className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition"><Archive className="w-4 h-4" /></button>
-            <button className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition"><Trash2 className="w-4 h-4" /></button>
-          </div>
         </div>
+
+        {/* Email Tabs Bar */}
+        {openedMailTabs.length > 0 && (
+          <div className="bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 px-2 py-1 flex items-center gap-1 overflow-x-auto">
+            {openedMailTabs.map((email) => (
+              <div
+                key={email.id}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-t-lg cursor-pointer transition-all duration-200 min-w-0 max-w-xs ${
+                  activeTabId === String(email.id)
+                    ? 'bg-blue-50 dark:bg-blue-900/30 border-b-2 border-blue-500'
+                    : 'bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 border-b-2 border-transparent'
+                }`}
+                onClick={() => setActiveTabId(String(email.id))}
+              >
+                <span className="text-sm font-medium text-gray-700 dark:text-slate-300 truncate">
+                  {email.subject || 'No Subject'}
+                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleCloseTab(String(email.id));
+                  }}
+                  className="p-0.5 rounded-full hover:bg-gray-300 dark:hover:bg-slate-600 transition"
+                >
+                  <X className="w-3 h-3 text-gray-500 dark:text-slate-400" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Email Content */}
         <div className="flex-1 flex overflow-hidden">
@@ -429,43 +609,96 @@ const loadFolders = async () => {
             emails={filteredEmails}
             selectedEmail={selectedEmail}
             onSelectEmail={(email: any) => {
-              setSelectedEmail(email);
-              if (email?.thread_id) setSelectedThreadId(String(email.thread_id));
-              else setSelectedThreadId(null);
+              handleOpenMailInTab(email);
             }}
-	    onRefresh={() => selectedFolder && loadEmails(Number(selectedFolder.id))}
+	    onRefresh={refreshEmails}
           />
-          {selectedThreadId ? (
-            <ThreadView
-              threadId={selectedThreadId}
-              userId={String(profile?.id || '')}
-              onClose={() => { setSelectedThreadId(null); setSelectedEmail(null); }}
-              onCompose={handleCompose}
-            />
-          ) : (
-            <EmailView
-              email={selectedEmail}
-              onClose={() => setSelectedEmail(null)}
-              onRefresh={() => selectedFolder && loadEmails(selectedFolder.id as any)}
-              onCompose={handleCompose}
-            />
-          )}
+          <div className="flex-1 flex flex-col">
+            {activeTabId ? (
+              <div className="flex-1 bg-white dark:bg-slate-900">
+                {(() => {
+                  const activeEmail = openedMailTabs.find(tab => String(tab.id) === activeTabId);
+                  if (!activeEmail) return null;
+                  
+                  if (activeEmail.thread_id) {
+                    return (
+                      <ThreadView
+                        threadId={String(activeEmail.thread_id)}
+                        userId={String(profile?.id || '')}
+                        onClose={() => handleCloseTab(String(activeEmail.id))}
+                        onCompose={handleComposeFromEmail}
+                      />
+                    );
+                  } else {
+                    return (
+                      <EmailView
+                        email={activeEmail}
+                        onClose={() => handleCloseTab(String(activeEmail.id))}
+                        onRefresh={refreshEmails}
+                        onCompose={handleComposeFromEmail}
+                      />
+                    );
+                  }
+                })()}
+              </div>
+            ) : (
+              <div className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-slate-950">
+                <div className="text-center">
+                  <div className="w-24 h-24 bg-gray-200 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Mail className="w-12 h-12 text-gray-400 dark:text-slate-600" />
+                  </div>
+                  <p className="text-gray-500 dark:text-slate-400 text-lg">Select an email to read</p>
+                  <p className="text-gray-400 dark:text-slate-500 text-sm mt-2">Emails will open in tabs above</p>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Compose Modal */}
-      {showCompose && (
-        <ComposeEmail
-          onClose={() => { setShowCompose(false); setComposeData(undefined); }}
-          onSent={() => { setShowCompose(false); setComposeData(undefined); refreshEmails(); }}
-          onDraftSaved={refreshEmails}
-          prefilledData={composeData}
-        />
-      )}
+      {/* Multiple Compose Windows */}
+      {composeWindows.map((composeId) => (
+        <div
+          key={composeId}
+          className="fixed bottom-4 right-4 w-96 h-[500px] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-slate-700 z-40 flex flex-col"
+          style={{ right: `${20 + (parseInt(composeId.split('-')[1]) - 1) * 420}px` }}
+        >
+          <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-800 rounded-t-2xl">
+            <h3 className="font-semibold text-gray-900 dark:text-white">New Message</h3>
+            <button
+              onClick={() => handleCloseComposeWindow(composeId)}
+              className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <ComposeEmail
+              onClose={() => handleCloseComposeWindow(composeId)}
+              onSent={() => { handleCloseComposeWindow(composeId); refreshEmails(); }}
+              onDraftSaved={refreshEmails}
+              prefilledData={undefined}
+            />
+          </div>
+        </div>
+      ))}
 
       {/* User Profile Modal */}
       {showUserProfile && (
-        <UserProfile onClose={() => setShowUserProfile(false)} userEmail={profile?.email} userName={profile?.full_name || profile?.email} />
+        <UserProfile 
+          onClose={() => setShowUserProfile(false)} 
+          userEmail={profile?.email} 
+          userName={profile?.full_name || profile?.email}
+          initialTab={userProfileTab}
+        />
+      )}
+
+      {/* Add Account Modal */}
+      {showAddAccount && (
+        <AddAccountModal
+          onClose={() => setShowAddAccount(false)}
+          onSuccess={handleAccountAdded}
+        />
       )}
     </div>
   );

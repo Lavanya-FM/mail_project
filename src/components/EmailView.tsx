@@ -2,26 +2,7 @@ import { Star, Reply, ReplyAll, Forward, Trash2, Archive, MoreVertical, Papercli
 import { useState, useEffect, useRef } from 'react';
 import { emailService } from '../lib/emailService';
 import { authService } from '../lib/authService';
-
-interface Email {
-  id: string;
-  user_id: string;
-  folder_id?: string;
-  from_email: string;
-  from_name?: string;
-  to_emails: any[];
-  cc_emails: any[];
-  bcc_emails: any[];
-  subject?: string;
-  body?: string;
-  is_read: boolean;
-  is_starred: boolean;
-  is_draft: boolean;
-  has_attachments: boolean;
-  created_at: string;
-  sent_at?: string;
-  labels?: any[];
-}
+import { Email } from '../types/email';
 
 type EmailViewProps = {
   email: Email | null;
@@ -65,9 +46,9 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
 
   useEffect(() => {
     if (email) {
-      setStarred(email.is_starred);
+      setStarred(email.is_starred || false);
       if (!email.is_read) {
-        markAsRead(email.id);
+        markAsRead(String(email.id));
       }
     }
   }, [email]);
@@ -150,7 +131,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
   const handleForward = () => {
     if (!email || !onCompose) return;
     const forwardSubject = email.subject?.startsWith('Fwd:') ? email.subject : `Fwd: ${email.subject || '(No subject)'}`;
-    const forwardBody = `\n\n--- Forwarded Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || currentUser.email}\nSubject: ${email.subject || '(No subject)'}\nDate: ${formatFullDate(email.sent_at || email.created_at)}\n\n${email.body || ''}`;
+    const forwardBody = `\n\n--- Forwarded Message ---\nFrom: ${email.from_name || email.from_email || ''}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || currentUser.email}\nSubject: ${email.subject || '(No subject)'}\nDate: ${formatFullDate(email.sent_at || email.created_at || '')}\n\n${email.body || ''}`;
     onCompose({ subject: forwardSubject, body: forwardBody });
   };
 
@@ -196,7 +177,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
 
           if (updateError) throw updateError;
         } else {
-          const { error: deleteError } = await emailService.deleteEmail(email.id, currentUser.id);
+          const { error: deleteError } = await emailService.deleteEmail(Number(email.id), currentUser.id);
           if (deleteError) throw deleteError;
         }
 
@@ -242,7 +223,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
     const toEmails = email.to_emails?.map(to => to.email).join(', ') || '';
     const ccEmails = email.cc_emails?.map(cc => cc.email).join(', ') || '';
     try {
-      await emailService.deleteEmail(email.id, currentUser.id);
+      await emailService.deleteEmail(Number(email.id), currentUser.id);
       onRefresh();
     } catch (error) {
       console.error('Error deleting draft:', error);
@@ -338,7 +319,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
                   </div>
                   <div className="flex items-start gap-2 text-xs">
                     <span className="w-16 font-semibold text-gray-500 dark:text-slate-400 shrink-0">date:</span>
-                    <span className="text-gray-900 dark:text-slate-200">{formatFullDate(email.sent_at || email.created_at)}</span>
+                    <span className="text-gray-900 dark:text-slate-200">{formatFullDate(email.sent_at || email.created_at || '')}</span>
                   </div>
                   <div className="flex items-start gap-2 text-xs">
                     <span className="w-16 font-semibold text-gray-500 dark:text-slate-400 shrink-0">subject:</span>
@@ -346,11 +327,11 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
                   </div>
                   <div className="flex items-start gap-2 text-xs">
                     <span className="w-16 font-semibold text-gray-500 dark:text-slate-400 shrink-0">mailed-by:</span>
-                    <span className="text-gray-900 dark:text-slate-200">{email.from_email.split('@')[1]}</span>
+                    <span className="text-gray-900 dark:text-slate-200">{email.from_email?.split('@')[1] || ''}</span>
                   </div>
                   <div className="flex items-start gap-2 text-xs">
                     <span className="w-16 font-semibold text-gray-500 dark:text-slate-400 shrink-0">signed-by:</span>
-                    <span className="text-gray-900 dark:text-slate-200">{email.from_email.split('@')[1]}</span>
+                    <span className="text-gray-900 dark:text-slate-200">{email.from_email?.split('@')[1] || ''}</span>
                   </div>
                 </div>
               </div>
@@ -389,7 +370,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
             <div className="p-6">
               <div className="flex items-start gap-4">
                 <div className="flex-shrink-0 w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-500 flex items-center justify-center text-white font-semibold text-sm shadow-md">
-                  {getInitials(email.from_name || email.from_email)}
+                  {getInitials(email.from_name || email.from_email || '')}
                 </div>
 
                 <div className="flex-1 min-w-0">
@@ -414,7 +395,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
                       </div>
                     </div>
                     <span className="text-sm text-gray-500 dark:text-slate-400 whitespace-nowrap">
-                      {formatShortDate(email.sent_at || email.created_at)}
+                      {formatShortDate(email.sent_at || email.created_at || '')}
                     </span>
                   </div>
                 </div>
