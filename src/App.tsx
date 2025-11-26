@@ -1,16 +1,24 @@
+// src/App.tsx
+import React from 'react';
+import { BrowserRouter } from 'react-router-dom';
 import { ThemeProvider } from './contexts/ThemeContext';
-import { authService } from './lib/authService';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Auth from './components/Auth';
 import MailLayout from './components/MailLayout';
 
-function App() {
-  const isAuthenticated = authService.isAuthenticated();
-
-  return (
-    <ThemeProvider>
-      {isAuthenticated ? <MailLayout /> : <Auth />}
-    </ThemeProvider>
-  );
+function AppInner() {
+  const { isAuthenticated } = useAuth();
+  return isAuthenticated ? <MailLayout /> : <Auth />;
 }
 
-export default App;
+export default function App() {
+  return (
+    <BrowserRouter>
+      <ThemeProvider>
+        <AuthProvider>
+          <AppInner />
+        </AuthProvider>
+      </ThemeProvider>
+    </BrowserRouter>
+  );
+}

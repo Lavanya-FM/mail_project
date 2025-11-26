@@ -1,5 +1,6 @@
 /**
  * backend/server.js
+ * Fixed + hardened version
  */
 const express = require("express");
 const mysql = require("mysql2");
@@ -37,9 +38,9 @@ const TRASH_RETENTION_DAYS = 30;
 async function testDb() {
   try {
     await db.query("SELECT 1");
-    console.log("✅ MySQL Pool connected");
+    console.log("MySQL Pool connected");
   } catch (e) {
-    console.error("❌ MySQL pool test failed:", e && e.message);
+    console.error("MySQL pool test failed:", e && e.message);
   }
 }
 testDb();
@@ -56,11 +57,17 @@ async function cleanupOldTrashEmails() {
       JOIN mailboxes mb ON em.mailbox_id = mb.id
       WHERE mb.system_box = 'trash'
       AND em.deleted_at IS NOT NULL
-      AND em.deleted_at < DATE_SUB(NOW(), INTERVAL ? DAY)`, [TRASH_RETENTION_DAYS]);
+      AND em.deleted_at < DATE_SUB(NOW(), INTERVAL ? DAY)
+    `, [TRASH_RETENTION_DAYS]);
     
     if (result.affectedRows > 0) {
-      console.log(`Cleaned up ${result.affectedRows} old emails from trash (>${TRASH_RETENTION_DAYS} days)`);
-    }
+console.log(
+  "Cleaned up " +
+  result.affectedRows +
+  " old emails from trash (>" +
+  TRASH_RETENTION_DAYS +
+  " days)"
+);    }
   } catch (err) {
     console.error("Error cleaning up trash:", err && err.message);
   }
@@ -93,31 +100,13 @@ async function createSystemFolders(userId) {
   await Promise.all(promises);
 }
 
-// Domain validator
+// Robust domain validator
 function isValidDomain(email) {
   if (!email || typeof email !== 'string') return false;
   const trimmed = email.trim().toLowerCase();
-
   if (!trimmed.includes('@')) return false;
-  const parts = trimmed.split('@');
-  if (parts.length !== 2) return false;
-  
-  const domain = parts[1]; // Get the domain part after @
-
-  console.log('🔍 Domain validation - Email:', trimmed, 'Domain:', domain, 'Expected:', ALLOWED_DOMAIN.toLowerCase());
-
-  // Accept exact domain or any subdomain of allowed domain
-  if (domain === ALLOWED_DOMAIN.toLowerCase()) return true;
-  if (domain.endsWith("." + ALLOWED_DOMAIN.toLowerCase())) return true;
-
-  console.log('❌ Domain validation failed');
-  return false;
-}
-
-// Helper function to normalize email
-function normalizeEmail(email) {
-  if (!email || typeof email !== 'string') return '';
-  return email.trim().toLowerCase();
+  const domain = trimmed.split('@').slice(-1)[0];
+  return domain === ALLOWED_DOMAIN.toLowerCase();
 }
 
 // ----------------- Routes -----------------
@@ -125,27 +114,19 @@ function normalizeEmail(email) {
 // Register
 app.post("/api/register", async (req, res) => {
   try {
-    console.log("📝 REGISTER ATTEMPT:", JSON.stringify(req.body));
     const { name, email, password } = req.body || {};
 
     if (!name || !email || !password) {
-      console.log("❌ Missing fields");
       return res.status(400).json({ error: "Missing required fields: name, email or password" });
     }
 
-    const normalizedEmail = normalizeEmail(email);
-    console.log("📧 Normalized email:", normalizedEmail);
-
-    // Validate domain
-    if (!isValidDomain(normalizedEmail)) {
-      console.log("❌ Invalid domain for:", normalizedEmail);
-      return res.status(400).json({ error: `Email must be from ${ALLOWED_DOMAIN} domain` });
+    if (!isValidDomain(email)) {
+      return res.status(400).json({ error: `Registration is only allowed for @${ALLOWED_DOMAIN} email addresses` });
     }
 
-    // Check duplicate
-    const [existing] = await db.query("SELECT id FROM users WHERE email = ? LIMIT 1", [normalizedEmail]);
+    // check duplicate
+    const [existing] = await db.query("SELECT id FROM users WHERE email = ? LIMIT 1", [email.trim().toLowerCase()]);
     if (existing && existing.length) {
-      console.log("❌ Email already registered:", normalizedEmail);
       return res.status(409).json({ error: "Email already registered" });
     }
 
@@ -153,106 +134,58 @@ app.post("/api/register", async (req, res) => {
 
     const [result] = await db.query(
       `INSERT INTO users (name, email, password) VALUES (?, ?, ?)`,
-      [name.trim(), normalizedEmail, hashed]
+      [name.trim(), email.trim().toLowerCase(), hashed]
     );
 
     const userId = result.insertId;
-    console.log("✅ User created with ID:", userId);
-
     await createSystemFolders(userId);
-    console.log("✅ System folders created for user:", userId);
 
-    return res.json({ 
-      user: { 
-        id: userId, 
-        name: name.trim(), 
-        email: normalizedEmail,
-        full_name: name.trim()
-      } 
-    });
+    return res.json({ user: { id: userId, name: name.trim(), email: email.trim().toLowerCase() } });
   } catch (e) {
-    console.error("❌ REGISTER ERROR:", e && e.message, e && e.stack);
+    console.error("REGISTER ERROR:", e && e.message);
     return res.status(500).json({ error: "Registration failed" });
   }
 });
 
 // Check email existence
 app.get("/api/users/email/:email", async (req, res) => {
-  const email = normalizeEmail(decodeURIComponent(req.params.email || ''));
-  console.log("🔍 Checking email existence:", email);
-  
+  const email = decodeURIComponent(req.params.email || '');
   try {
     const [rows] = await db.query("SELECT id, name, email FROM users WHERE email = ? LIMIT 1", [email]);
-    if (!rows.length) {
-      console.log("❌ Email not found:", email);
-      return res.json({ exists: false });
-    }
-    console.log("✅ Email found:", email);
+    if (!rows.length) return res.json({ exists: false });
     return res.json({ exists: true, user: rows[0] });
   } catch (err) {
-    console.error("❌ CHECK EMAIL ERROR:", err && err.message);
+    console.error("CHECK EMAIL ERROR:", err && err.message);
     return res.status(500).json({ error: "DB error" });
   }
 });
 
-// Login - FIXED VERSION
+// Login
 app.post("/api/login", async (req, res) => {
   try {
-    console.log("🔐 LOGIN ATTEMPT:", JSON.stringify({ email: req.body?.email, hasPassword: !!req.body?.password }));
-    
     const { email, password } = req.body || {};
-    
     if (!email || !password) {
-      console.log("❌ Missing email or password");
       return res.status(400).json({ error: "Missing email or password" });
     }
 
-    const normalizedEmail = normalizeEmail(email);
-    console.log("📧 Normalized email for login:", normalizedEmail);
-
-    // Query database
-    const [rows] = await db.query(
-      "SELECT id, name, email, password FROM users WHERE email = ? LIMIT 1", 
-      [normalizedEmail]
-    );
-
-    console.log("🔍 Query result:", rows.length > 0 ? "User found" : "User NOT found");
-
-    if (!rows.length) {
-      console.log("❌ User not found for email:", normalizedEmail);
-      return res.status(404).json({ error: "User not found" });
-    }
+    const [rows] = await db.query("SELECT * FROM users WHERE email = ? LIMIT 1", [email.trim().toLowerCase()]);
+    if (!rows.length) return res.status(404).json({ error: "User not found" });
 
     const user = rows[0];
-    console.log("👤 Found user ID:", user.id, "Email:", user.email);
-
-    // Verify password
     const match = await bcrypt.compare(password, user.password);
-    console.log("🔑 Password match:", match);
+    if (!match) return res.status(401).json({ error: "Incorrect password" });
 
-    if (!match) {
-      console.log("❌ Incorrect password for:", normalizedEmail);
-      return res.status(401).json({ error: "Incorrect password" });
-    }
-
-    // Ensure system folders exist
     await createSystemFolders(user.id);
-    console.log("✅ System folders ensured for user:", user.id);
 
-    const responseData = {
+    return res.json({
       user: {
         id: user.id,
         name: user.name,
-        email: user.email,
-        full_name: user.name
+        email: user.email
       }
-    };
-
-    console.log("✅ LOGIN SUCCESS - Sending response:", JSON.stringify(responseData));
-    return res.json(responseData);
-
+    });
   } catch (err) {
-    console.error("❌ LOGIN ERROR:", err && err.message, err && err.stack);
+    console.error("LOGIN ERROR:", err && err.message);
     return res.status(500).json({ error: "Login failed" });
   }
 });
@@ -261,18 +194,14 @@ app.post("/api/login", async (req, res) => {
 app.get("/api/folders/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
-    console.log("📁 Fetching folders for user:", userId);
-    
     const [rows] = await db.query(
       `SELECT id, name, system_box FROM mailboxes 
        WHERE user_id=? ORDER BY id ASC`,
       [userId]
     );
-    
-    console.log("✅ Found", rows.length, "folders for user:", userId);
     return res.json({ data: rows });
   } catch (err) {
-    console.error("❌ GET FOLDERS ERROR:", err && err.message);
+    console.error("GET FOLDERS ERROR:", err && err.message);
     return res.status(500).json({ error: "DB error" });
   }
 });
@@ -281,8 +210,6 @@ app.get("/api/folders/:userId", async (req, res) => {
 app.get("/api/emails/:userId/:folderAny", async (req, res) => {
   const userId = Number(req.params.userId);
   const folderAny = req.params.folderAny;
-
-  console.log("📬 Fetching emails - User:", userId, "Folder:", folderAny);
 
   if (!Number.isInteger(userId) || userId <= 0) {
     return res.status(400).json({ error: "invalid userId" });
@@ -301,13 +228,13 @@ app.get("/api/emails/:userId/:folderAny", async (req, res) => {
 
       if (rows.length) folderId = rows[0].id;
     } catch (err) {
-      console.error("❌ DB error resolving mailbox:", err && err.message);
+      console.error("DB error resolving mailbox:", err && err.message);
       return res.status(500).json({ error: "db error" });
     }
   }
 
   if (!folderId) {
-    console.error("❌ Folder not found:", folderAny);
+    console.error("Folder not found:", folderAny);
     return res.status(400).json({ error: "invalid folderId" });
   }
 
@@ -320,8 +247,6 @@ app.get("/api/emails/:userId/:folderAny", async (req, res) => {
        ORDER BY e.created_at DESC`,
       [userId, folderId]
     );
-
-    console.log("✅ Found", emails.length, "emails in folder:", folderId);
 
     for (let email of emails) {
       const [recipients] = await db.query(
@@ -344,50 +269,25 @@ app.get("/api/emails/:userId/:folderAny", async (req, res) => {
 
     return res.json({ data: emails });
   } catch (err) {
-    console.error("❌ DB error fetching emails:", err && err.message);
+    console.error("DB error fetching emails:", err && err.message);
     return res.status(500).json({ error: "db error" });
   }
 });
 
-// Create email - improved: add entries for recipients' inboxes
+// Create email
 app.post("/api/email/create", async (req, res) => {
   let { user_id, to, cc, bcc, subject, body, folder_id, is_draft } = req.body || {};
 
   if (!user_id) return res.status(400).json({ error: 'missing user_id' });
 
-  const normalizeList = (list) => {
-    if (!list) return [];
-    if (Array.isArray(list)) {
-      return list
-        .map(addr => (typeof addr === 'string' ? addr : (addr?.email || addr?.address || '')))
-        .map(a => a && String(a).trim())
-        .filter(Boolean);
-    }
-    if (typeof list === 'string') return [list.trim()];
-    if (typeof list === 'object') {
-      const address = list.email || list.address || '';
-      return address ? [String(address).trim()] : [];
-    }
-    return [];
-  };
-
-  const toList = normalizeList(to);
-  const ccList = normalizeList(cc);
-  const bccList = normalizeList(bcc);
-  const allRecipients = Array.from(new Set([...toList, ...ccList, ...bccList].map(s => String(s).toLowerCase())));
-
-  let conn;
   try {
-    conn = await pool.promise().getConnection();
-    await conn.beginTransaction();
-
-    // Resolve folder for sender
     let resolvedFolderId = null;
+
     if (folder_id && !isNaN(Number(folder_id))) {
       resolvedFolderId = Number(folder_id);
     } else if (typeof folder_id === "string") {
       const cleaned = folder_id.replace(/^[0-9]+-/, "");
-      const [rows] = await conn.query(
+      const [rows] = await db.query(
         "SELECT id FROM mailboxes WHERE user_id = ? AND LOWER(system_box) = LOWER(?) LIMIT 1",
         [user_id, cleaned]
       );
@@ -396,105 +296,74 @@ app.post("/api/email/create", async (req, res) => {
 
     if (!resolvedFolderId) {
       const fallbackSystem = is_draft ? "drafts" : "sent";
-      const [f] = await conn.query(
+      const [f] = await db.query(
         "SELECT id FROM mailboxes WHERE user_id = ? AND system_box = ? LIMIT 1",
         [user_id, fallbackSystem]
       );
       if (!f.length) {
-        await conn.rollback();
-        conn.release();
         return res.status(500).json({ error: "No folder found: " + fallbackSystem });
       }
       resolvedFolderId = f[0].id;
     }
 
-    // sender info
-    const [userInfo] = await conn.query("SELECT name, email FROM users WHERE id = ? LIMIT 1", [user_id]);
+    const [userInfo] = await db.query(
+      "SELECT name, email FROM users WHERE id = ? LIMIT 1",
+      [user_id]
+    );
+
     const fromName = userInfo.length > 0 ? userInfo[0].name : 'Unknown';
     const fromEmail = userInfo.length > 0 ? userInfo[0].email : '';
 
-    // insert into emails
-    const [insertResult] = await conn.query(
+    const [result] = await db.query(
       "INSERT INTO emails (user_id, from_name, from_email, subject, body, created_at) VALUES (?, ?, ?, ?, ?, NOW())",
       [user_id, fromName, fromEmail, subject || '', body || '']
     );
-    const emailId = insertResult.insertId;
+    const emailId = result.insertId;
 
-    // insert recipients
-    const insertRecipientRows = async (list, type) => {
-      if (!list || !list.length) return [];
-      const added = [];
-      for (const raw of list) {
-        const address = String(raw || '').trim();
-        if (!address) continue;
-        await conn.query(
-          "INSERT INTO email_recipients (email_id, address, type) VALUES (?, ?, ?)",
-          [emailId, address, type]
-        );
-        added.push(address);
+    const insertRecipient = async (emailId, list, type) => {
+      if (!list) return [];
+      const addresses = [];
+      
+      if (Array.isArray(list)) {
+        for (const addr of list) {
+          const address = typeof addr === 'string' ? addr : (addr.email || addr.address || '');
+          if (!address) continue;
+          await db.query(
+            "INSERT INTO email_recipients (email_id, address, type) VALUES (?, ?, ?)",
+            [emailId, address, type]
+          );
+          addresses.push(address);
+        }
+      } else {
+        const address = typeof list === 'string' ? list : (list.email || list.address || '');
+        if (address) {
+          await db.query(
+            "INSERT INTO email_recipients (email_id, address, type) VALUES (?, ?, ?)",
+            [emailId, address, type]
+          );
+          addresses.push(address);
+        }
       }
-      return added;
+      return addresses;
     };
 
-    const toAdded = await insertRecipientRows(toList, "to");
-    const ccAdded = await insertRecipientRows(ccList, "cc");
-    const bccAdded = await insertRecipientRows(bccList, "bcc");
+    const toAddresses = await insertRecipient(emailId, to, "to");
+    const ccAddresses = await insertRecipient(emailId, cc, "cc");
+    const bccAddresses = await insertRecipient(emailId, bcc, "bcc");
 
-    // Insert mailbox entry for sender (Sent or Drafts)
-    await conn.query(
+    await db.query(
       "INSERT INTO email_mailbox (user_id, email_id, mailbox_id, is_read, is_starred, deleted_at) VALUES (?, ?, ?, ?, ?, NULL)",
       [user_id, emailId, resolvedFolderId, 1, 0]
     );
-
-    // For local recipients: find corresponding users and add inbox entries
-    if (allRecipients.length > 0) {
-      const placeholders = allRecipients.map(() => '?').join(',');
-      const [recipientUsers] = await conn.query(
-        `SELECT id, email FROM users WHERE LOWER(email) IN (${placeholders})`,
-        allRecipients
-      );
-
-      const emailToUserId = {};
-      for (const u of recipientUsers) {
-        emailToUserId[(u.email || '').toString().toLowerCase()] = u.id;
-      }
-
-      for (const addr of allRecipients) {
-        const matchedUserId = emailToUserId[addr];
-        if (!matchedUserId) {
-          console.log('CREATE EMAIL: non-local recipient or user not found:', addr);
-          continue;
-        }
-
-        const [mb] = await conn.query(
-          "SELECT id FROM mailboxes WHERE user_id = ? AND system_box = 'inbox' LIMIT 1",
-          [matchedUserId]
-        );
-
-        if (!mb.length) {
-          console.warn('CREATE EMAIL: Inbox not found for user', matchedUserId, addr);
-          continue;
-        }
-        const inboxId = mb[0].id;
-
-        await conn.query(
-          "INSERT INTO email_mailbox (user_id, email_id, mailbox_id, is_read, is_starred, deleted_at) VALUES (?, ?, ?, ?, ?, NULL)",
-          [matchedUserId, emailId, inboxId, 0, 0]
-        );
-      }
-    }
-
-    await conn.commit();
-    conn.release();
 
     const emailObject = {
       id: emailId,
       user_id: user_id,
       subject: subject || '',
       body: body || '',
-      to_emails: toAdded,
-      cc_emails: ccAdded,
-      bcc_emails: bccAdded,
+      to_emails: toAddresses,
+      cc_emails: ccAddresses,
+      bcc_emails: bccAddresses,
       from_email: fromEmail,
       from_name: fromName,
       is_read: 1,
@@ -505,11 +374,7 @@ app.post("/api/email/create", async (req, res) => {
 
     return res.json({ message: "Email created successfully", emailId, data: emailObject });
   } catch (err) {
-    if (conn) {
-      try { await conn.rollback(); } catch(e) {}
-      try { conn.release(); } catch(e) {}
-    }
-    console.error("CREATE EMAIL ERROR (transaction):", err && err.message, err && err.stack);
+    console.error("CREATE EMAIL ERROR:", err && err.message);
     return res.status(500).json({ error: "Internal Error" });
   }
 });
@@ -568,43 +433,31 @@ app.post('/api/email/move', async (req, res) => {
   }
 });
 
-// Move email to spam (robust)
+// Spam
 app.post('/api/email/spam', async (req, res) => {
   const { email_id, user_id } = req.body || {};
   if (!email_id || !user_id) return res.status(400).json({ error: 'missing' });
 
   try {
-    // find spam mailbox id
     const [rows] = await db.query(
       `SELECT id FROM mailboxes WHERE user_id=? AND system_box='spam' LIMIT 1`,
       [user_id]
     );
     if (!rows.length) return res.status(500).json({ error: 'no spam mailbox' });
     const spamId = rows[0].id;
-
-    // ensure email_mailbox row exists (insert if missing)
+    
     await db.query(
-      `INSERT INTO email_mailbox (user_id, email_id, mailbox_id, is_read, is_starred, deleted_at)
-       SELECT ?, ?, ?, 0, 0, NULL
-       FROM DUAL
-       WHERE NOT EXISTS (SELECT 1 FROM email_mailbox WHERE user_id=? AND email_id=?)`,
-      [user_id, email_id, spamId, user_id, email_id]
-    );
-
-    // move it to spam
-    await db.query(
-      `UPDATE email_mailbox SET mailbox_id=?, deleted_at = NULL WHERE email_id=? AND user_id=?`,
+      `UPDATE email_mailbox SET mailbox_id=? WHERE email_id=? AND user_id=?`,
       [spamId, email_id, user_id]
     );
-
     return res.json({ ok: true });
   } catch (err) {
-    console.error("SPAM EMAIL ERROR (robust):", err && err.message);
+    console.error("SPAM EMAIL ERROR:", err && err.message);
     return res.status(500).json({ error: "DB error" });
   }
 });
 
-// Delete -> move to trash (robust)
+// Delete -> move to trash
 app.post('/api/email/delete', async (req, res) => {
   const { email_id, user_id } = req.body || {};
   if (!email_id || !user_id) return res.status(400).json({ error: 'missing' });
@@ -616,25 +469,14 @@ app.post('/api/email/delete', async (req, res) => {
     );
     if (!rows.length) return res.status(500).json({ error: 'no trash mailbox' });
     const trashId = rows[0].id;
-
-    // ensure row exists
-    await db.query(
-      `INSERT INTO email_mailbox (user_id, email_id, mailbox_id, is_read, is_starred, deleted_at)
-       SELECT ?, ?, ?, 0, 0, NOW()
-       FROM DUAL
-       WHERE NOT EXISTS (SELECT 1 FROM email_mailbox WHERE user_id=? AND email_id=?)`,
-      [user_id, email_id, trashId, user_id, email_id]
-    );
-
-    // move to trash and set deleted_at
+    
     await db.query(
       `UPDATE email_mailbox SET mailbox_id=?, deleted_at=NOW() WHERE email_id=? AND user_id=?`,
       [trashId, email_id, user_id]
     );
-
     return res.json({ ok: true });
   } catch (err) {
-    console.error("DELETE EMAIL ERROR (robust):", err && err.message);
+    console.error("DELETE EMAIL ERROR:", err && err.message);
     return res.status(500).json({ error: "DB error" });
   }
 });
@@ -661,35 +503,10 @@ app.post('/api/email/star', async (req, res) => {
   if (!email_id || !user_id) return res.status(400).json({ error: 'missing' });
 
   try {
-    // Find Starred folder
-    const [rows] = await db.query(
-      `SELECT id FROM mailboxes WHERE user_id=? AND system_box='starred' LIMIT 1`,
-      [user_id]
+    await db.query(
+      `UPDATE email_mailbox SET is_starred = ? WHERE email_id = ? AND user_id = ?`,
+      [status ? 1 : 0, email_id, user_id]
     );
-
-    if (!rows.length) return res.status(500).json({ error: 'no starred mailbox' });
-
-    const starredId = rows[0].id;
-
-    // If starring → move to Starred folder
-    if (status) {
-      await db.query(
-        `UPDATE email_mailbox SET mailbox_id = ?, is_starred = 1 WHERE email_id = ? AND user_id = ?`,
-        [starredId, email_id, user_id]
-      );
-    } else {
-      // If un-starring → move back to Inbox
-      const [inbox] = await db.query(
-        `SELECT id FROM mailboxes WHERE user_id=? AND system_box='inbox' LIMIT 1`,
-        [user_id]
-      );
-
-      await db.query(
-        `UPDATE email_mailbox SET mailbox_id = ?, is_starred = 0 WHERE email_id = ? AND user_id = ?`,
-        [inbox[0].id, email_id, user_id]
-      );
-    }
-
     return res.json({ ok: true });
   } catch (err) {
     console.error("STAR EMAIL ERROR:", err && err.message);
@@ -714,36 +531,6 @@ app.post('/api/email/read', async (req, res) => {
   }
 });
 
-app.post('/api/email/label', async (req, res) => {
-  const { email_id, user_id, label } = req.body || {};
-
-  if (!email_id || !user_id || !label)
-    return res.status(400).json({ error: 'missing parameters' });
-
-  try {
-    // Find the label's folder
-    const [rows] = await db.query(
-      `SELECT id FROM mailboxes WHERE user_id=? AND name=? LIMIT 1`,
-      [user_id, label]
-    );
-
-    if (!rows.length) return res.status(404).json({ error: "label folder not found" });
-
-    const labelFolderId = rows[0].id;
-
-    // Move email to that folder
-    await db.query(
-      `UPDATE email_mailbox SET mailbox_id=? WHERE email_id=? AND user_id=?`,
-      [labelFolderId, email_id, user_id]
-    );
-
-    return res.json({ ok: true });
-  } catch (err) {
-    console.error("LABEL EMAIL ERROR:", err && err.message);
-    return res.status(500).json({ error: "DB error" });
-  }
-});
-
 // Config endpoint
 app.get('/api/config', (req, res) => {
   res.json({
@@ -752,4 +539,4 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-app.listen(3000, () => console.log("🚀 Backend running on port 3000"));
+app.listen(3000, () => console.log("Backend running on port 3000"));

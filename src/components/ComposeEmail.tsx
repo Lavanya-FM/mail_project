@@ -159,13 +159,14 @@ const bccEmails = bccList.split(',').map(email => ({
         return div.textContent || div.innerText || '';
       })();
 
+      // --- CHANGED: send keys 'to','cc','bcc' (backend expects these) ---
       await emailService.createEmail({
         user_id: profile.id,
         from_email: profile.email,
         from_name: profile.full_name || profile.email,
-        to_emails: toEmails,
-        cc_emails: ccEmails,
-        bcc_emails: bccEmails,
+        to: toEmails,
+        cc: ccEmails,
+        bcc: bccEmails,
         subject: subject || '(no subject)',
         body: plainTextBody,
         is_draft: true,
@@ -381,13 +382,14 @@ const bccEmails = bccList.split(',').map(email => ({
         return div.textContent || div.innerText || '';
       })();
 
+      // --- CHANGED: send keys 'to','cc','bcc' (backend expects these) ---
       await emailService.createEmail({
         user_id: profile.id,
         from_email: profile.email,
         from_name: profile.full_name || profile.email,
-        to_emails: toEmails,
-        cc_emails: ccEmails,
-        bcc_emails: bccEmails,
+        to: toEmails,
+        cc: ccEmails,
+        bcc: bccEmails,
         subject: subject || '(no subject)',
         body: plainTextBody,
         is_draft: false,

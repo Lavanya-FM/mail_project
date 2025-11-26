@@ -63,9 +63,22 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
   };
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(initialConfirmState);
 
+  // ---- Helper: normalize recipient lists to array of strings ----
+  const normalizeAddressList = (list: any[]): string[] => {
+    if (!list) return [];
+    return list
+      .map((item: any) => {
+        if (!item) return '';
+        if (typeof item === 'string') return item.trim();
+        // possible shapes: { email: 'x' } or { address: 'x' } or plain object with email property
+        return (item.email || item.address || item.address_string || '').toString().trim();
+      })
+      .filter(Boolean);
+  };
+
   useEffect(() => {
     if (email) {
-      setStarred(email.is_starred);
+      setStarred(!!email.is_starred);
       if (!email.is_read) {
         markAsRead(email.id);
       }
@@ -114,7 +127,8 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
     
     const replyTo = email.from_email;
     
-    const replyBody = `\n\n--- Original Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || currentUser.email}\nSubject: ${email.subject || '(No subject)'}\n\n${email.body || ''}`;
+    const toList = normalizeAddressList(email.to_emails);
+    const replyBody = `\n\n--- Original Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${toList.join(', ') || currentUser.email}\nSubject: ${email.subject || '(No subject)'}\n\n${email.body || ''}`;
     
     onCompose({ to: replyTo, subject: replySubject, body: replyBody });
   };
@@ -122,10 +136,14 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
   const handleReplyAll = () => {
     if (!email || !currentUser || !onCompose) return;
 
+    const from = email.from_email;
+    const toList = normalizeAddressList(email.to_emails);
+    const ccList = normalizeAddressList(email.cc_emails);
+
     const allRecipients = [
-      email.from_email,
-      ...(email.to_emails?.map(t => t.email) || []),
-      ...(email.cc_emails?.map(cc => cc.email) || [])
+      from,
+      ...toList,
+      ...ccList
     ].filter(addr => addr && addr !== currentUser.email);
 
     const uniqueRecipients = Array.from(new Set(allRecipients));
@@ -136,7 +154,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
 
     const replyBody = `\n\n--- Original Message ---\nFrom: ${
       email.from_name || email.from_email
-    }\nTo: ${email.to_emails?.map(t => t.email).join(", ") || currentUser.email}\nSubject: ${
+    }\nTo: ${toList.join(", ") || currentUser.email}\nSubject: ${
       email.subject || "(No subject)"
     }\n\n${email.body || ""}`;
 
@@ -150,7 +168,8 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
   const handleForward = () => {
     if (!email || !onCompose) return;
     const forwardSubject = email.subject?.startsWith('Fwd:') ? email.subject : `Fwd: ${email.subject || '(No subject)'}`;
-    const forwardBody = `\n\n--- Forwarded Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || currentUser.email}\nSubject: ${email.subject || '(No subject)'}\nDate: ${formatFullDate(email.sent_at || email.created_at)}\n\n${email.body || ''}`;
+    const toList = normalizeAddressList(email.to_emails);
+    const forwardBody = `\n\n--- Forwarded Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${toList.join(', ') || currentUser.email}\nSubject: ${email.subject || '(No subject)'}\nDate: ${formatFullDate(email.sent_at || email.created_at)}\n\n${email.body || ''}`;
     onCompose({ subject: forwardSubject, body: forwardBody });
   };
 
@@ -239,8 +258,8 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
 
   const handleEditDraft = async () => {
     if (!email || !onCompose) return;
-    const toEmails = email.to_emails?.map(to => to.email).join(', ') || '';
-    const ccEmails = email.cc_emails?.map(cc => cc.email).join(', ') || '';
+    const toEmails = normalizeAddressList(email.to_emails).join(', ');
+    const ccEmails = normalizeAddressList(email.cc_emails).join(', ');
     try {
       await emailService.deleteEmail(email.id, currentUser.id);
       onRefresh();
@@ -297,6 +316,9 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
     );
   }
 
+  const toText = normalizeAddressList(email.to_emails).join(', ');
+  const ccText = normalizeAddressList(email.cc_emails).join(', ');
+
   return (
     <div className="flex-1 flex flex-col bg-gradient-to-br from-slate-50 via-white to-blue-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
       {/* Top toolbar */}
@@ -331,9 +353,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
                   <div className="flex items-start gap-2 text-xs">
                     <span className="w-16 font-semibold text-gray-500 dark:text-slate-400 shrink-0">to:</span>
                     <span className="text-gray-900 dark:text-slate-200 break-all">
-                      {email.to_emails?.length
-                        ? email.to_emails.map(t => t.email).join(', ')
-                        : currentUser.email}
+                      {toText || currentUser.email}
                     </span>
                   </div>
                   <div className="flex items-start gap-2 text-xs">
@@ -404,13 +424,8 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
                         </span>
                       </div>
                       <div className="text-sm text-gray-600 dark:text-slate-400 mt-1">
-                        to {email.to_emails?.length
-                          ? email.to_emails.map(t => t.email).join(', ')
-                          : currentUser.email
-                        }
-                        {email.cc_emails && email.cc_emails.length > 0 && (
-                          <span>, cc {email.cc_emails.map((cc) => cc.email).join(', ')}</span>
-                        )}
+                        to {toText || currentUser.email}
+                        {ccText && <span>, cc {ccText}</span>}
                       </div>
                     </div>
                     <span className="text-sm text-gray-500 dark:text-slate-400 whitespace-nowrap">

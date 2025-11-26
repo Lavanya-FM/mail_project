@@ -1,7 +1,5 @@
-// src/lib/emailService.ts
 type ApiResult<T> = Promise<{ data?: T; error?: any; status: number }>;
 
-// Automatically use same origin unless overridden
 const API_BASE = (process.env.REACT_APP_API_BASE || '').replace(/\/$/, '');
 const BASE = API_BASE || '';
 
@@ -35,7 +33,6 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-// --- FIXED: PERFECT folder lookup ---
 export function getFolderIdByName(name: string): number | null {
   const folders = JSON.parse(localStorage.getItem("folders") || "[]");
   const search = name.toLowerCase();
@@ -49,9 +46,6 @@ export function getFolderIdByName(name: string): number | null {
 }
 
 export const emailService = {
-  // -----------------------------------------------------
-  // GET FOLDERS
-  // -----------------------------------------------------
   async getFolders(userId: number | string): ApiResult<any[]> {
     const url = apiUrl(`/api/folders/${encodeURIComponent(String(userId))}`);
     const resp = await fetch(url, { 
@@ -71,15 +65,11 @@ export const emailService = {
       }));
     }
 
-    // Save clean folder structure in localStorage
     localStorage.setItem("folders", JSON.stringify(foldersArray));
 
     return { data: foldersArray, status: result.status };
   },
 
-  // -----------------------------------------------------
-  // GET EMAILS
-  // -----------------------------------------------------
   async getEmails(userId: number | string, folderId?: string | number): ApiResult<any[]> {
     let fid: number | null;
 
@@ -102,18 +92,9 @@ export const emailService = {
       credentials: 'include' 
     });
 
-const r = await handleResp<any>(resp);
-return { 
-  data: r.data?.data || [], 
-  count: r.data?.count || 0, 
-  unread: r.data?.unread || 0, 
-  status: r.status 
-};
+    return handleResp<any[]>(resp);
   },
 
-  // -----------------------------------------------------
-  // CREATE EMAIL (send / draft)
-  // -----------------------------------------------------
   async createEmail(payload: any): ApiResult<any> {
     const url = apiUrl('/api/email/create');
     const resp = await fetch(url, {
@@ -125,9 +106,51 @@ return {
     return handleResp<any>(resp);
   },
 
-  // -----------------------------------------------------
-  // MOVE EMAIL
-  // -----------------------------------------------------
+  // Flexible updateEmail:
+  // - Called as updateEmail(emailId, userId, updates)
+  // - OR as updateEmail(emailId, updates) where updates contains user_id
+  async updateEmail(emailId: number | string, arg2: any, arg3?: any): ApiResult<any> {
+    let userId: number | undefined;
+    let updates: any;
+
+    if (typeof arg3 !== 'undefined') {
+      // called as (emailId, userId, updates)
+      userId = Number(arg2);
+      updates = arg3 || {};
+    } else {
+      // called as (emailId, updates)
+      updates = arg2 || {};
+      if (updates && (updates.user_id || updates.userId)) {
+        userId = Number(updates.user_id || updates.userId);
+      } else {
+        // try to get current user from localStorage as a last resort
+        try {
+          const stored = JSON.parse(localStorage.getItem('user') || 'null');
+          if (stored && stored.id) userId = Number(stored.id);
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+
+    if (!userId) {
+      console.error('updateEmail: missing user_id', { emailId, arg2, arg3 });
+      return { error: 'missing user_id', status: 400 };
+    }
+
+    const url = apiUrl(`/api/email/${encodeURIComponent(String(emailId))}`);
+    const body = { user_id: Number(userId), ...updates };
+
+    const resp = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      credentials: 'include',
+      body: JSON.stringify(body),
+    });
+
+    return handleResp<any>(resp);
+  },
+
   async moveEmail(email_id: number, user_id: number, target_folder: number): ApiResult<any> {
     const url = apiUrl('/api/email/move');
     const resp = await fetch(url, {
@@ -139,9 +162,17 @@ return {
     return handleResp<any>(resp);
   },
 
-  // -----------------------------------------------------
-  // DELETE EMAIL
-  // -----------------------------------------------------
+  async moveToSpam(email_id: number, user_id: number): ApiResult<any> {
+    const url = apiUrl('/api/email/spam');
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      credentials: 'include',
+      body: JSON.stringify({ email_id, user_id }),
+    });
+    return handleResp<any>(resp);
+  },
+
   async deleteEmail(email_id: number, user_id: number): ApiResult<any> {
     const url = apiUrl('/api/email/delete');
     const resp = await fetch(url, {
@@ -153,9 +184,17 @@ return {
     return handleResp<any>(resp);
   },
 
-  // -----------------------------------------------------
-  // STAR EMAIL
-  // -----------------------------------------------------
+  async deletePermanent(email_id: number, user_id: number): ApiResult<any> {
+    const url = apiUrl('/api/email/delete-permanent');
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      credentials: 'include',
+      body: JSON.stringify({ email_id, user_id }),
+    });
+    return handleResp<any>(resp);
+  },
+
   async star(email_id: number, user_id: number, status: boolean): ApiResult<any> {
     const url = apiUrl('/api/email/star');
     const resp = await fetch(url, {
@@ -167,29 +206,17 @@ return {
     return handleResp<any>(resp);
   },
 
-// -----------------------------------------------------
-// UPDATE EMAIL (read, star, folder_id)
-// -----------------------------------------------------
-async updateEmail(emailId: number | string, data: any): ApiResult<any> {
-  const url = apiUrl('/api/email/update');
-  const payload = {
-    email_id: Number(emailId),
-    ...data
-  };
+  async markRead(email_id: number, user_id: number, is_read: boolean): ApiResult<any> {
+    const url = apiUrl('/api/email/read');
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      credentials: 'include',
+      body: JSON.stringify({ email_id, user_id, is_read }),
+    });
+    return handleResp<any>(resp);
+  },
 
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    credentials: 'include',
-    body: JSON.stringify(payload),
-  });
-
-  return handleResp<any>(resp);
-},
-
-  // -----------------------------------------------------
-  // CHECK IF USER EXISTS
-  // -----------------------------------------------------
   async checkEmailExists(email: string): ApiResult<any> {
     const url = apiUrl(`/api/users/email/${encodeURIComponent(email)}`);
     const resp = await fetch(url, { 
