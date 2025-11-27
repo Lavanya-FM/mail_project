@@ -3,7 +3,6 @@ import { X, Send, Paperclip, Link, Smile, Clock, Share2, Zap, Info } from 'lucid
 import { emailService } from '../lib/emailService';
 import { authService } from '../lib/authService';
 import { p2pService } from '../lib/p2pService';
-import { threadingService } from '../lib/threadingService';
 
 const getFolderIdByName = (name: string) => {
   const folders = JSON.parse(localStorage.getItem("folders") || "[]");
@@ -63,13 +62,10 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
   const [p2pPeers, setP2pPeers] = useState(0);
   const [p2pProgress, setP2pProgress] = useState(0);
   const [showP2pMenu, setShowP2pMenu] = useState(false);
-  const [showP2pInfo, setShowP2pInfo] = useState(false);
   const [p2pConnected, setP2pConnected] = useState(false);
   
   // Threading state
   const [threadId, setThreadId] = useState<string | undefined>(undefined);
-  const [isReply, setIsReply] = useState(false);
-  const [isForward, setIsForward] = useState(false);
   
   const textareaRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -95,12 +91,6 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
       // Set threading info
       if (prefilledData.threadId) {
         setThreadId(prefilledData.threadId);
-      }
-      if (prefilledData.isReply) {
-        setIsReply(true);
-      }
-      if (prefilledData.isForward) {
-        setIsForward(true);
       }
       
       // Show CC field if there's CC data
@@ -427,10 +417,10 @@ const bccEmails = bccList.split(',').map(email => ({
   };
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-[500px] max-h-[600px] bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-gray-200 dark:border-slate-700 flex flex-col">
+    <div className="fixed inset-0 lg:inset-auto lg:bottom-4 lg:right-4 z-50 w-full lg:w-[500px] max-h-[600px] bg-white dark:bg-slate-900 rounded-none lg:rounded-xl shadow-2xl border border-gray-200 dark:border-slate-700 flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-slate-700">
-        <h2 className="text-lg font-medium text-gray-900 dark:text-white">New Message</h2>
+      <div className="flex items-center justify-between p-3 lg:p-4 border-b border-gray-200 dark:border-slate-700">
+        <h2 className="text-base lg:text-lg font-medium text-gray-900 dark:text-white">New Message</h2>
         <div className="flex items-center gap-2">
           {draftStatus === 'saving' && (
             <span className="text-sm text-gray-500 dark:text-slate-400">Saving...</span>
@@ -450,8 +440,8 @@ const bccEmails = bccList.split(',').map(email => ({
       {/* Form */}
       <div className="flex-1 overflow-y-auto">
         {/* To Field */}
-        <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-4 py-3">
-          <label className="text-sm text-gray-600 dark:text-slate-400 w-12 flex-shrink-0">To:</label>
+        <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-3 lg:px-4 py-2 lg:py-3">
+          <label className="text-sm text-gray-600 dark:text-slate-400 w-8 lg:w-12 flex-shrink-0">To:</label>
           <input
             type="email"
             value={to}
@@ -477,8 +467,8 @@ const bccEmails = bccList.split(',').map(email => ({
 
         {/* CC Field */}
         {showCc && (
-          <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-4 py-3">
-            <label className="text-sm text-gray-600 dark:text-slate-400 w-12 flex-shrink-0">Cc:</label>
+          <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-3 lg:px-4 py-2 lg:py-3">
+            <label className="text-sm text-gray-600 dark:text-slate-400 w-8 lg:w-12 flex-shrink-0">Cc:</label>
             <input
               type="email"
               value={cc}
@@ -491,8 +481,8 @@ const bccEmails = bccList.split(',').map(email => ({
 
         {/* BCC Field */}
         {showBcc && (
-          <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-4 py-3">
-            <label className="text-sm text-gray-600 dark:text-slate-400 w-12 flex-shrink-0">Bcc:</label>
+          <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-3 lg:px-4 py-2 lg:py-3">
+            <label className="text-sm text-gray-600 dark:text-slate-400 w-8 lg:w-12 flex-shrink-0">Bcc:</label>
             <input
               type="email"
               value={bcc}
@@ -504,8 +494,8 @@ const bccEmails = bccList.split(',').map(email => ({
         )}
 
         {/* Subject Field */}
-        <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-4 py-3">
-          <label className="text-sm text-gray-600 dark:text-slate-400 w-12 flex-shrink-0">Subject:</label>
+        <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-3 lg:px-4 py-2 lg:py-3">
+          <label className="text-sm text-gray-600 dark:text-slate-400 w-8 lg:w-12 flex-shrink-0">Subject:</label>
           <input
             type="text"
             value={subject}
@@ -539,24 +529,24 @@ const bccEmails = bccList.split(',').map(email => ({
         )}
 
         {/* Body Field */}
-        <div className="flex-1 p-4">
+        <div className="flex-1 p-3 lg:p-4">
           <div
             ref={textareaRef}
             contentEditable
             onInput={(e) => setBody(e.currentTarget.innerHTML || '')}
             onKeyDown={handleKeyDown}
-            className="w-full h-64 bg-transparent text-gray-900 dark:text-white focus:outline-none text-sm leading-relaxed"
+            className="w-full h-48 lg:h-64 bg-transparent text-gray-900 dark:text-white focus:outline-none text-sm leading-relaxed"
             style={{ 
               fontSize: '14px',
               lineHeight: '1.6',
-              minHeight: '256px'
+              minHeight: '192px'
             }}
           />
         </div>
 
         {/* Attachments */}
         {attachments.length > 0 && (
-          <div className="border-t border-gray-200 dark:border-slate-700 p-4">
+          <div className="border-t border-gray-200 dark:border-slate-700 p-3 lg:p-4">
             <h4 className="text-sm font-medium text-gray-700 dark:text-slate-300 mb-2">Attachments</h4>
             <div className="space-y-2">
               {attachments.map((file, index) => (
@@ -584,8 +574,8 @@ const bccEmails = bccList.split(',').map(email => ({
       </div>
 
       {/* Footer */}
-      <div className="flex items-center justify-between p-4 border-t border-gray-200 dark:border-slate-700">
-        <div className="relative flex items-center gap-2">
+      <div className="flex items-center justify-between p-3 lg:p-4 border-t border-gray-200 dark:border-slate-700 flex-wrap gap-2">
+        <div className="relative flex items-center gap-1 lg:gap-2 order-2 lg:order-1">
           <button
             onClick={handleAttachment}
             className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition"
@@ -705,17 +695,17 @@ const bccEmails = bccList.split(',').map(email => ({
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 order-1 lg:order-2 w-full lg:w-auto justify-between">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-gray-600 dark:text-slate-400 hover:text-gray-800 dark:hover:text-white transition"
+            className="px-3 lg:px-4 py-2 text-gray-600 dark:text-slate-400 hover:text-gray-800 dark:hover:text-white transition text-sm lg:text-base"
           >
             Cancel
           </button>
           <button
             onClick={handleSend}
             disabled={sending || !to.trim()}
-            className="px-6 py-2 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2"
+            className="px-4 lg:px-6 py-2 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2 text-sm lg:text-base"
           >
             {sending ? (
               <>

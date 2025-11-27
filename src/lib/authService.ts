@@ -49,12 +49,19 @@ export async function login(email: string, password: string) {
   }
 }
 
-export async function register(name: string, email: string, password: string) {
+export async function register(name: string, email: string, password: string, dateOfBirth?: { month: string; day: string; year: string }, gender?: string) {
   try {
+    const requestBody: any = { name, email, password };
+    
+    if (dateOfBirth && dateOfBirth.month && dateOfBirth.day && dateOfBirth.year) {
+      requestBody.date_of_birth = `${dateOfBirth.year}-${dateOfBirth.month}-${dateOfBirth.day}`;
+    }
+    if (gender) requestBody.gender = gender;
+
     const res = await fetch(`${API}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, email, password }),
+      body: JSON.stringify(requestBody),
     });
 
     const data = await res.json().catch(() => ({}));

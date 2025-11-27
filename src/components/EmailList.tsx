@@ -48,7 +48,7 @@ export default function EmailList({
   };
 
   return (
-    <div className="w-96 border-r border-gray-200 dark:border-slate-800 flex flex-col bg-white dark:bg-slate-900">
+    <div className="w-full lg:w-96 border-r border-gray-200 dark:border-slate-800 flex flex-col bg-white dark:bg-slate-900 h-full">
       <div className="flex-1 overflow-y-auto">
         {emails.length === 0 ? (
           <div className="flex items-center justify-center h-full text-gray-500 dark:text-slate-500">
@@ -80,19 +80,19 @@ export default function EmailList({
                 <button
                   key={email.id}
                   onClick={() => onSelectEmail(email)}
-                  className={`w-full text-left p-4 transition hover:bg-gray-100 dark:hover:bg-slate-800/50 ${
+                  className={`w-full text-left p-3 lg:p-4 transition hover:bg-gray-100 dark:hover:bg-slate-800/50 ${
                     isSelected ? 'bg-gray-100 dark:bg-slate-800' : ''
                   } ${!email.is_read ? 'border-l-2 border-blue-500' : ''}`}
                 >
-                  <div className="flex items-start gap-3">
-                    <div className="flex-shrink-0 w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-white text-sm font-semibold">
+                  <div className="flex items-start gap-2 lg:gap-3">
+                    <div className="flex-shrink-0 w-8 h-8 lg:w-10 lg:h-10 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-white text-xs lg:text-sm font-semibold">
 			{getInitials(email.from_name || email.from_email || 'User')}
                     </div>
 
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center gap-1 lg:gap-2 mb-1">
                         <span
-                          className={`text-sm truncate ${
+                          className={`text-xs lg:text-sm truncate ${
                             !email.is_read
                               ? 'font-semibold text-gray-900 dark:text-white'
                               : 'font-medium text-gray-600 dark:text-slate-300'
@@ -107,7 +107,7 @@ export default function EmailList({
 
                       <div className="mb-1">
                         <h3
-                          className={`text-sm truncate ${
+                          className={`text-xs lg:text-sm truncate ${
                             !email.is_read
                               ? 'font-semibold text-gray-900 dark:text-white'
                               : 'text-gray-600 dark:text-slate-400'
@@ -117,11 +117,11 @@ export default function EmailList({
                         </h3>
                       </div>
 
-                      <p className="text-xs text-gray-500 dark:text-slate-500 line-clamp-2">
+                      <p className="text-xs text-gray-500 dark:text-slate-500 line-clamp-1 lg:line-clamp-2">
                         {truncateText(stripHtmlTags(email.body || ''), 100)}
                       </p>
 
-                      <div className="flex items-center gap-2 mt-2">
+                      <div className="flex items-center gap-1 lg:gap-2 mt-1 lg:mt-2">
                         {email.has_attachments && (
                           <div className="flex items-center gap-1 text-gray-500 dark:text-slate-500">
                             <Paperclip className="w-3 h-3" />

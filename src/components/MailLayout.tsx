@@ -74,6 +74,7 @@ export default function MailLayout() {
   const [composeWindows, setComposeWindows] = useState<string[]>([]);
   const [nextComposeId, setNextComposeId] = useState(1);
   const [windowStates, setWindowStates] = useState<Record<string, { minimized: boolean; maximized: boolean }>>({});
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   // normalize different possible shapes to array
   const normalizeArray = (v: any, hints: string[] = []) => {
@@ -242,6 +243,7 @@ const loadFolders = async () => {
         setActiveTabId(String(remainingTabs[0].id));
       } else {
         setActiveTabId(null);
+        setSelectedEmail(null); // Clear selected email when no tabs are open
       }
     }
   };
@@ -342,11 +344,26 @@ const loadFolders = async () => {
   }
 
   return (
-    <div className="h-screen bg-gray-50 dark:bg-slate-950 flex overflow-hidden">
-      {/* Sidebar */}
-      <div className="w-64 bg-white dark:bg-slate-900 border-r border-gray-200 dark:border-slate-800 flex flex-col">
-        {/* Header */}
-        <div className="p-4 border-b border-gray-200 dark:border-slate-800">
+    <div className="h-screen bg-gray-50 dark:bg-slate-950 flex flex-col lg:flex-row overflow-hidden">
+      {/* Sidebar - Mobile: Collapsible, Desktop: Fixed */}
+      <div className={`w-full lg:w-64 bg-white dark:bg-slate-900 border-r border-gray-200 dark:border-slate-800 flex flex-col lg:relative fixed inset-y-0 left-0 z-40 transform lg:transform-none transition-transform duration-300 ease-in-out ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
+        {/* Mobile Close Button */}
+        <div className="lg:hidden p-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="bg-gradient-to-br from-blue-500 to-cyan-500 p-2 rounded-lg">
+              <Sparkles className="w-5 h-5 text-white" />
+            </div>
+            <span className="text-gray-900 dark:text-white font-bold text-lg">Jeemail</span>
+          </div>
+          <button
+            onClick={() => setMobileSidebarOpen(false)}
+            className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        {/* Header - Desktop Only */}
+        <div className="hidden lg:block p-4 border-b border-gray-200 dark:border-slate-800">
           <div className="flex items-center gap-3">
             <div className="bg-gradient-to-br from-blue-500 to-cyan-500 p-2 rounded-lg">
               <Sparkles className="w-5 h-5 text-white" />
@@ -355,8 +372,8 @@ const loadFolders = async () => {
           </div>
         </div>
 
-        {/* User Profile */}
-        <div className="p-4 border-b border-gray-200 dark:border-slate-800">
+        {/* User Profile - Desktop Only */}
+        <div className="hidden lg:block p-4 border-b border-gray-200 dark:border-slate-800">
           <div className="flex items-center justify-between">
             <div className="relative flex-1">
               <button
@@ -579,10 +596,37 @@ const loadFolders = async () => {
         </div>
       </div>
 
+      {/* Mobile Sidebar Overlay */}
+      {mobileSidebarOpen && (
+        <div 
+          className="lg:hidden fixed inset-0 bg-black/50 z-30"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      )}
+
       {/* Main Content */}
-      <div className="flex-1 flex flex-col bg-gray-50 dark:bg-slate-950">
+      <div className="flex-1 flex flex-col bg-gray-50 dark:bg-slate-950 lg:ml-0">
+        {/* Mobile Menu Toggle */}
+        <div className="lg:hidden h-16 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 flex items-center px-4 gap-4">
+          <button className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition"
+            onClick={() => setMobileSidebarOpen(true)}
+          >
+            <div className="w-6 h-6 flex flex-col justify-center gap-1">
+              <span className="block w-full h-0.5 bg-current"></span>
+              <span className="block w-full h-0.5 bg-current"></span>
+              <span className="block w-full h-0.5 bg-current"></span>
+            </div>
+          </button>
+          <div className="flex items-center gap-3">
+            <div className="bg-gradient-to-br from-blue-500 to-cyan-500 p-2 rounded-lg">
+              <Sparkles className="w-4 h-4 text-white" />
+            </div>
+            <span className="text-gray-900 dark:text-white font-bold text-lg">Jeemail</span>
+          </div>
+        </div>
+        
         {/* Top Bar */}
-        <div className="h-16 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 flex items-center px-6 gap-4 shadow-sm">
+        <div className="h-16 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 flex items-center px-4 lg:px-6 gap-4 shadow-sm">
           <div className="flex-1 max-w-xl relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-slate-500" />
             <input
@@ -592,6 +636,19 @@ const loadFolders = async () => {
               placeholder="Search emails..."
               className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
             />
+          </div>
+          {/* Mobile Profile & Theme */}
+          <div className="flex items-center gap-2 lg:hidden">
+            <ThemeToggle />
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowProfileDropdown(!showProfileDropdown);
+              }}
+              className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold text-sm"
+            >
+              {profile?.full_name?.charAt(0) || profile?.email?.charAt(0) || 'U'}
+            </button>
           </div>
         </div>
 
@@ -626,16 +683,19 @@ const loadFolders = async () => {
         )}
 
         {/* Email Content */}
-        <div className="flex-1 flex overflow-hidden">
-          <EmailList
-            emails={filteredEmails}
-            selectedEmail={selectedEmail}
-            onSelectEmail={(email: any) => {
-              handleOpenMailInTab(email);
-            }}
-	    onRefresh={refreshEmails}
-          />
-          <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex overflow-hidden flex-col lg:flex-row">
+          {/* Email List - Mobile: Full width when no email selected, Desktop: Fixed width */}
+          <div className={`${activeTabId ? 'hidden lg:block' : 'block'} w-full lg:w-96 flex-shrink-0`}>
+            <EmailList
+              emails={filteredEmails}
+              selectedEmail={selectedEmail}
+              onSelectEmail={(email: any) => {
+                handleOpenMailInTab(email);
+              }}
+	      onRefresh={refreshEmails}
+            />
+          </div>
+          <div className="flex-1 flex flex-col min-w-0">
             {activeTabId ? (
               <div className="flex-1 bg-white dark:bg-slate-900">
                 {(() => {

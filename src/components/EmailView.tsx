@@ -190,9 +190,40 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
   const handleArchive = async () => {
     if (!email || !currentUser) return;
     try {
-      alert('Archive functionality would move email to Archive folder');
+      const { data: folders, error } = await emailService.getFolders(currentUser.id);
+      if (error) throw error;
+      
+      const archiveFolder = folders?.find(f => f.name.toLowerCase() === 'archive');
+      
+      if (!archiveFolder) {
+        // If archive folder doesn't exist, try to move to a default system folder
+        const systemFolder = folders?.find(f => f.system_box === 'archive' || f.system_box === 'all');
+        if (systemFolder) {
+          const { error: moveError } = await emailService.moveEmail(
+            Number(email.id), 
+            currentUser.id, 
+            Number(systemFolder.id)
+          );
+          if (moveError) throw moveError;
+        } else {
+          alert('Archive folder not found. Please create an Archive folder first.');
+          return;
+        }
+      } else {
+        // Move to existing archive folder
+        const { error: moveError } = await emailService.moveEmail(
+          Number(email.id), 
+          currentUser.id, 
+          Number(archiveFolder.id)
+        );
+        if (moveError) throw moveError;
+      }
+      
+      onRefresh();
+      onClose();
     } catch (error) {
       console.error('Error archiving email:', error);
+      alert('Failed to archive email. Please try again.');
     }
   };
 
@@ -204,16 +235,42 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
       confirmLabel: 'Move to Spam',
       cancelLabel: 'Cancel',
       onConfirm: async () => {
-        const { data: folders, error } = await emailService.getFolders(currentUser.id);
-        if (error) throw error;
-        const spamFolder = folders?.find(f => f.name.toLowerCase() === 'spam');
-        if (!spamFolder) throw new Error('Spam folder not found');
+        try {
+          const { data: folders, error } = await emailService.getFolders(currentUser.id);
+          if (error) throw error;
+          
+          const spamFolder = folders?.find(f => f.name.toLowerCase() === 'spam');
+          
+          if (!spamFolder) {
+            // If spam folder doesn't exist, try to move to a default system folder
+            const systemFolder = folders?.find(f => f.system_box === 'spam' || f.system_box === 'junk');
+            if (systemFolder) {
+              const { error: moveError } = await emailService.moveEmail(
+                Number(email.id), 
+                currentUser.id, 
+                Number(systemFolder.id)
+              );
+              if (moveError) throw moveError;
+            } else {
+              alert('Spam folder not found. Please create a Spam folder first.');
+              return;
+            }
+          } else {
+            // Move to existing spam folder
+            const { error: moveError } = await emailService.moveEmail(
+              Number(email.id), 
+              currentUser.id, 
+              Number(spamFolder.id)
+            );
+            if (moveError) throw moveError;
+          }
 
-        const { error: updateError } = await emailService.updateEmail(email.id, { user_id: currentUser.id, folder_id: spamFolder.id });
-        if (updateError) throw updateError;
-
-        onRefresh();
-        onClose();
+          onRefresh();
+          onClose();
+        } catch (error) {
+          console.error('Error moving to spam:', error);
+          alert('Failed to move email to Spam. Please try again.');
+        }
       }
     });
   };
@@ -347,10 +404,10 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-5xl mx-auto p-6 md:p-8">
+        <div className="max-w-none mx-auto p-4 lg:p-6 lg:p-8">
           {/* Subject Line - Gmail Style */}
           <div className="mb-6">
-            <h1 className="text-2xl font-normal text-gray-900 dark:text-white mb-4 leading-tight">
+            <h1 className="text-xl lg:text-2xl font-normal text-gray-900 dark:text-white mb-3 lg:mb-4 leading-tight">
               {email.subject || '(No subject)'}
             </h1>
             {email.labels && email.labels.length > 0 && (
@@ -367,24 +424,24 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
           {/* Email Card - Gmail Style */}
           <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-gray-200 dark:border-slate-800 overflow-hidden mb-6">
             {/* Sender Info Section */}
-            <div className="p-6">
+            <div className="p-4 lg:p-6">
               <div className="flex items-start gap-4">
-                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-500 flex items-center justify-center text-white font-semibold text-sm shadow-md">
+                <div className="flex-shrink-0 w-8 h-8 lg:w-10 lg:h-10 rounded-full bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-500 flex items-center justify-center text-white font-semibold text-xs lg:text-sm shadow-md">
                   {getInitials(email.from_name || email.from_email || '')}
                 </div>
 
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-4 mb-2">
+                  <div className="flex items-start gap-2 lg:gap-4 mb-2">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <h3 className="text-sm font-medium text-gray-900 dark:text-white">
+                        <h3 className="text-xs lg:text-sm font-medium text-gray-900 dark:text-white">
                           {email.from_name || email.from_email}
                         </h3>
-                        <span className="text-sm text-gray-500 dark:text-slate-400">
+                        <span className="text-xs lg:text-sm text-gray-500 dark:text-slate-400">
                           &lt;{email.from_email}&gt;
                         </span>
                       </div>
-                      <div className="text-sm text-gray-600 dark:text-slate-400 mt-1">
+                      <div className="text-xs lg:text-sm text-gray-600 dark:text-slate-400 mt-1">
                         to {email.to_emails?.length
                           ? email.to_emails.map(t => t.email).join(', ')
                           : currentUser.email
@@ -394,7 +451,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
                         )}
                       </div>
                     </div>
-                    <span className="text-sm text-gray-500 dark:text-slate-400 whitespace-nowrap">
+                    <span className="text-xs lg:text-sm text-gray-500 dark:text-slate-400 whitespace-nowrap">
                       {formatShortDate(email.sent_at || email.created_at || '')}
                     </span>
                   </div>
@@ -403,9 +460,9 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
             </div>
 
             {/* Email Body */}
-            <div className="px-6 pb-6 pt-4 border-t border-gray-100 dark:border-slate-800">
+            <div className="px-4 lg:px-6 pb-4 lg:pb-6 pt-3 lg:pt-4 border-t border-gray-100 dark:border-slate-800">
               <div className="prose dark:prose-invert max-w-none" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                <div className="text-gray-800 dark:text-slate-200 leading-relaxed text-sm" dangerouslySetInnerHTML={{ __html: email.body?.replace(/\n/g, '<br>') || '' }} />
+                <div className="text-xs lg:text-sm text-gray-800 dark:text-slate-200 leading-relaxed" dangerouslySetInnerHTML={{ __html: email.body?.replace(/\n/g, '<br>') || '' }} />
               </div>
 
               {email.has_attachments && (
@@ -414,13 +471,13 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
                     <Paperclip className="w-4 h-4" />
                     Attachments
                   </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 gap-2 lg:gap-3">
                     <div className="bg-gray-50 dark:bg-slate-800/50 rounded-xl p-4 flex items-center gap-3 hover:bg-gray-100 dark:hover:bg-slate-800 transition cursor-pointer border border-gray-200 dark:border-slate-700">
                       <div className="w-12 h-12 bg-blue-500/10 rounded-lg flex items-center justify-center">
                         <Paperclip className="w-6 h-6 text-blue-500" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm text-gray-900 dark:text-white font-medium truncate">document.pdf</p>
+                        <p className="text-xs lg:text-sm text-gray-900 dark:text-white font-medium truncate">document.pdf</p>
                         <p className="text-xs text-gray-600 dark:text-slate-400">2.4 MB</p>
                       </div>
                     </div>
@@ -431,24 +488,24 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
           </div>
 
           {/* Action Buttons */}
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-col sm:flex-row flex-wrap gap-2">
             {!email.is_draft ? (
               <>
-                <button onClick={handleReply} className="px-4 py-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 border border-gray-300 dark:border-slate-700 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition flex items-center gap-2">
+                <button onClick={handleReply} className="px-3 lg:px-4 py-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 border border-gray-300 dark:border-slate-700 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition flex items-center gap-2 text-sm lg:text-base">
                   <Reply className="w-4 h-4" />
                   Reply
                 </button>
-                <button onClick={handleReplyAll} className="px-4 py-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 border border-gray-300 dark:border-slate-700 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition flex items-center gap-2">
+                <button onClick={handleReplyAll} className="px-3 lg:px-4 py-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 border border-gray-300 dark:border-slate-700 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition flex items-center gap-2 text-sm lg:text-base">
                   <ReplyAll className="w-4 h-4" />
                   Reply All
                 </button>
-                <button onClick={handleForward} className="px-4 py-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 border border-gray-300 dark:border-slate-700 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition flex items-center gap-2">
+                <button onClick={handleForward} className="px-3 lg:px-4 py-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 border border-gray-300 dark:border-slate-700 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition flex items-center gap-2 text-sm lg:text-base">
                   <Forward className="w-4 h-4" />
                   Forward
                 </button>
               </>
             ) : (
-              <button onClick={handleEditDraft} className="px-4 py-2 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600 transition flex items-center gap-2">
+              <button onClick={handleEditDraft} className="px-3 lg:px-4 py-2 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600 transition flex items-center gap-2 text-sm lg:text-base">
                 <FileEdit className="w-4 h-4" />
                 Continue Editing
               </button>
