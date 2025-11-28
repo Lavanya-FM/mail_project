@@ -1,16 +1,14 @@
 /*
   src/lib/authService.ts
-
-  Exports:
-   - named exports: getCurrentUser, login, register, logout, isAuthenticated, authService
-   - default export: authService
+  Fixed version – fully compatible with backend /api/register & /api/login
 */
-const API = "/api"; // relative so nginx proxy works
+
+const API = "/api"; // works with nginx reverse proxy
 
 function saveUser(user: any) {
   const normalized = {
     id: user.id,
-    full_name: user.name || user.full_name || '',
+    full_name: user.full_name || user.name || '',
     email: user.email,
     storage_used: user.storage_used || 0,
     storage_limit: user.storage_limit || 1073741824
@@ -41,7 +39,6 @@ export async function login(email: string, password: string) {
       return { success: false, error: data.error || "Login failed" };
     }
 
-    // backend returns: { user: { id, name, email } }
     saveUser(data.user);
     return { success: true, user: getCurrentUser() };
   } catch (err) {
@@ -49,12 +46,38 @@ export async function login(email: string, password: string) {
   }
 }
 
-export async function register(name: string, email: string, password: string) {
+/*
+  Correct register() signature (matches Auth.tsx):
+  register(fullName, email, password, dateOfBirth, gender)
+*/
+export async function register(
+  name: string,
+  email: string,
+  password: string,
+  dateOfBirth?: { month: string; day: string; year: string },
+  gender?: string
+) {
   try {
+    // backend requires EXACT fields: name, email, password, dateOfBirth, gender
+    const requestBody: any = { name, email, password };
+
+    // backend expects:  dateOfBirth: { year, month, day }
+    if (dateOfBirth) {
+      requestBody.dateOfBirth = {
+        year: dateOfBirth.year,
+        month: dateOfBirth.month,
+        day: dateOfBirth.day,
+      };
+    }
+
+    if (gender) {
+      requestBody.gender = gender;
+    }
+
     const res = await fetch(`${API}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, email, password }),
+      body: JSON.stringify(requestBody),
     });
 
     const data = await res.json().catch(() => ({}));
@@ -64,6 +87,7 @@ export async function register(name: string, email: string, password: string) {
     }
 
     if (data.user) saveUser(data.user);
+
     return { success: true, user: getCurrentUser() };
   } catch {
     return { success: false, error: "Network error" };
@@ -78,7 +102,6 @@ export function isAuthenticated() {
   return !!getCurrentUser();
 }
 
-// convenience object used elsewhere in the app
 export const authService = {
   getCurrentUser,
   login,

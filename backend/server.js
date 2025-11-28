@@ -9,7 +9,6 @@ const cors = require("cors");
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 app.use(cors());
-
 app.use((req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
   next();
@@ -97,19 +96,16 @@ async function createSystemFolders(userId) {
 function isValidDomain(email) {
   if (!email || typeof email !== 'string') return false;
   const trimmed = email.trim().toLowerCase();
-
   if (!trimmed.includes('@')) return false;
   const parts = trimmed.split('@');
   if (parts.length !== 2) return false;
   
-  const domain = parts[1]; // Get the domain part after @
-
+  const domain = parts[1];
   console.log('🔍 Domain validation - Email:', trimmed, 'Domain:', domain, 'Expected:', ALLOWED_DOMAIN.toLowerCase());
-
-  // Accept exact domain or any subdomain of allowed domain
+  
   if (domain === ALLOWED_DOMAIN.toLowerCase()) return true;
   if (domain.endsWith("." + ALLOWED_DOMAIN.toLowerCase())) return true;
-
+  
   console.log('❌ Domain validation failed');
   return false;
 }
@@ -126,10 +122,10 @@ function normalizeEmail(email) {
 app.post("/api/register", async (req, res) => {
   try {
     console.log("📝 REGISTER ATTEMPT:", JSON.stringify(req.body));
-    const { name, email, password } = req.body || {};
+    const { name, email, password, dateOfBirth, gender } = req.body || {};
 
     if (!name || !email || !password) {
-      console.log("❌ Missing fields");
+      console.log("❌ Missing required fields");
       return res.status(400).json({ error: "Missing required fields: name, email or password" });
     }
 
@@ -148,17 +144,25 @@ app.post("/api/register", async (req, res) => {
       console.log("❌ Email already registered:", normalizedEmail);
       return res.status(409).json({ error: "Email already registered" });
     }
+    
+    // Format date of birth if provided
+    let dobString = null;
+    if (dateOfBirth && dateOfBirth.year && dateOfBirth.month && dateOfBirth.day) {
+      dobString = `${dateOfBirth.year}-${dateOfBirth.month.padStart(2, '0')}-${dateOfBirth.day.padStart(2, '0')}`;
+      console.log("📅 Date of birth:", dobString);
+    }
 
     const hashed = await bcrypt.hash(password, 10);
 
+ // Insert user with additional fields
     const [result] = await db.query(
-      `INSERT INTO users (name, email, password) VALUES (?, ?, ?)`,
-      [name.trim(), normalizedEmail, hashed]
+      `INSERT INTO users (name, email, password, date_of_birth, gender) VALUES (?, ?, ?, ?, ?)`,
+      [name.trim(), normalizedEmail, hashed, dobString, gender || null]
     );
-
+    
     const userId = result.insertId;
     console.log("✅ User created with ID:", userId);
-
+    
     await createSystemFolders(userId);
     console.log("✅ System folders created for user:", userId);
 
@@ -167,7 +171,9 @@ app.post("/api/register", async (req, res) => {
         id: userId, 
         name: name.trim(), 
         email: normalizedEmail,
-        full_name: name.trim()
+        full_name: name.trim(),
+	date_of_birth: dobString,
+	gender: gender || null
       } 
     });
   } catch (e) {
@@ -176,6 +182,28 @@ app.post("/api/register", async (req, res) => {
   }
 });
 
+// Check email/username existence - NEW ENDPOINT
+app.get("/api/users/check/:username", async (req, res) => {
+  const username = decodeURIComponent(req.params.username || '').trim().toLowerCase();
+  const email = `${username}@${ALLOWED_DOMAIN}`;
+  
+  console.log("🔍 Checking username existence:", username, "→", email);
+  
+  try {
+    const [rows] = await db.query("SELECT id FROM users WHERE email = ? LIMIT 1", [email]);
+    
+    if (!rows.length) {
+      console.log("✅ Username available:", username);
+      return res.json({ exists: false, available: true });
+    }
+    
+    console.log("❌ Username taken:", username);
+    return res.json({ exists: true, available: false });
+  } catch (err) {
+    console.error("❌ CHECK USERNAME ERROR:", err && err.message);
+    return res.status(500).json({ error: "DB error" });
+  }
+});
 // Check email existence
 app.get("/api/users/email/:email", async (req, res) => {
   const email = normalizeEmail(decodeURIComponent(req.params.email || ''));
@@ -195,7 +223,7 @@ app.get("/api/users/email/:email", async (req, res) => {
   }
 });
 
-// Login - FIXED VERSION
+// Login - UPDATED to return additional user info
 app.post("/api/login", async (req, res) => {
   try {
     console.log("🔐 LOGIN ATTEMPT:", JSON.stringify({ email: req.body?.email, hasPassword: !!req.body?.password }));
@@ -206,51 +234,52 @@ app.post("/api/login", async (req, res) => {
       console.log("❌ Missing email or password");
       return res.status(400).json({ error: "Missing email or password" });
     }
-
+    
     const normalizedEmail = normalizeEmail(email);
     console.log("📧 Normalized email for login:", normalizedEmail);
-
-    // Query database
+    
+    // Query database with additional fields
     const [rows] = await db.query(
-      "SELECT id, name, email, password FROM users WHERE email = ? LIMIT 1", 
+      "SELECT id, name, email, password, date_of_birth, gender FROM users WHERE email = ? LIMIT 1", 
       [normalizedEmail]
     );
-
+    
     console.log("🔍 Query result:", rows.length > 0 ? "User found" : "User NOT found");
-
+    
     if (!rows.length) {
       console.log("❌ User not found for email:", normalizedEmail);
       return res.status(404).json({ error: "User not found" });
     }
-
+    
     const user = rows[0];
     console.log("👤 Found user ID:", user.id, "Email:", user.email);
-
+    
     // Verify password
     const match = await bcrypt.compare(password, user.password);
     console.log("🔑 Password match:", match);
-
+    
     if (!match) {
       console.log("❌ Incorrect password for:", normalizedEmail);
       return res.status(401).json({ error: "Incorrect password" });
     }
-
+    
     // Ensure system folders exist
     await createSystemFolders(user.id);
     console.log("✅ System folders ensured for user:", user.id);
-
+    
     const responseData = {
       user: {
         id: user.id,
         name: user.name,
         email: user.email,
-        full_name: user.name
+        full_name: user.name,
+        date_of_birth: user.date_of_birth,
+        gender: user.gender
       }
     };
-
+    
     console.log("✅ LOGIN SUCCESS - Sending response:", JSON.stringify(responseData));
     return res.json(responseData);
-
   } catch (err) {
     console.error("❌ LOGIN ERROR:", err && err.message, err && err.stack);
     return res.status(500).json({ error: "Login failed" });
@@ -324,6 +353,7 @@ app.get("/api/emails/:userId/:folderAny", async (req, res) => {
     console.log("✅ Found", emails.length, "emails in folder:", folderId);
 
     for (let email of emails) {
+      // Fetch recipients from email_recipients table
       const [recipients] = await db.query(
         `SELECT address, type FROM email_recipients WHERE email_id = ?`,
         [email.id]
@@ -333,13 +363,30 @@ app.get("/api/emails/:userId/:folderAny", async (req, res) => {
       const ccList = recipients.filter(r => r.type === 'cc').map(r => r.address);
       const bccList = recipients.filter(r => r.type === 'bcc').map(r => r.address);
 
+      // ✅ Set recipient arrays
       email.to_emails = toList;
       email.cc_emails = ccList;
       email.bcc_emails = bccList;
+      
+      // ✅ Also set headers for backward compatibility
+      email.to_header = email.to_header || toList.join(', ');
+      email.cc_header = email.cc_header || ccList.join(', ');
+      email.bcc_header = email.bcc_header || bccList.join(', ');
+      
+      // Set defaults
       email.from_email = email.from_email || '';
       email.from_name = email.from_name || 'Unknown';
       email.subject = email.subject || '(No Subject)';
       email.body = email.body || '';
+      
+      // 🔍 DEBUG: Log the first email's recipient data
+      if (email.id) {
+        console.log(`📧 Email ID ${email.id}:`);
+        console.log(`   From: ${email.from_name} <${email.from_email}>`);
+        console.log(`   To: ${JSON.stringify(toList)}`);
+        console.log(`   To Header: ${email.to_header}`);
+        console.log(`   Subject: ${email.subject}`);
+      }
     }
 
     return res.json({ data: emails });
@@ -351,30 +398,64 @@ app.get("/api/emails/:userId/:folderAny", async (req, res) => {
 
 // Create email - improved: add entries for recipients' inboxes
 app.post("/api/email/create", async (req, res) => {
-  let { user_id, to, cc, bcc, subject, body, folder_id, is_draft } = req.body || {};
+  let { user_id, to, cc, bcc, subject, body, folder_id, is_draft, attachments } = req.body || {};
 
-  if (!user_id) return res.status(400).json({ error: 'missing user_id' });
+  console.log("\n=================================================");
+  console.log("📥 CREATE EMAIL REQUEST RECEIVED");
+  console.log("=================================================");
+  console.log("Raw request body:", JSON.stringify(req.body, null, 2));
+  console.log("user_id:", user_id);
+  console.log("to (raw):", to);
+  console.log("cc (raw):", cc);
+  console.log("bcc (raw):", bcc);
+  console.log("subject:", subject);
+  console.log("is_draft:", is_draft);
+  console.log("has attachments:", !!attachments);
+  console.log("=================================================\n");
+
+  if (!user_id) {
+    console.log("❌ Missing user_id");
+    return res.status(400).json({ error: 'missing user_id' });
+  }
 
   const normalizeList = (list) => {
+    console.log("  📋 Normalizing list:", list);
     if (!list) return [];
     if (Array.isArray(list)) {
-      return list
+      const result = list
         .map(addr => (typeof addr === 'string' ? addr : (addr?.email || addr?.address || '')))
-        .map(a => a && String(a).trim())
+        .map(a => a && String(a).trim().toLowerCase())
         .filter(Boolean);
+      console.log("  ✅ Array normalized to:", result);
+      return result;
     }
-    if (typeof list === 'string') return [list.trim()];
+    if (typeof list === 'string') {
+      const result = [list.trim().toLowerCase()];
+      console.log("  ✅ String normalized to:", result);
+      return result;
+    }
     if (typeof list === 'object') {
       const address = list.email || list.address || '';
-      return address ? [String(address).trim()] : [];
+      const result = address ? [String(address).trim().toLowerCase()] : [];
+      console.log("  ✅ Object normalized to:", result);
+      return result;
     }
+    console.log("  ⚠️ Unknown type, returning empty array");
     return [];
   };
 
   const toList = normalizeList(to);
   const ccList = normalizeList(cc);
   const bccList = normalizeList(bcc);
-  const allRecipients = Array.from(new Set([...toList, ...ccList, ...bccList].map(s => String(s).toLowerCase())));
+  
+  console.log("\n📧 NORMALIZED RECIPIENTS:");
+  console.log("  To:", toList);
+  console.log("  Cc:", ccList);
+  console.log("  Bcc:", bccList);
+  
+  const allRecipients = Array.from(new Set([...toList, ...ccList, ...bccList]));
+  console.log("  All unique recipients:", allRecipients);
+  console.log("");
 
   let conn;
   try {
@@ -413,12 +494,23 @@ app.post("/api/email/create", async (req, res) => {
     const fromName = userInfo.length > 0 ? userInfo[0].name : 'Unknown';
     const fromEmail = userInfo.length > 0 ? userInfo[0].email : '';
 
-    // insert into emails
-    const [insertResult] = await conn.query(
-      "INSERT INTO emails (user_id, from_name, from_email, subject, body, created_at) VALUES (?, ?, ?, ?, ?, NOW())",
-      [user_id, fromName, fromEmail, subject || '', body || '']
-    );
-    const emailId = insertResult.insertId;
+// insert into emails WITH HEADERS
+const [insertResult] = await conn.query(
+  `INSERT INTO emails 
+    (user_id, from_name, from_email, subject, body, created_at, to_header, cc_header, bcc_header)
+    VALUES (?, ?, ?, ?, ?, NOW(), ?, ?, ?)`,
+  [
+    user_id,
+    fromName,
+    fromEmail,
+    subject || '',
+    body || '',
+    toList.join(", "),
+    ccList.join(", "),
+    bccList.join(", ")
+  ]
+);
+const emailId = insertResult.insertId;
 
     // insert recipients
     const insertRecipientRows = async (list, type) => {

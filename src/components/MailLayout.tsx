@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   Inbox, Send, FileEdit, Trash2, Plus, Star, Archive,
   Search, LogOut, Sparkles, Circle, X, ChevronDown, User,
-  Clock, AlertTriangle, Tag, Mail
+  Clock, AlertTriangle, Tag, Mail, Minimize2, Maximize2
 } from 'lucide-react';
 import { emailService, getFolderIdByName } from '../lib/emailService';
 import { authService } from '../lib/authService';
@@ -73,6 +73,8 @@ export default function MailLayout() {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [composeWindows, setComposeWindows] = useState<string[]>([]);
   const [nextComposeId, setNextComposeId] = useState(1);
+  const [windowStates, setWindowStates] = useState<Record<string, { minimized: boolean; maximized: boolean }>>({});
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   // normalize different possible shapes to array
   const normalizeArray = (v: any, hints: string[] = []) => {
@@ -241,18 +243,40 @@ const loadFolders = async () => {
         setActiveTabId(String(remainingTabs[0].id));
       } else {
         setActiveTabId(null);
+        setSelectedEmail(null); // Clear selected email when no tabs are open
       }
     }
   };
 
   const handleOpenComposeWindow = () => {
-    const newComposeId = `compose-${nextComposeId}`;
-    setComposeWindows([...composeWindows, newComposeId]);
-    setNextComposeId(nextComposeId + 1);
+    // Only allow one compose window at a time
+    if (composeWindows.length === 0) {
+      const newComposeId = `compose-${nextComposeId}`;
+      setComposeWindows([newComposeId]);
+      setNextComposeId(nextComposeId + 1);
+    }
   };
 
   const handleCloseComposeWindow = (composeId: string) => {
     setComposeWindows(composeWindows.filter(id => id !== composeId));
+    // Clean up window state when window is closed
+    const newWindowStates = { ...windowStates };
+    delete newWindowStates[composeId];
+    setWindowStates(newWindowStates);
+  };
+
+  const handleMinimizeWindow = (composeId: string) => {
+    setWindowStates(prev => ({
+      ...prev,
+      [composeId]: { ...prev[composeId], minimized: true, maximized: false }
+    }));
+  };
+
+  const handleMaximizeWindow = (composeId: string) => {
+    setWindowStates(prev => ({
+      ...prev,
+      [composeId]: { ...prev[composeId], minimized: false, maximized: !prev[composeId]?.maximized }
+    }));
   };
 
   const handleFolderClick = (folderType: string, folder: Folder) => {
@@ -320,11 +344,26 @@ const loadFolders = async () => {
   }
 
   return (
-    <div className="h-screen bg-gray-50 dark:bg-slate-950 flex overflow-hidden">
-      {/* Sidebar */}
-      <div className="w-64 bg-white dark:bg-slate-900 border-r border-gray-200 dark:border-slate-800 flex flex-col">
-        {/* Header */}
-        <div className="p-4 border-b border-gray-200 dark:border-slate-800">
+    <div className="h-screen bg-gray-50 dark:bg-slate-950 flex flex-col lg:flex-row overflow-hidden">
+      {/* Sidebar - Mobile: Collapsible, Desktop: Fixed */}
+      <div className={`w-full lg:w-64 bg-white dark:bg-slate-900 border-r border-gray-200 dark:border-slate-800 flex flex-col lg:relative fixed inset-y-0 left-0 z-40 transform lg:transform-none transition-transform duration-300 ease-in-out ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
+        {/* Mobile Close Button */}
+        <div className="lg:hidden p-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="bg-gradient-to-br from-blue-500 to-cyan-500 p-2 rounded-lg">
+              <Sparkles className="w-5 h-5 text-white" />
+            </div>
+            <span className="text-gray-900 dark:text-white font-bold text-lg">Jeemail</span>
+          </div>
+          <button
+            onClick={() => setMobileSidebarOpen(false)}
+            className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        {/* Header - Desktop Only */}
+        <div className="hidden lg:block p-4 border-b border-gray-200 dark:border-slate-800">
           <div className="flex items-center gap-3">
             <div className="bg-gradient-to-br from-blue-500 to-cyan-500 p-2 rounded-lg">
               <Sparkles className="w-5 h-5 text-white" />
@@ -333,8 +372,8 @@ const loadFolders = async () => {
           </div>
         </div>
 
-        {/* User Profile */}
-        <div className="p-4 border-b border-gray-200 dark:border-slate-800">
+        {/* User Profile - Desktop Only */}
+        <div className="hidden lg:block p-4 border-b border-gray-200 dark:border-slate-800">
           <div className="flex items-center justify-between">
             <div className="relative flex-1">
               <button
@@ -557,10 +596,37 @@ const loadFolders = async () => {
         </div>
       </div>
 
+      {/* Mobile Sidebar Overlay */}
+      {mobileSidebarOpen && (
+        <div 
+          className="lg:hidden fixed inset-0 bg-black/50 z-30"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      )}
+
       {/* Main Content */}
-      <div className="flex-1 flex flex-col bg-gray-50 dark:bg-slate-950">
+      <div className="flex-1 flex flex-col bg-gray-50 dark:bg-slate-950 lg:ml-0">
+        {/* Mobile Menu Toggle */}
+        <div className="lg:hidden h-16 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 flex items-center px-4 gap-4">
+          <button className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition"
+            onClick={() => setMobileSidebarOpen(true)}
+          >
+            <div className="w-6 h-6 flex flex-col justify-center gap-1">
+              <span className="block w-full h-0.5 bg-current"></span>
+              <span className="block w-full h-0.5 bg-current"></span>
+              <span className="block w-full h-0.5 bg-current"></span>
+            </div>
+          </button>
+          <div className="flex items-center gap-3">
+            <div className="bg-gradient-to-br from-blue-500 to-cyan-500 p-2 rounded-lg">
+              <Sparkles className="w-4 h-4 text-white" />
+            </div>
+            <span className="text-gray-900 dark:text-white font-bold text-lg">Jeemail</span>
+          </div>
+        </div>
+        
         {/* Top Bar */}
-        <div className="h-16 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 flex items-center px-6 gap-4 shadow-sm">
+        <div className="h-16 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 flex items-center px-4 lg:px-6 gap-4 shadow-sm">
           <div className="flex-1 max-w-xl relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-slate-500" />
             <input
@@ -570,6 +636,19 @@ const loadFolders = async () => {
               placeholder="Search emails..."
               className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
             />
+          </div>
+          {/* Mobile Profile & Theme */}
+          <div className="flex items-center gap-2 lg:hidden">
+            <ThemeToggle />
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowProfileDropdown(!showProfileDropdown);
+              }}
+              className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold text-sm"
+            >
+              {profile?.full_name?.charAt(0) || profile?.email?.charAt(0) || 'U'}
+            </button>
           </div>
         </div>
 
@@ -604,16 +683,19 @@ const loadFolders = async () => {
         )}
 
         {/* Email Content */}
-        <div className="flex-1 flex overflow-hidden">
-          <EmailList
-            emails={filteredEmails}
-            selectedEmail={selectedEmail}
-            onSelectEmail={(email: any) => {
-              handleOpenMailInTab(email);
-            }}
-	    onRefresh={refreshEmails}
-          />
-          <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex overflow-hidden flex-col lg:flex-row">
+          {/* Email List - Mobile: Full width when no email selected, Desktop: Fixed width */}
+          <div className={`${activeTabId ? 'hidden lg:block' : 'block'} w-full lg:w-96 flex-shrink-0`}>
+            <EmailList
+              emails={filteredEmails}
+              selectedEmail={selectedEmail}
+              onSelectEmail={(email: any) => {
+                handleOpenMailInTab(email);
+              }}
+	      onRefresh={refreshEmails}
+            />
+          </div>
+          <div className="flex-1 flex flex-col min-w-0">
             {activeTabId ? (
               <div className="flex-1 bg-white dark:bg-slate-900">
                 {(() => {
@@ -657,31 +739,80 @@ const loadFolders = async () => {
       </div>
 
       {/* Multiple Compose Windows */}
-      {composeWindows.map((composeId) => (
-        <div
-          key={composeId}
-          className="fixed bottom-4 right-4 w-96 h-[500px] bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-slate-700 z-40 flex flex-col"
-          style={{ right: `${20 + (parseInt(composeId.split('-')[1]) - 1) * 420}px` }}
-        >
-          <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-800 rounded-t-2xl">
-            <h3 className="font-semibold text-gray-900 dark:text-white">New Message</h3>
-            <button
-              onClick={() => handleCloseComposeWindow(composeId)}
-              className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
+      {composeWindows.map((composeId, index) => {
+        const windowState = windowStates[composeId] || { minimized: false, maximized: false };
+        
+        if (windowState.minimized) {
+          return (
+            <div
+              key={composeId}
+              className="fixed bottom-4 bg-white dark:bg-slate-900 rounded-lg shadow-lg border border-gray-200 dark:border-slate-700 z-40 flex items-center px-3 py-2 cursor-pointer"
+              style={{ left: `${20 + index * 200}px` }}
+              onClick={() => handleMaximizeWindow(composeId)}
             >
-              <X className="w-4 h-4" />
-            </button>
+              <Mail className="w-4 h-4 text-gray-500 dark:text-slate-400 mr-2" />
+              <span className="text-sm text-gray-700 dark:text-slate-300">New Message</span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCloseComposeWindow(composeId);
+                }}
+                className="ml-2 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          );
+        }
+
+        return (
+          <div
+            key={composeId}
+            className={`fixed bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-slate-700 z-40 flex flex-col ${
+              windowState.maximized ? 'inset-4 rounded-2xl' : 'w-96 h-[500px]'
+            }`}
+            style={!windowState.maximized ? {
+              right: `${20 + index * 420}px`,
+              bottom: `${20}px`
+            } : {}}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-800 rounded-t-2xl">
+              <h3 className="font-semibold text-gray-900 dark:text-white">New Message</h3>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => handleMinimizeWindow(composeId)}
+                  className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
+                  title="Minimize"
+                >
+                  <Minimize2 className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => handleMaximizeWindow(composeId)}
+                  className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
+                  title={windowState.maximized ? "Restore" : "Maximize"}
+                >
+                  <Maximize2 className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => handleCloseComposeWindow(composeId)}
+                  className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
+                  title="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <ComposeEmail
+                onClose={() => handleCloseComposeWindow(composeId)}
+                onSent={() => { handleCloseComposeWindow(composeId); refreshEmails(); }}
+                onDraftSaved={refreshEmails}
+                prefilledData={undefined}
+              />
+            </div>
           </div>
-          <div className="flex-1 overflow-hidden">
-            <ComposeEmail
-              onClose={() => handleCloseComposeWindow(composeId)}
-              onSent={() => { handleCloseComposeWindow(composeId); refreshEmails(); }}
-              onDraftSaved={refreshEmails}
-              prefilledData={undefined}
-            />
-          </div>
-        </div>
-      ))}
+        );
+      })}
 
       {/* User Profile Modal */}
       {showUserProfile && (

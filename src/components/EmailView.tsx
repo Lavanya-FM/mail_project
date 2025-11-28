@@ -1,27 +1,26 @@
-import { Star, Reply, ReplyAll, Forward, Trash2, Archive, MoreVertical, Paperclip, X, Flag, FileEdit } from 'lucide-react';
-import { useState, useEffect, useRef } from 'react';
-import { emailService } from '../lib/emailService';
-import { authService } from '../lib/authService';
+import {
+  Star,
+  Reply,
+  ReplyAll,
+  Forward,
+  Trash2,
+  Archive,
+  MoreVertical,
+  Paperclip,
+  X,
+  Flag,
+  FileEdit
+} from "lucide-react";
 
-interface Email {
-  id: string;
-  user_id: string;
-  folder_id?: string;
-  from_email: string;
-  from_name?: string;
-  to_emails: any[];
-  cc_emails: any[];
-  bcc_emails: any[];
-  subject?: string;
-  body?: string;
-  is_read: boolean;
-  is_starred: boolean;
-  is_draft: boolean;
-  has_attachments: boolean;
-  created_at: string;
-  sent_at?: string;
-  labels?: any[];
-}
+import { useState, useEffect, useRef } from "react";
+import { emailService } from "../lib/emailService";
+import { authService } from "../lib/authService";
+import { Email } from "../types/email";
+
+
+// =========================
+// Props + ConfirmDialog Def
+// =========================
 
 type EmailViewProps = {
   email: Email | null;
@@ -46,177 +45,285 @@ interface ConfirmDialogState {
   onConfirm?: () => Promise<void> | void;
 }
 
-export default function EmailView({ email, onClose, onRefresh, onCompose }: EmailViewProps) {
+
+
+// =========================
+// MAIN COMPONENT
+// =========================
+
+export default function EmailView({
+  email,
+  onClose,
+  onRefresh,
+  onCompose
+}: EmailViewProps) {
   const [starred, setStarred] = useState(false);
   const [showActions, setShowActions] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const currentUser = authService.getCurrentUser();
+
   const initialConfirmState: ConfirmDialogState = {
     open: false,
-    title: '',
-    message: '',
-    confirmLabel: 'Confirm',
-    cancelLabel: 'Cancel',
+    title: "",
+    message: "",
+    confirmLabel: "Confirm",
+    cancelLabel: "Cancel",
     processing: false,
     error: undefined,
-    onConfirm: undefined,
+    onConfirm: undefined
   };
-  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(initialConfirmState);
 
-  // ---- Helper: normalize recipient lists to array of strings ----
-  const normalizeAddressList = (list: any[]): string[] => {
-    if (!list) return [];
-    return list
-      .map((item: any) => {
-        if (!item) return '';
-        if (typeof item === 'string') return item.trim();
-        // possible shapes: { email: 'x' } or { address: 'x' } or plain object with email property
-        return (item.email || item.address || item.address_string || '').toString().trim();
-      })
-      .filter(Boolean);
-  };
+  const [confirmDialog, setConfirmDialog] =
+    useState<ConfirmDialogState>(initialConfirmState);
+
+
+
+  // ====================================
+  // INITIALIZE: Mark read + load starred
+  // ====================================
 
   useEffect(() => {
     if (email) {
-      setStarred(!!email.is_starred);
+      setStarred(email.is_starred || false);
+
       if (!email.is_read) {
-        markAsRead(email.id);
+        markAsRead(String(email.id));
       }
     }
   }, [email]);
 
+
+
+  // ====================================
+  // Hide dropdown when clicking outside
+  // ====================================
+
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(e.target as Node)
+      ) {
         setShowActions(false);
       }
     };
 
-    if (showActions) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
+    if (showActions) document.addEventListener("mousedown", handleClickOutside);
 
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
+    return () =>
+      document.removeEventListener("mousedown", handleClickOutside);
   }, [showActions]);
+
+
+
+  // =========================
+  // Helpers
+  // =========================
 
   const markAsRead = async (emailId: string) => {
     try {
-      await emailService.updateEmail(emailId, { user_id: currentUser.id, is_read: true });
+      await emailService.updateEmail(emailId, {
+        user_id: currentUser.id,
+        is_read: true
+      });
       onRefresh();
-    } catch (error) {
-      console.error('Error marking email as read:', error);
+    } catch (err) {
+      console.error("Error marking email as read", err);
     }
   };
 
   const toggleStar = async () => {
     if (!email) return;
     try {
-      await emailService.updateEmail(email.id, { user_id: currentUser.id, is_starred: !starred });
+      await emailService.updateEmail(email.id, {
+        user_id: currentUser.id,
+        is_starred: !starred
+      });
       setStarred(!starred);
       onRefresh();
-    } catch (error) {
-      console.error('Error toggling star:', error);
+    } catch (err) {
+      console.error("Error toggling star", err);
     }
   };
 
-  const handleReply = () => {
-    if (!email || !currentUser || !onCompose) return;
-    const replySubject = email.subject?.startsWith('Re:') ? email.subject : `Re: ${email.subject || '(No subject)'}`;
-    
-    const replyTo = email.from_email;
-    
-    const toList = normalizeAddressList(email.to_emails);
-    const replyBody = `\n\n--- Original Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${toList.join(', ') || currentUser.email}\nSubject: ${email.subject || '(No subject)'}\n\n${email.body || ''}`;
-    
-    onCompose({ to: replyTo, subject: replySubject, body: replyBody });
+  const formatFullDate = (date: string) => {
+    const d = new Date(date);
+    return d.toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
+    });
   };
 
-  const handleReplyAll = () => {
-    if (!email || !currentUser || !onCompose) return;
+  const formatShortDate = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffHours = (now.getTime() - date.getTime()) / (1000 * 60 * 60);
 
-    const from = email.from_email;
-    const toList = normalizeAddressList(email.to_emails);
-    const ccList = normalizeAddressList(email.cc_emails);
+    if (diffHours < 24)
+      return date.toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit"
+      });
 
-    const allRecipients = [
-      from,
-      ...toList,
-      ...ccList
-    ].filter(addr => addr && addr !== currentUser.email);
+    if (diffHours < 168)
+      return date.toLocaleDateString("en-US", { weekday: "short" });
 
-    const uniqueRecipients = Array.from(new Set(allRecipients));
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+
+  const getInitials = (name: string) =>
+    name
+      .split(" ")
+      .map((n) => n[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2);
+
+
+
+  // =========================
+  // COMPOSE (Reply / Forward)
+  // =========================
+
+  const handleReply = () => {
+    if (!email || !onCompose) return;
 
     const replySubject = email.subject?.startsWith("Re:")
       ? email.subject
       : `Re: ${email.subject || "(No subject)"}`;
 
-    const replyBody = `\n\n--- Original Message ---\nFrom: ${
-      email.from_name || email.from_email
-    }\nTo: ${toList.join(", ") || currentUser.email}\nSubject: ${
-      email.subject || "(No subject)"
-    }\n\n${email.body || ""}`;
+    const replyBody = `
+
+--- Original Message ---
+From: ${email.from_name || email.from_email}
+To: ${
+      email.to_emails?.map((t) => t.email).join(", ") || currentUser.email
+    }
+Subject: ${email.subject || "(No subject)"}
+
+${email.body || ""}`;
 
     onCompose({
-      to: uniqueRecipients.join(", "),
+      to: email.from_email,
       subject: replySubject,
-      body: replyBody,
+      body: replyBody
+    });
+  };
+
+  const handleReplyAll = () => {
+    if (!email || !onCompose) return;
+
+    const recipients = [
+      email.from_email,
+      ...(email.to_emails?.map((t) => t.email) || []),
+      ...(email.cc_emails?.map((c) => c.email) || [])
+    ].filter((addr) => addr !== currentUser.email); // remove yourself
+
+    const replyBody = `
+
+--- Original Message ---
+From: ${email.from_name || email.from_email}
+To: ${
+      email.to_emails?.map((t) => t.email).join(", ") || currentUser.email
+    }
+Subject: ${email.subject || "(No subject)"}
+
+${email.body || ""}`;
+
+    onCompose({
+      to: Array.from(new Set(recipients)).join(", "),
+      subject: email.subject?.startsWith("Re:")
+        ? email.subject
+        : `Re: ${email.subject || "(No subject)"}`,
+      body: replyBody
     });
   };
 
   const handleForward = () => {
     if (!email || !onCompose) return;
-    const forwardSubject = email.subject?.startsWith('Fwd:') ? email.subject : `Fwd: ${email.subject || '(No subject)'}`;
-    const toList = normalizeAddressList(email.to_emails);
-    const forwardBody = `\n\n--- Forwarded Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${toList.join(', ') || currentUser.email}\nSubject: ${email.subject || '(No subject)'}\nDate: ${formatFullDate(email.sent_at || email.created_at)}\n\n${email.body || ''}`;
-    onCompose({ subject: forwardSubject, body: forwardBody });
-  };
 
-  const openConfirmDialog = (config: Omit<ConfirmDialogState, 'open' | 'processing'>) => {
-    setConfirmDialog({
-      ...initialConfirmState,
-      open: true,
-      ...config,
+    const forwardBody = `
+
+--- Forwarded Message ---
+From: ${email.from_name || email.from_email}
+To: ${
+      email.to_emails?.map((t) => t.email).join(", ") || currentUser.email
+    }
+Subject: ${email.subject || "(No subject)"}
+Date: ${formatFullDate(email.sent_at || email.created_at || "")}
+
+${email.body || ""}`;
+
+    onCompose({
+      subject: email.subject?.startsWith("Fwd:")
+        ? email.subject
+        : `Fwd: ${email.subject || "(No subject)"}`,
+      body: forwardBody
     });
   };
 
-  const closeConfirmDialog = () => setConfirmDialog(initialConfirmState);
+
+
+  // =========================
+  // DELETE / ARCHIVE / SPAM
+  // =========================
+
+  const openConfirmDialog = (
+    config: Omit<ConfirmDialogState, "open" | "processing">
+  ) => {
+    setConfirmDialog({
+      ...initialConfirmState,
+      open: true,
+      ...config
+    });
+  };
+
+  const closeConfirmDialog = () =>
+    setConfirmDialog(initialConfirmState);
 
   const executeConfirmAction = async () => {
     if (!confirmDialog.onConfirm) return;
-    setConfirmDialog(prev => ({ ...prev, processing: true, error: undefined }));
+    setConfirmDialog((p) => ({ ...p, processing: true }));
+
     try {
       await confirmDialog.onConfirm();
       closeConfirmDialog();
-    } catch (error) {
-      console.error('Confirm dialog action failed:', error);
-      setConfirmDialog(prev => ({ ...prev, processing: false, error: 'Something went wrong. Please try again.' }));
+    } catch (err) {
+      console.error("Action failed:", err);
+      setConfirmDialog((p) => ({
+        ...p,
+        processing: false,
+        error: "Something went wrong. Try again."
+      }));
     }
   };
 
   const handleDelete = () => {
-    if (!email || !currentUser) return;
+    if (!email) return;
+
     openConfirmDialog({
-      title: 'Delete email?',
-      message: 'Are you sure you want to delete this email? It will be moved to your Trash folder.',
-      confirmLabel: 'Move to Trash',
-      cancelLabel: 'Cancel',
+      title: "Delete email?",
+      message: "This email will be moved to Trash.",
+      confirmLabel: "Move to Trash",
+      cancelLabel: "Cancel",
       onConfirm: async () => {
-        const { data: folders, error } = await emailService.getFolders(currentUser.id);
-        if (error) throw error;
-        const trashFolder = folders?.find(f => f.name.toLowerCase() === 'trash');
+        const { data: folders } = await emailService.getFolders(currentUser.id);
 
-        if (trashFolder) {
-          const { error: updateError } = await emailService.updateEmail(email.id, {
+        const trash = folders?.find(
+          (f) => f.name.toLowerCase() === "trash"
+        );
+
+        if (trash) {
+          await emailService.updateEmail(email.id, {
             user_id: currentUser.id,
-            folder_id: trashFolder.id
+            folder_id: trash.id
           });
-
-          if (updateError) throw updateError;
         } else {
-          const { error: deleteError } = await emailService.deleteEmail(email.id, currentUser.id);
-          if (deleteError) throw deleteError;
+          await emailService.deleteEmail(Number(email.id), currentUser.id);
         }
 
         onRefresh();
@@ -226,29 +333,54 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
   };
 
   const handleArchive = async () => {
-    if (!email || !currentUser) return;
-    try {
-      alert('Archive functionality would move email to Archive folder');
-    } catch (error) {
-      console.error('Error archiving email:', error);
+    if (!email) return;
+
+    const { data: folders } = await emailService.getFolders(currentUser.id);
+
+    const archive = folders?.find(
+      (f) => f.name.toLowerCase() === "archive"
+    );
+
+    if (!archive) {
+      alert("Archive folder not found.");
+      return;
     }
+
+    await emailService.moveEmail(
+      Number(email.id),
+      currentUser.id,
+      Number(archive.id)
+    );
+
+    onRefresh();
+    onClose();
   };
 
   const handleSpam = () => {
-    if (!email || !currentUser) return;
-    openConfirmDialog({
-      title: 'Report spam?',
-      message: 'This email will be moved to your Spam folder.',
-      confirmLabel: 'Move to Spam',
-      cancelLabel: 'Cancel',
-      onConfirm: async () => {
-        const { data: folders, error } = await emailService.getFolders(currentUser.id);
-        if (error) throw error;
-        const spamFolder = folders?.find(f => f.name.toLowerCase() === 'spam');
-        if (!spamFolder) throw new Error('Spam folder not found');
+    if (!email) return;
 
-        const { error: updateError } = await emailService.updateEmail(email.id, { user_id: currentUser.id, folder_id: spamFolder.id });
-        if (updateError) throw updateError;
+    openConfirmDialog({
+      title: "Report Spam?",
+      message: "Email will be moved to Spam.",
+      confirmLabel: "Move to Spam",
+      cancelLabel: "Cancel",
+      onConfirm: async () => {
+        const { data: folders } = await emailService.getFolders(currentUser.id);
+
+        const spam = folders?.find(
+          (f) => f.name.toLowerCase() === "spam"
+        );
+
+        if (!spam) {
+          alert("Spam folder not found.");
+          return;
+        }
+
+        await emailService.moveEmail(
+          Number(email.id),
+          currentUser.id,
+          Number(spam.id)
+        );
 
         onRefresh();
         onClose();
@@ -256,278 +388,340 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
     });
   };
 
+
+
+  // =========================
+  // EDIT DRAFT
+  // =========================
+
   const handleEditDraft = async () => {
     if (!email || !onCompose) return;
-    const toEmails = normalizeAddressList(email.to_emails).join(', ');
-    const ccEmails = normalizeAddressList(email.cc_emails).join(', ');
-    try {
-      await emailService.deleteEmail(email.id, currentUser.id);
-      onRefresh();
-    } catch (error) {
-      console.error('Error deleting draft:', error);
-    }
-    onCompose({ to: toEmails, cc: ccEmails, subject: email.subject || '', body: email.body || '' });
+
+    const to = email.to_emails?.map((t) => t.email).join(", ") || "";
+    const cc = email.cc_emails?.map((c) => c.email).join(", ") || "";
+
+    await emailService.deleteEmail(Number(email.id), currentUser.id);
+    onRefresh();
+
+    onCompose({
+      to,
+      cc,
+      subject: email.subject || "",
+      body: email.body || ""
+    });
+
     onClose();
   };
 
-  const formatFullDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
-  };
 
-  const formatShortDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffInHours = (now.getTime() - date.getTime()) / (1000 * 60 * 60);
-    
-    if (diffInHours < 24) {
-      return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-    } else if (diffInHours < 168) {
-      return date.toLocaleDateString('en-US', { weekday: 'short' });
-    } else {
-      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    }
-  };
 
-  const getInitials = (name: string) => {
-    return name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2);
-  };
+  // =========================
+  // RENDER – when no email selected
+  // =========================
 
   if (!email) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-gradient-to-br from-slate-50 via-white to-blue-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
+      <div className="flex-1 flex items-center justify-center bg-gradient-to-br from-slate-50 via-white to-blue-50">
         <div className="text-center">
-          <div className="w-24 h-24 mx-auto mb-4 rounded-full bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-slate-800 dark:to-slate-700 flex items-center justify-center">
-            <svg className="w-12 h-12 text-blue-500 dark:text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-            </svg>
+          <div className="w-24 h-24 mx-auto mb-4 rounded-full bg-blue-100 flex items-center justify-center">
+            📩
           </div>
-          <h3 className="text-lg font-medium mb-1 text-gray-900 dark:text-white">Select an email</h3>
-          <p className="text-sm text-gray-500 dark:text-slate-400">Choose an email from the list to view its content</p>
+          <h3 className="text-lg font-medium">Select an email</h3>
+          <p className="text-sm text-gray-500">
+            Choose an email to view its contents
+          </p>
         </div>
       </div>
     );
   }
 
-  const toText = normalizeAddressList(email.to_emails).join(', ');
-  const ccText = normalizeAddressList(email.cc_emails).join(', ');
+
+
+  // =========================
+  // SENT FOLDER LOGIC
+  // =========================
+
+  const isSent = email.folder_name === "Sent";
+  const fromName = isSent ? currentUser.email : (email.from_name || email.from_email);
+  const fromEmail = isSent ? currentUser.email : email.from_email;
+  const toList = isSent
+    ? email.to_emails?.map((t) => t.email).join(", ")
+    : email.to_header || email.to_emails?.map((t) => t.email).join(", ");
+
+
+
+
+  // =========================
+  // MAIN EMAIL CONTENT
+  // =========================
 
   return (
-    <div className="flex-1 flex flex-col bg-gradient-to-br from-slate-50 via-white to-blue-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
-      {/* Top toolbar */}
-      <div className="h-14 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b border-gray-200/50 dark:border-slate-800/50 flex items-center px-4 gap-3">
-        <button onClick={onClose} className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full transition" title="Back to inbox">
+    <div className="flex-1 flex flex-col bg-gradient-to-br from-slate-50 via-white to-blue-50">
+
+      {/* TOP TOOLBAR */}
+      <div className="h-14 bg-white border-b flex items-center px-4 gap-3">
+
+        <button
+          onClick={onClose}
+          className="p-2 hover:bg-gray-100 rounded-full"
+        >
           <X className="w-4 h-4" />
         </button>
 
-        <div className="flex items-center gap-1">
-          <button onClick={handleArchive} className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full transition" title="Archive">
-            <Archive className="w-4 h-4" />
-          </button>
-          <button onClick={handleSpam} className="p-2 text-gray-600 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition" title="Report spam">
-            <Flag className="w-4 h-4" />
-          </button>
-          <button onClick={handleDelete} className="p-2 text-gray-600 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition" title="Delete">
-            <Trash2 className="w-4 h-4" />
+        {/* Archive / Spam / Delete */}
+        <button onClick={handleArchive} className="p-2 hover:bg-gray-100 rounded-full">
+          <Archive className="w-4 h-4" />
+        </button>
+
+        <button onClick={handleSpam} className="p-2 hover:bg-red-50 text-red-500 rounded-full">
+          <Flag className="w-4 h-4" />
+        </button>
+
+        <button onClick={handleDelete} className="p-2 hover:bg-red-50 text-red-500 rounded-full">
+          <Trash2 className="w-4 h-4" />
+        </button>
+
+        {/* DROPDOWN */}
+        <div className="relative" ref={dropdownRef}>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowActions(!showActions);
+            }}
+            className="p-2 hover:bg-gray-100 rounded-full"
+          >
+            <MoreVertical className="w-4 h-4" />
           </button>
 
-          <div className="relative" ref={dropdownRef}>
-            <button onClick={(e) => { e.stopPropagation(); setShowActions(!showActions); }} className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full transition" title="More actions">
-              <MoreVertical className="w-4 h-4" />
-            </button>
+          {showActions && (
+            <div className="absolute left-0 top-full mt-1 bg-white border rounded-lg shadow-xl py-2 w-72 text-sm z-50">
+              <div className="px-3 py-2 space-y-2">
+                <div className="text-xs">
+                  <strong>from:</strong>{" "}
+                  {fromName} &lt;{fromEmail}&gt;
+                </div>
 
-            {showActions && (
-              <div className="absolute left-0 top-full mt-1 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg shadow-xl py-2 z-50 min-w-[280px] text-sm">
-                <div className="px-3 py-2 space-y-2">
-                  <div className="flex items-start gap-2 text-xs">
-                    <span className="w-16 font-semibold text-gray-500 dark:text-slate-400 shrink-0">from:</span>
-                    <span className="text-gray-900 dark:text-slate-200 break-all">{email.from_name || email.from_email} &lt;{email.from_email}&gt;</span>
-                  </div>
-                  <div className="flex items-start gap-2 text-xs">
-                    <span className="w-16 font-semibold text-gray-500 dark:text-slate-400 shrink-0">to:</span>
-                    <span className="text-gray-900 dark:text-slate-200 break-all">
-                      {toText || currentUser.email}
-                    </span>
-                  </div>
-                  <div className="flex items-start gap-2 text-xs">
-                    <span className="w-16 font-semibold text-gray-500 dark:text-slate-400 shrink-0">date:</span>
-                    <span className="text-gray-900 dark:text-slate-200">{formatFullDate(email.sent_at || email.created_at)}</span>
-                  </div>
-                  <div className="flex items-start gap-2 text-xs">
-                    <span className="w-16 font-semibold text-gray-500 dark:text-slate-400 shrink-0">subject:</span>
-                    <span className="text-gray-900 dark:text-slate-200 break-all">{email.subject || '(No subject)'}</span>
-                  </div>
-                  <div className="flex items-start gap-2 text-xs">
-                    <span className="w-16 font-semibold text-gray-500 dark:text-slate-400 shrink-0">mailed-by:</span>
-                    <span className="text-gray-900 dark:text-slate-200">{email.from_email.split('@')[1]}</span>
-                  </div>
-                  <div className="flex items-start gap-2 text-xs">
-                    <span className="w-16 font-semibold text-gray-500 dark:text-slate-400 shrink-0">signed-by:</span>
-                    <span className="text-gray-900 dark:text-slate-200">{email.from_email.split('@')[1]}</span>
-                  </div>
+                <div className="text-xs">
+                  <strong>to:</strong>{" "}
+                  {toList || "(No recipients)"}
+                </div>
+
+                <div className="text-xs">
+                  <strong>date:</strong>{" "}
+                  {formatFullDate(email.sent_at || email.created_at || "")}
+                </div>
+
+                <div className="text-xs break-all">
+                  <strong>subject:</strong>{" "}
+                  {email.subject || "(No subject)"}
+                </div>
+
+                <div className="text-xs">
+                  <strong>mailed-by:</strong>{" "}
+                  {fromEmail.split("@")[1]}
+                </div>
+
+                <div className="text-xs">
+                  <strong>signed-by:</strong>{" "}
+                  {fromEmail.split("@")[1]}
                 </div>
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         <div className="flex-1" />
 
-        <button onClick={toggleStar} className="p-2 text-gray-600 dark:text-slate-400 hover:text-yellow-500 dark:hover:text-yellow-400 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full transition" title="Star">
-          <Star className={`w-4 h-4 ${starred ? 'text-yellow-500 fill-yellow-500' : ''}`} />
+        <button onClick={toggleStar} className="p-2 hover:bg-yellow-50 rounded-full">
+          <Star
+            className={`w-4 h-4 ${starred && "text-yellow-500 fill-yellow-500"}`}
+          />
         </button>
       </div>
 
+
+
+      {/* MAIN CONTENT */}
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-5xl mx-auto p-6 md:p-8">
-          {/* Subject Line - Gmail Style */}
-          <div className="mb-6">
-            <h1 className="text-2xl font-normal text-gray-900 dark:text-white mb-4 leading-tight">
-              {email.subject || '(No subject)'}
-            </h1>
-            {email.labels && email.labels.length > 0 && (
-              <div className="flex flex-wrap gap-2 mb-4">
-                {email.labels.map((label, idx) => (
-                  <span key={idx} className="text-xs px-3 py-1 rounded-full font-medium" style={{ backgroundColor: label.color + '20', color: label.color }}>
-                    {label.name}
+        <div className="max-w-4xl mx-auto p-4">
+
+          {/* SUBJECT */}
+          <h1 className="text-2xl font-normal mb-6">
+            {email.subject || "(No subject)"}
+          </h1>
+
+          {/* CARD */}
+          <div className="bg-white rounded-2xl shadow-sm border overflow-hidden mb-6">
+
+            {/* Header */}
+            <div className="p-4 flex items-start gap-4">
+
+              <div className="w-10 h-10 bg-indigo-500 text-white rounded-full flex items-center justify-center text-sm font-semibold">
+                {getInitials(fromName)}
+              </div>
+
+              <div className="flex-1">
+
+                <div className="flex justify-between items-start">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-medium">{fromName}</h3>
+                      <span className="text-xs text-gray-500">
+                        &lt;{fromEmail}&gt;
+                      </span>
+                    </div>
+
+                    <div className="text-xs text-gray-600 mt-1">
+                      to {toList || currentUser.email}
+                      {email.cc_emails?.length > 0 && (
+                        <>
+                          , cc{" "}
+                          {email.cc_emails.map((c) => c.email).join(", ")}
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <span className="text-xs text-gray-500 whitespace-nowrap">
+                    {formatShortDate(
+                      email.sent_at || email.created_at || ""
+                    )}
                   </span>
-                ))}
+                </div>
+              </div>
+            </div>
+
+
+
+            {/* BODY */}
+            <div className="p-4 border-t">
+              <div
+                className="text-sm leading-relaxed"
+                dangerouslySetInnerHTML={{
+                  __html: email.body?.replace(/\n/g, "<br>") || ""
+                }}
+              />
+            </div>
+
+
+
+            {/* ATTACHMENTS */}
+            {email.has_attachments && (
+              <div className="p-4 border-t">
+                <h4 className="font-semibold mb-2 flex items-center gap-2">
+                  <Paperclip className="w-4 h-4" /> Attachments
+                </h4>
+
+                {/* Placeholder attachment */}
+                <div className="p-3 bg-gray-50 rounded-lg border flex items-center gap-3">
+                  <div className="w-12 h-12 bg-blue-500/10 rounded-lg flex items-center justify-center">
+                    <Paperclip className="w-6 h-6 text-blue-500" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">document.pdf</p>
+                    <p className="text-xs text-gray-500">2.4 MB</p>
+                  </div>
+                </div>
               </div>
             )}
           </div>
 
-          {/* Email Card - Gmail Style */}
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-gray-200 dark:border-slate-800 overflow-hidden mb-6">
-            {/* Sender Info Section */}
-            <div className="p-6">
-              <div className="flex items-start gap-4">
-                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-500 flex items-center justify-center text-white font-semibold text-sm shadow-md">
-                  {getInitials(email.from_name || email.from_email)}
-                </div>
 
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-4 mb-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-sm font-medium text-gray-900 dark:text-white">
-                          {email.from_name || email.from_email}
-                        </h3>
-                        <span className="text-sm text-gray-500 dark:text-slate-400">
-                          &lt;{email.from_email}&gt;
-                        </span>
-                      </div>
-                      <div className="text-sm text-gray-600 dark:text-slate-400 mt-1">
-                        to {toText || currentUser.email}
-                        {ccText && <span>, cc {ccText}</span>}
-                      </div>
-                    </div>
-                    <span className="text-sm text-gray-500 dark:text-slate-400 whitespace-nowrap">
-                      {formatShortDate(email.sent_at || email.created_at)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
 
-            {/* Email Body */}
-            <div className="px-6 pb-6 pt-4 border-t border-gray-100 dark:border-slate-800">
-              <div className="prose dark:prose-invert max-w-none" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                <div className="text-gray-800 dark:text-slate-200 leading-relaxed text-sm" dangerouslySetInnerHTML={{ __html: email.body?.replace(/\n/g, '<br>') || '' }} />
-              </div>
-
-              {email.has_attachments && (
-                <div className="mt-6 pt-6 border-t border-gray-200 dark:border-slate-800">
-                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                    <Paperclip className="w-4 h-4" />
-                    Attachments
-                  </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="bg-gray-50 dark:bg-slate-800/50 rounded-xl p-4 flex items-center gap-3 hover:bg-gray-100 dark:hover:bg-slate-800 transition cursor-pointer border border-gray-200 dark:border-slate-700">
-                      <div className="w-12 h-12 bg-blue-500/10 rounded-lg flex items-center justify-center">
-                        <Paperclip className="w-6 h-6 text-blue-500" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-gray-900 dark:text-white font-medium truncate">document.pdf</p>
-                        <p className="text-xs text-gray-600 dark:text-slate-400">2.4 MB</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Action Buttons */}
+          {/* ACTION BUTTONS */}
           <div className="flex flex-wrap gap-2">
+
             {!email.is_draft ? (
               <>
-                <button onClick={handleReply} className="px-4 py-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 border border-gray-300 dark:border-slate-700 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition flex items-center gap-2">
-                  <Reply className="w-4 h-4" />
-                  Reply
+                <button
+                  onClick={handleReply}
+                  className="px-4 py-2 bg-white border rounded-lg flex items-center gap-2"
+                >
+                  <Reply className="w-4 h-4" /> Reply
                 </button>
-                <button onClick={handleReplyAll} className="px-4 py-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 border border-gray-300 dark:border-slate-700 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition flex items-center gap-2">
-                  <ReplyAll className="w-4 h-4" />
-                  Reply All
+
+                <button
+                  onClick={handleReplyAll}
+                  className="px-4 py-2 bg-white border rounded-lg flex items-center gap-2"
+                >
+                  <ReplyAll className="w-4 h-4" /> Reply All
                 </button>
-                <button onClick={handleForward} className="px-4 py-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 border border-gray-300 dark:border-slate-700 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition flex items-center gap-2">
-                  <Forward className="w-4 h-4" />
-                  Forward
+
+                <button
+                  onClick={handleForward}
+                  className="px-4 py-2 bg-white border rounded-lg flex items-center gap-2"
+                >
+                  <Forward className="w-4 h-4" /> Forward
                 </button>
               </>
             ) : (
-              <button onClick={handleEditDraft} className="px-4 py-2 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600 transition flex items-center gap-2">
-                <FileEdit className="w-4 h-4" />
-                Continue Editing
+              <button
+                onClick={handleEditDraft}
+                className="px-4 py-2 bg-green-500 text-white rounded-lg flex items-center gap-2"
+              >
+                <FileEdit className="w-4 h-4" /> Continue Editing
               </button>
             )}
+
           </div>
         </div>
       </div>
 
-      {/* Confirm Dialog */}
+
+
+      {/* CONFIRM DIALOG */}
       {confirmDialog.open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-2xl shadow-2xl border border-gray-200 dark:border-slate-800 p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{confirmDialog.title}</h3>
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl">
+
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold">
+                {confirmDialog.title}
+              </h3>
+
               <button
-                onClick={confirmDialog.processing ? undefined : closeConfirmDialog}
-                className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white rounded-full hover:bg-gray-100 dark:hover:bg-slate-800 disabled:opacity-40"
                 disabled={confirmDialog.processing}
+                onClick={closeConfirmDialog}
+                className="p-2 hover:bg-gray-100 rounded-full"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <p className="text-sm text-gray-600 dark:text-slate-400">{confirmDialog.message}</p>
+
+            <p className="text-sm text-gray-600">
+              {confirmDialog.message}
+            </p>
+
             {confirmDialog.error && (
-              <p className="text-sm text-red-500 mt-3">{confirmDialog.error}</p>
+              <p className="text-sm text-red-500 mt-3">
+                {confirmDialog.error}
+              </p>
             )}
+
             <div className="flex justify-end gap-3 mt-6">
+
               <button
-                onClick={confirmDialog.processing ? undefined : closeConfirmDialog}
-                className="px-4 py-2 text-sm font-medium text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white"
                 disabled={confirmDialog.processing}
+                onClick={closeConfirmDialog}
+                className="px-4 py-2 text-sm"
               >
                 {confirmDialog.cancelLabel}
               </button>
+
               <button
                 onClick={executeConfirmAction}
-                className="px-5 py-2 text-sm font-semibold rounded-lg text-white bg-red-500 hover:bg-red-600 disabled:opacity-60"
                 disabled={confirmDialog.processing}
+                className="px-5 py-2 bg-red-500 text-white rounded-lg"
               >
-                {confirmDialog.processing ? 'Working...' : confirmDialog.confirmLabel}
+                {confirmDialog.processing ? "Working..." : confirmDialog.confirmLabel}
               </button>
+
             </div>
           </div>
         </div>
       )}
+
     </div>
   );
 }
+

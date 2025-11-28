@@ -3,7 +3,6 @@ import { X, Send, Paperclip, Link, Smile, Clock, Share2, Zap, Info } from 'lucid
 import { emailService } from '../lib/emailService';
 import { authService } from '../lib/authService';
 import { p2pService } from '../lib/p2pService';
-import { threadingService } from '../lib/threadingService';
 
 const getFolderIdByName = (name: string) => {
   const folders = JSON.parse(localStorage.getItem("folders") || "[]");
@@ -63,13 +62,10 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
   const [p2pPeers, setP2pPeers] = useState(0);
   const [p2pProgress, setP2pProgress] = useState(0);
   const [showP2pMenu, setShowP2pMenu] = useState(false);
-  const [showP2pInfo, setShowP2pInfo] = useState(false);
   const [p2pConnected, setP2pConnected] = useState(false);
   
   // Threading state
   const [threadId, setThreadId] = useState<string | undefined>(undefined);
-  const [isReply, setIsReply] = useState(false);
-  const [isForward, setIsForward] = useState(false);
   
   const textareaRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -96,12 +92,6 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
       if (prefilledData.threadId) {
         setThreadId(prefilledData.threadId);
       }
-      if (prefilledData.isReply) {
-        setIsReply(true);
-      }
-      if (prefilledData.isForward) {
-        setIsForward(true);
-      }
       
       // Show CC field if there's CC data
       if (prefilledData.cc) {
@@ -126,63 +116,61 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
     return () => clearTimeout(timer);
   }, [to, cc, bcc, subject, body]);
 
-  const saveDraft = async () => {
-    if (!profile || (!to.trim() && !subject.trim() && !body.trim())) return;
+const saveDraft = async () => {
+  if (!profile || (!to.trim() && !subject.trim() && !body.trim())) return;
+  setDraftStatus('saving');
+  
+  try {
+    const toList = normalizeEmailField(to);
+    const ccList = normalizeEmailField(cc);
+    const bccList = normalizeEmailField(bcc);
 
-    setDraftStatus('saving');
-    try {
-      const toList = normalizeEmailField(to);
-      const ccList = normalizeEmailField(cc);
-      const bccList = normalizeEmailField(bcc);
+    const toEmails = toList
+      .split(',')
+      .map(e => e.trim().toLowerCase())
+      .filter(e => e.includes("@"));
 
-const toEmails = toList.split(',').map(email => ({
-  email: email.trim(),
-  name: email.trim()
-})).filter(x => x.email);
+    const ccEmails = ccList
+      .split(',')
+      .map(e => e.trim().toLowerCase())
+      .filter(e => e.includes("@"));
 
-const ccEmails = ccList.split(',').map(email => ({
-  email: email.trim(),
-  name: email.trim()
-})).filter(x => x.email);
+    const bccEmails = bccList
+      .split(',')
+      .map(e => e.trim().toLowerCase())
+      .filter(e => e.includes("@"));
 
-const bccEmails = bccList.split(',').map(email => ({
-  email: email.trim(),
-  name: email.trim()
-})).filter(x => x.email);
+    const draftsFolderId = getFolderIdByName("drafts");
+    
+    const plainTextBody = (() => {
+      const div = document.createElement('div');
+      div.innerHTML = body;
+      return div.textContent || div.innerText || '';
+    })();
 
-      const draftsFolderId = getFolderIdByName("drafts");
-
-      // Get plain text version for preview
-      const plainTextBody = (() => {
-        const div = document.createElement('div');
-        div.innerHTML = body;
-        return div.textContent || div.innerText || '';
-      })();
-
-      // --- CHANGED: send keys 'to','cc','bcc' (backend expects these) ---
-      await emailService.createEmail({
-        user_id: profile.id,
-        from_email: profile.email,
-        from_name: profile.full_name || profile.email,
-        to: toEmails,
-        cc: ccEmails,
-        bcc: bccEmails,
-        subject: subject || '(no subject)',
-        body: plainTextBody,
-        is_draft: true,
-        folder_id: draftsFolderId,
-        thread_id: threadId
-      });
-
-      setDraftStatus('saved');
-      onDraftSaved();
-      
-      setTimeout(() => setDraftStatus('idle'), 2000);
-    } catch (error) {
-      console.error('Error saving draft:', error);
-      setDraftStatus('idle');
-    }
-  };
+    await emailService.createEmail({
+      user_id: profile.id,
+      from_email: profile.email,
+      from_name: profile.full_name || profile.email,
+      to: toEmails,           // ✅ Must be 'to'
+      cc: ccEmails,           // ✅ Must be 'cc'
+      bcc: bccEmails,         // ✅ Must be 'bcc'
+      subject: subject || '(no subject)',
+      body: plainTextBody,
+      is_draft: true,
+      folder_id: draftsFolderId,
+      thread_id: threadId
+    });
+    
+    setDraftStatus('saved');
+    onDraftSaved();
+    
+    setTimeout(() => setDraftStatus('idle'), 2000);
+  } catch (error) {
+    console.error('Error saving draft:', error);
+    setDraftStatus('idle');
+  }
+};
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.ctrlKey || e.metaKey) {
@@ -348,62 +336,109 @@ const recipientEmail = toList.split(',')[0]?.trim() || "";
       setUsePeerToPeer(false);
     }
   };
+const handleSend = async () => {
+  if (!profile || !to.trim()) {
+    alert("Please enter at least one recipient");
+    return;
+  }
+  
+  setSending(true);
+  
+  try {
+    const toList = normalizeEmailField(to);
+    const ccList = normalizeEmailField(cc);
+    const bccList = normalizeEmailField(bcc);
 
-  const handleSend = async () => {
-    if (!profile || !to.trim()) return;
+    // Backend expects simple string arrays (NOT objects with {email, name})
+    const toEmails = toList
+      .split(',')
+      .map(e => e.trim().toLowerCase())
+      .filter(e => e.includes("@"));
 
-    setSending(true);
-    try {
-const toList = normalizeEmailField(to);
-const ccList = normalizeEmailField(cc);
-const bccList = normalizeEmailField(bcc);
+    const ccEmails = ccList
+      .split(',')
+      .map(e => e.trim().toLowerCase())
+      .filter(e => e.includes("@"));
 
-const toEmails = toList.split(',').map(email => ({
-  email: email.trim(),
-  name: email.trim()
-})).filter(x => x.email);
+    const bccEmails = bccList
+      .split(',')
+      .map(e => e.trim().toLowerCase())
+      .filter(e => e.includes("@"));
 
-const ccEmails = ccList.split(',').map(email => ({
-  email: email.trim(),
-  name: email.trim()
-})).filter(x => x.email);
-
-const bccEmails = bccList.split(',').map(email => ({
-  email: email.trim(),
-  name: email.trim()
-})).filter(x => x.email);
-
-      const sentFolderId = getFolderIdByName("sent");
-
-      // Get plain text version for preview
-      const plainTextBody = (() => {
-        const div = document.createElement('div');
-        div.innerHTML = body;
-        return div.textContent || div.innerText || '';
-      })();
-
-      // --- CHANGED: send keys 'to','cc','bcc' (backend expects these) ---
-      await emailService.createEmail({
-        user_id: profile.id,
-        from_email: profile.email,
-        from_name: profile.full_name || profile.email,
-        to: toEmails,
-        cc: ccEmails,
-        bcc: bccEmails,
-        subject: subject || '(no subject)',
-        body: plainTextBody,
-        is_draft: false,
-        folder_id: sentFolderId,
-        thread_id: threadId
-      });
-
-      onSent();
-    } catch (error) {
-      console.error('Error sending email:', error);
-    } finally {
+    if (toEmails.length === 0) {
+      alert("Please enter valid email addresses");
       setSending(false);
+      return;
     }
-  };
+
+    const sentFolderId = getFolderIdByName("sent");
+
+    const plainTextBody = (() => {
+      const div = document.createElement('div');
+      div.innerHTML = body;
+      return div.textContent || div.innerText || '';
+    })();
+
+    // ✅ CRITICAL: Backend expects 'to', 'cc', 'bcc' (NOT 'to_emails')
+    const emailData: any = {
+      user_id: profile.id,
+      from_email: profile.email,
+      from_name: profile.full_name || profile.email,
+      to: toEmails,           // ✅ Must be 'to' (array of strings)
+      cc: ccEmails,           // ✅ Must be 'cc' (array of strings)
+      bcc: bccEmails,         // ✅ Must be 'bcc' (array of strings)
+      subject: subject || "(no subject)",
+      body: plainTextBody,
+      is_draft: false,
+      folder_id: sentFolderId,
+      thread_id: threadId
+    };
+
+    console.log("📤 Sending email with data:", JSON.stringify(emailData, null, 2));
+
+    // Handle attachments if present
+    if (attachments.length > 0) {
+      console.log(`📎 Processing ${attachments.length} attachments...`);
+      
+      const attachmentData = await Promise.all(
+        attachments.map(async (file) => {
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              const result = reader.result as string;
+              const base64 = result.split(',')[1];
+              
+              resolve({
+                filename: file.name,
+                content: base64,
+                contentType: file.type,
+                size: file.size
+              });
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+        })
+      );
+
+      emailData.attachments = attachmentData;
+      
+      const totalSize = attachments.reduce((sum, file) => sum + file.size, 0);
+      console.log(`📎 Total attachment size: ${formatFileSize(totalSize)}`);
+    }
+
+    const response = await emailService.createEmail(emailData);
+    console.log("✅ Email sent successfully:", response);
+    
+    onSent();
+    onClose();
+  } catch (error) {
+    console.error("❌ Error sending email:", error);
+    alert(`Failed to send email: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  } finally {
+    setSending(false);
+  }
+};
 
   const handleAttachment = () => {
     fileInputRef.current?.click();
@@ -429,10 +464,10 @@ const bccEmails = bccList.split(',').map(email => ({
   };
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-[500px] max-h-[600px] bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-gray-200 dark:border-slate-700 flex flex-col">
+    <div className="fixed inset-0 lg:inset-auto lg:bottom-4 lg:right-4 z-50 w-full lg:w-[500px] max-h-[600px] bg-white dark:bg-slate-900 rounded-none lg:rounded-xl shadow-2xl border border-gray-200 dark:border-slate-700 flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-slate-700">
-        <h2 className="text-lg font-medium text-gray-900 dark:text-white">New Message</h2>
+      <div className="flex items-center justify-between p-3 lg:p-4 border-b border-gray-200 dark:border-slate-700">
+        <h2 className="text-base lg:text-lg font-medium text-gray-900 dark:text-white">New Message</h2>
         <div className="flex items-center gap-2">
           {draftStatus === 'saving' && (
             <span className="text-sm text-gray-500 dark:text-slate-400">Saving...</span>
@@ -452,8 +487,8 @@ const bccEmails = bccList.split(',').map(email => ({
       {/* Form */}
       <div className="flex-1 overflow-y-auto">
         {/* To Field */}
-        <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-4 py-3">
-          <label className="text-sm text-gray-600 dark:text-slate-400 w-12 flex-shrink-0">To:</label>
+        <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-3 lg:px-4 py-2 lg:py-3">
+          <label className="text-sm text-gray-600 dark:text-slate-400 w-8 lg:w-12 flex-shrink-0">To:</label>
           <input
             type="email"
             value={to}
@@ -479,8 +514,8 @@ const bccEmails = bccList.split(',').map(email => ({
 
         {/* CC Field */}
         {showCc && (
-          <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-4 py-3">
-            <label className="text-sm text-gray-600 dark:text-slate-400 w-12 flex-shrink-0">Cc:</label>
+          <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-3 lg:px-4 py-2 lg:py-3">
+            <label className="text-sm text-gray-600 dark:text-slate-400 w-8 lg:w-12 flex-shrink-0">Cc:</label>
             <input
               type="email"
               value={cc}
@@ -493,8 +528,8 @@ const bccEmails = bccList.split(',').map(email => ({
 
         {/* BCC Field */}
         {showBcc && (
-          <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-4 py-3">
-            <label className="text-sm text-gray-600 dark:text-slate-400 w-12 flex-shrink-0">Bcc:</label>
+          <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-3 lg:px-4 py-2 lg:py-3">
+            <label className="text-sm text-gray-600 dark:text-slate-400 w-8 lg:w-12 flex-shrink-0">Bcc:</label>
             <input
               type="email"
               value={bcc}
@@ -506,8 +541,8 @@ const bccEmails = bccList.split(',').map(email => ({
         )}
 
         {/* Subject Field */}
-        <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-4 py-3">
-          <label className="text-sm text-gray-600 dark:text-slate-400 w-12 flex-shrink-0">Subject:</label>
+        <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-3 lg:px-4 py-2 lg:py-3">
+          <label className="text-sm text-gray-600 dark:text-slate-400 w-8 lg:w-12 flex-shrink-0">Subject:</label>
           <input
             type="text"
             value={subject}
@@ -541,24 +576,24 @@ const bccEmails = bccList.split(',').map(email => ({
         )}
 
         {/* Body Field */}
-        <div className="flex-1 p-4">
+        <div className="flex-1 p-3 lg:p-4">
           <div
             ref={textareaRef}
             contentEditable
             onInput={(e) => setBody(e.currentTarget.innerHTML || '')}
             onKeyDown={handleKeyDown}
-            className="w-full h-64 bg-transparent text-gray-900 dark:text-white focus:outline-none text-sm leading-relaxed"
+            className="w-full h-48 lg:h-64 bg-transparent text-gray-900 dark:text-white focus:outline-none text-sm leading-relaxed"
             style={{ 
               fontSize: '14px',
               lineHeight: '1.6',
-              minHeight: '256px'
+              minHeight: '192px'
             }}
           />
         </div>
 
         {/* Attachments */}
         {attachments.length > 0 && (
-          <div className="border-t border-gray-200 dark:border-slate-700 p-4">
+          <div className="border-t border-gray-200 dark:border-slate-700 p-3 lg:p-4">
             <h4 className="text-sm font-medium text-gray-700 dark:text-slate-300 mb-2">Attachments</h4>
             <div className="space-y-2">
               {attachments.map((file, index) => (
@@ -586,8 +621,8 @@ const bccEmails = bccList.split(',').map(email => ({
       </div>
 
       {/* Footer */}
-      <div className="flex items-center justify-between p-4 border-t border-gray-200 dark:border-slate-700">
-        <div className="relative flex items-center gap-2">
+      <div className="flex items-center justify-between p-3 lg:p-4 border-t border-gray-200 dark:border-slate-700 flex-wrap gap-2">
+        <div className="relative flex items-center gap-1 lg:gap-2 order-2 lg:order-1">
           <button
             onClick={handleAttachment}
             className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition"
@@ -707,17 +742,17 @@ const bccEmails = bccList.split(',').map(email => ({
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 order-1 lg:order-2 w-full lg:w-auto justify-between">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-gray-600 dark:text-slate-400 hover:text-gray-800 dark:hover:text-white transition"
+            className="px-3 lg:px-4 py-2 text-gray-600 dark:text-slate-400 hover:text-gray-800 dark:hover:text-white transition text-sm lg:text-base"
           >
             Cancel
           </button>
           <button
             onClick={handleSend}
             disabled={sending || !to.trim()}
-            className="px-6 py-2 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2"
+            className="px-4 lg:px-6 py-2 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2 text-sm lg:text-base"
           >
             {sending ? (
               <>
