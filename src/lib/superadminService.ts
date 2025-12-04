@@ -1,6 +1,6 @@
 /**
- * Superadmin Service with Mock Data
- * No database calls - all data is dummy/mock for UI demonstration
+ * Superadmin Service
+ * Backend implementation required for data fetching.
  */
 
 export interface User {
@@ -31,134 +31,15 @@ export interface UserAnalytics {
     p2p_transfers: number;
 }
 
-// Mock superadmin credentials
-const SUPERADMIN_EMAIL = 'superadmin@jeemail.com';
-const SUPERADMIN_PASSWORD = 'admin123';
+// Mock superadmin credentials - Replace with actual auth
+const SUPERADMIN_EMAIL = '';
+const SUPERADMIN_PASSWORD = '';
 
 // Mock users data
-const MOCK_USERS: User[] = [
-    {
-        id: 1,
-        name: 'Alice Johnson',
-        email: 'alice@example.com',
-        role: 'user',
-        carbon_credits: 45.5,
-        storage_used: 2500000000, // 2.5 GB
-        created_at: '2025-11-25T10:30:00Z'
-    },
-    {
-        id: 2,
-        name: 'Bob Smith',
-        email: 'bob@example.com',
-        role: 'user',
-        carbon_credits: 32.8,
-        storage_used: 1800000000, // 1.8 GB
-        created_at: '2025-11-28T14:20:00Z'
-    },
-    {
-        id: 3,
-        name: 'Carol Williams',
-        email: 'carol@example.com',
-        role: 'user',
-        carbon_credits: 78.2,
-        storage_used: 3200000000, // 3.2 GB
-        created_at: '2025-11-20T09:15:00Z'
-    },
-    {
-        id: 4,
-        name: 'David Brown',
-        email: 'david@example.com',
-        role: 'user',
-        carbon_credits: 15.4,
-        storage_used: 950000000, // 950 MB
-        created_at: '2025-11-29T16:45:00Z'
-    },
-    {
-        id: 5,
-        name: 'Emma Davis',
-        email: 'emma@example.com',
-        role: 'user',
-        carbon_credits: 92.1,
-        storage_used: 4100000000, // 4.1 GB
-        created_at: '2025-11-15T11:00:00Z'
-    },
-    {
-        id: 6,
-        name: 'Frank Miller',
-        email: 'frank@example.com',
-        role: 'user',
-        carbon_credits: 23.7,
-        storage_used: 1200000000, // 1.2 GB
-        created_at: '2025-11-30T08:30:00Z'
-    },
-    {
-        id: 7,
-        name: 'Grace Lee',
-        email: 'grace@example.com',
-        role: 'user',
-        carbon_credits: 56.9,
-        storage_used: 2800000000, // 2.8 GB
-        created_at: '2025-11-22T13:20:00Z'
-    },
-    {
-        id: 8,
-        name: 'Henry Wilson',
-        email: 'henry@example.com',
-        role: 'user',
-        carbon_credits: 41.3,
-        storage_used: 2100000000, // 2.1 GB
-        created_at: '2025-11-27T15:10:00Z'
-    }
-];
+const MOCK_USERS: User[] = [];
 
 // Mock P2P transfers
-const MOCK_P2P_TRANSFERS: P2PTransfer[] = [
-    {
-        id: 1,
-        sender_name: 'Alice Johnson',
-        recipient_name: 'Bob Smith',
-        file_size: 50000000, // 50 MB
-        carbon_saved: 0.5,
-        status: 'pass',
-        created_at: '2025-11-30T10:00:00Z'
-    },
-    {
-        id: 2,
-        sender_name: 'Carol Williams',
-        recipient_name: 'David Brown',
-        file_size: 120000000, // 120 MB
-        carbon_saved: 1.2,
-        status: 'pass',
-        created_at: '2025-11-29T14:30:00Z'
-    },
-    {
-        id: 3,
-        sender_name: 'Emma Davis',
-        recipient_name: 'Frank Miller',
-        file_size: 80000000, // 80 MB
-        carbon_saved: 0.8,
-        status: 'fail',
-        created_at: '2025-11-28T09:15:00Z'
-    },
-    {
-        id: 4,
-        sender_name: 'Grace Lee',
-        recipient_name: 'Henry Wilson',
-        file_size: 200000000, // 200 MB
-        carbon_saved: 2.0,
-        status: 'pass',
-        created_at: '2025-11-27T16:45:00Z'
-    },
-    {
-        id: 5,
-        sender_name: 'Bob Smith',
-        recipient_name: 'Alice Johnson',
-        file_size: 35000000, // 35 MB
-        carbon_saved: 0.35,
-        status: 'pass',
-        created_at: '2025-11-26T11:20:00Z'
-    }
-];
+const MOCK_P2P_TRANSFERS: P2PTransfer[] = [];
 
 /**
  * Superadmin login (mock)

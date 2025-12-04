@@ -19,55 +19,7 @@ export default function RecentFilesView() {
     const loadRecentFiles = async () => {
         setLoading(true);
         try {
-            // Mock recent files
-            const mockRecent: DriveFile[] = [
-                {
-                    id: 2001,
-                    name: 'Q4 Financial Report.xlsx',
-                    file_type: 'document',
-                    mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                    size_bytes: 450000,
-                    storage_path: '/documents/q4_report.xlsx',
-                    created_at: '2024-12-01T10:00:00Z',
-                    updated_at: '2024-12-04T09:30:00Z',
-                    folder_id: 1,
-                    user_id: user!.id,
-                    is_starred: true,
-                    is_deleted: false,
-                    tags: ['finance', 'report']
-                },
-                {
-                    id: 2002,
-                    name: 'Project Demo.mp4',
-                    file_type: 'video',
-                    mime_type: 'video/mp4',
-                    size_bytes: 25000000,
-                    storage_path: '/videos/demo.mp4',
-                    created_at: '2024-12-03T15:00:00Z',
-                    updated_at: '2024-12-03T15:00:00Z',
-                    folder_id: 2,
-                    user_id: user!.id,
-                    is_starred: false,
-                    is_deleted: false,
-                    tags: ['demo']
-                },
-                {
-                    id: 2003,
-                    name: 'Meeting Notes.txt',
-                    file_type: 'document',
-                    mime_type: 'text/plain',
-                    size_bytes: 1200,
-                    storage_path: '/documents/notes.txt',
-                    created_at: '2024-12-04T11:00:00Z',
-                    updated_at: '2024-12-04T11:00:00Z',
-                    folder_id: 1,
-                    user_id: user!.id,
-                    is_starred: false,
-                    is_deleted: false,
-                    tags: ['meeting']
-                }
-            ];
-            setRecentFiles(mockRecent);
+            setRecentFiles([]);
         } catch (error) {
             console.error('Error loading recent files:', error);
         } finally {
@@ -152,7 +104,7 @@ export default function RecentFilesView() {
                                         {file.name}
                                     </h3>
                                     <div className="flex items-center justify-between text-xs text-gray-500 dark:text-slate-400">
-                                        <span>{driveService.formatBytes(file.size_bytes)}</span>
+                                        <span>{driveService.formatFileSize(file.size_bytes)}</span>
                                         <span>{getRelativeTime(file.updated_at)}</span>
                                     </div>
                                 </div>

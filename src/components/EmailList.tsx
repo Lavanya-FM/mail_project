@@ -1,4 +1,4 @@
-import { Star, Paperclip, Circle, Inbox, Tag, Users } from 'lucide-react';
+import { Star, Paperclip, Circle, Inbox, Tag, Users, Check, CheckCheck } from 'lucide-react';
 import { Email } from '../types/email';
 import { useState } from 'react';
 
@@ -74,8 +74,8 @@ export default function EmailList({
           <button
             onClick={() => setActiveTab('primary')}
             className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-all ${activeTab === 'primary'
-                ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400 bg-blue-50/50 dark:bg-blue-900/20'
-                : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
+              ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400 bg-blue-50/50 dark:bg-blue-900/20'
+              : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
               }`}
           >
             <Inbox className="w-4 h-4" />
@@ -84,8 +84,8 @@ export default function EmailList({
           <button
             onClick={() => setActiveTab('social')}
             className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-all ${activeTab === 'social'
-                ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400 bg-blue-50/50 dark:bg-blue-900/20'
-                : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
+              ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400 bg-blue-50/50 dark:bg-blue-900/20'
+              : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
               }`}
           >
             <Users className="w-4 h-4" />
@@ -94,8 +94,8 @@ export default function EmailList({
           <button
             onClick={() => setActiveTab('promotions')}
             className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-all ${activeTab === 'promotions'
-                ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400 bg-blue-50/50 dark:bg-blue-900/20'
-                : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
+              ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400 bg-blue-50/50 dark:bg-blue-900/20'
+              : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
               }`}
           >
             <Tag className="w-4 h-4" />
@@ -123,8 +123,8 @@ export default function EmailList({
                   key={email.id}
                   onClick={() => onSelectEmail(email)}
                   className={`w-full text-left px-4 py-2 transition-all border-b border-gray-100 dark:border-gray-800 hover:shadow-md dark:hover:shadow-gray-900/50 ${isSelected
-                      ? 'bg-blue-50 dark:bg-blue-900/20 border-l-4 border-l-blue-600 dark:border-l-blue-400'
-                      : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                    ? 'bg-blue-50 dark:bg-blue-900/20 border-l-4 border-l-blue-600 dark:border-l-blue-400'
+                    : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'
                     } ${!email.is_read ? 'bg-white dark:bg-gray-900' : 'bg-gray-50/50 dark:bg-gray-800/30'}`}
                 >
                   <div className="flex items-start gap-3">
@@ -154,8 +154,8 @@ export default function EmailList({
                       <div className="flex items-baseline gap-2 mb-1">
                         <span
                           className={`text-sm truncate ${!email.is_read
-                              ? 'font-bold text-gray-900 dark:text-white'
-                              : 'font-medium text-gray-700 dark:text-gray-300'
+                            ? 'font-bold text-gray-900 dark:text-white'
+                            : 'font-medium text-gray-700 dark:text-gray-300'
                             }`}
                         >
                           {email.from_name || email.from_email}
@@ -168,8 +168,8 @@ export default function EmailList({
                       <div className="flex items-baseline gap-2">
                         <h3
                           className={`text-sm flex-1 truncate ${!email.is_read
-                              ? 'font-semibold text-gray-900 dark:text-white'
-                              : 'text-gray-600 dark:text-gray-400'
+                            ? 'font-semibold text-gray-900 dark:text-white'
+                            : 'text-gray-600 dark:text-gray-400'
                             }`}
                         >
                           {email.subject || '(No subject)'}
@@ -206,9 +206,18 @@ export default function EmailList({
                       </div>
                     </div>
 
-                    {/* Date */}
-                    <div className="flex-shrink-0 text-xs text-gray-500 dark:text-gray-500 pt-1">
-                      {formatDate(email.sent_at || email.created_at || '')}
+                    {/* Date and Status */}
+                    <div className="flex-shrink-0 flex flex-col items-end gap-1 pt-1">
+                      <span className="text-xs text-gray-500 dark:text-gray-500">
+                        {formatDate(email.sent_at || email.created_at || '')}
+                      </span>
+                      {email.status && (
+                        <div title={email.status.charAt(0).toUpperCase() + email.status.slice(1)}>
+                          {email.status === 'sent' && <Check className="w-4 h-4 text-gray-400" />}
+                          {email.status === 'delivered' && <CheckCheck className="w-4 h-4 text-gray-400" />}
+                          {email.status === 'read' && <CheckCheck className="w-4 h-4 text-blue-500" />}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </button>

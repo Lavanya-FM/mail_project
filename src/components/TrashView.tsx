@@ -23,61 +23,7 @@ export default function TrashView() {
     const loadTrashItems = async () => {
         setLoading(true);
         try {
-            // Mock trash items
-            const mockTrash: TrashItem[] = [
-                {
-                    id: 1001,
-                    name: 'Old Project Proposal.pdf',
-                    file_type: 'pdf',
-                    mime_type: 'application/pdf',
-                    size_bytes: 2500000,
-                    storage_path: '/trash/proposal.pdf',
-                    created_at: '2024-11-15T10:00:00Z',
-                    updated_at: '2024-11-20T14:30:00Z',
-                    folder_id: null,
-                    user_id: user!.id,
-                    is_starred: false,
-                    is_deleted: true,
-                    tags: [],
-                    deleted_at: '2024-12-01T09:00:00Z',
-                    days_until_delete: 28
-                },
-                {
-                    id: 1002,
-                    name: 'Screenshot_2024.png',
-                    file_type: 'image',
-                    mime_type: 'image/png',
-                    size_bytes: 850000,
-                    storage_path: '/trash/screenshot.png',
-                    created_at: '2024-11-28T16:20:00Z',
-                    updated_at: '2024-11-28T16:20:00Z',
-                    folder_id: null,
-                    user_id: user!.id,
-                    is_starred: false,
-                    is_deleted: true,
-                    tags: [],
-                    deleted_at: '2024-12-02T11:15:00Z',
-                    days_until_delete: 29
-                },
-                {
-                    id: 1003,
-                    name: 'backup_data.zip',
-                    file_type: 'archive',
-                    mime_type: 'application/zip',
-                    size_bytes: 15000000,
-                    storage_path: '/trash/backup.zip',
-                    created_at: '2024-10-10T08:00:00Z',
-                    updated_at: '2024-10-10T08:00:00Z',
-                    folder_id: null,
-                    user_id: user!.id,
-                    is_starred: false,
-                    is_deleted: true,
-                    tags: [],
-                    deleted_at: '2024-11-10T14:00:00Z',
-                    days_until_delete: 7
-                }
-            ];
-            setTrashItems(mockTrash);
+            setTrashItems([]);
         } catch (error) {
             console.error('Error loading trash items:', error);
         } finally {
@@ -137,17 +83,17 @@ export default function TrashView() {
     return (
         <div className="flex-1 flex flex-col h-full overflow-hidden">
             {/* Toolbar */}
-            <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 gap-4 border-b border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900">
                 <div className="flex items-center gap-4">
                     <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
                         <Trash2 className="w-5 h-5" />
                         Trash
                     </h2>
-                    <span className="text-sm text-gray-500 dark:text-slate-400">
+                    <span className="text-sm text-gray-500 dark:text-slate-400 hidden sm:inline">
                         Items in trash are deleted forever after 30 days
                     </span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 self-end sm:self-auto">
                     {selectedItems.size > 0 ? (
                         <>
                             <button
@@ -202,8 +148,8 @@ export default function TrashView() {
                                 className="w-4 h-4 text-blue-600 rounded"
                             />
                             <span className="flex-1">Name</span>
-                            <span className="w-32">Date Deleted</span>
-                            <span className="w-32">Size</span>
+                            <span className="hidden sm:block w-32">Date Deleted</span>
+                            <span className="hidden sm:block w-32">Size</span>
                         </div>
                         {trashItems.map((item) => {
                             const getIconComponent = (type: string) => {
@@ -244,11 +190,11 @@ export default function TrashView() {
                                             <span>Deletes in {item.days_until_delete} days</span>
                                         </div>
                                     </div>
-                                    <div className="w-32 text-sm text-gray-500 dark:text-slate-400">
+                                    <div className="hidden sm:block w-32 text-sm text-gray-500 dark:text-slate-400">
                                         {new Date(item.deleted_at).toLocaleDateString()}
                                     </div>
-                                    <div className="w-32 text-sm text-gray-500 dark:text-slate-400">
-                                        {driveService.formatBytes(item.size_bytes)}
+                                    <div className="hidden sm:block w-32 text-sm text-gray-500 dark:text-slate-400">
+                                        {driveService.formatFileSize(item.size_bytes)}
                                     </div>
                                 </div>
                             );

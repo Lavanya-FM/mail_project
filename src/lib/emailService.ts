@@ -1,4 +1,4 @@
-import { USE_MOCK_DATA, mockFolders, mockEmails } from './mockData';
+
 
 type ApiResult<T> = Promise<{ data?: T; error?: any; status: number;[key: string]: any }>;
 
@@ -55,11 +55,6 @@ export const emailService = {
   // -----------------------------------------------------
   async getFolders(userId: number | string): ApiResult<any[]> {
     // Return mock data if enabled
-    if (USE_MOCK_DATA) {
-      localStorage.setItem("folders", JSON.stringify(mockFolders));
-      return { data: mockFolders, status: 200 };
-    }
-
     const url = apiUrl(`/api/folders/${encodeURIComponent(String(userId))}`);
     const resp = await fetch(url, {
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -89,21 +84,6 @@ export const emailService = {
   // -----------------------------------------------------
   async getEmails(userId: number | string, folderId?: string | number): ApiResult<any[]> {
     // Return mock data if enabled
-    if (USE_MOCK_DATA) {
-      let fid: number | null;
-      if (!folderId) {
-        fid = getFolderIdByName("inbox");
-      } else if (isNaN(Number(folderId))) {
-        fid = getFolderIdByName(String(folderId));
-      } else {
-        fid = Number(folderId);
-      }
-
-      // Filter mock emails by folder
-      const filteredEmails = fid ? mockEmails.filter(e => e.folder_id === fid) : mockEmails;
-      return { data: filteredEmails, status: 200 };
-    }
-
     let fid: number | null;
 
     if (!folderId) {

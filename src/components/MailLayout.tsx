@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   Inbox, Send, FileEdit, Trash2, Plus, Star, Archive,
   Search, LogOut, Sparkles, Circle, X, ChevronDown, User,
-  Clock, AlertTriangle, Tag, Mail, Minimize2, Maximize2
+  Clock, AlertTriangle, Tag, Mail, Minimize2, Maximize2, Menu
 } from 'lucide-react';
 import { emailService, getFolderIdByName } from '../lib/emailService';
 import { authService } from '../lib/authService';
@@ -371,12 +371,11 @@ export default function MailLayout() {
     );
   }
 
-  return (
-    <div className="h-screen bg-gray-50 dark:bg-slate-950 flex flex-col lg:flex-row overflow-hidden">
-      {/* Sidebar - Mobile: Collapsible, Desktop: Fixed */}
-      <div className={`w-full lg:w-64 bg-white dark:bg-slate-900 border-r border-gray-200 dark:border-slate-800 flex flex-col lg:relative fixed inset-y-0 left-0 z-40 transform lg:transform-none transition-transform duration-300 ease-in-out ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
-        {/* Mobile Close Button */}
-        <div className="lg:hidden p-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+  const SidebarContent = () => (
+    <>
+      {/* Header */}
+      <div className="p-4 border-b border-gray-200 dark:border-slate-800">
+        <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="bg-gradient-to-br from-blue-500 to-cyan-500 p-2 rounded-lg">
               <Sparkles className="w-5 h-5 text-white" />
@@ -385,290 +384,290 @@ export default function MailLayout() {
           </div>
           <button
             onClick={() => setMobileSidebarOpen(false)}
-            className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition"
+            className="lg:hidden p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
-        {/* Header - Desktop Only */}
-        <div className="hidden lg:block p-4 border-b border-gray-200 dark:border-slate-800">
-          <div className="flex items-center gap-3">
-            <div className="bg-gradient-to-br from-blue-500 to-cyan-500 p-2 rounded-lg">
-              <Sparkles className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-gray-900 dark:text-white font-bold text-lg">Jeemail</span>
-          </div>
-        </div>
+      </div>
 
-        {/* User Profile - Desktop Only */}
-        <div className="hidden lg:block p-4 border-b border-gray-200 dark:border-slate-800">
-          <div className="flex items-center justify-between">
-            <div className="relative flex-1">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowProfileDropdown(!showProfileDropdown);
-                }}
-                className="flex items-center gap-3 w-full p-2 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition"
-              >
-                <div className="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold text-lg">
-                  {profile?.full_name?.charAt(0) || profile?.email?.charAt(0) || 'U'}
-                </div>
-                <div className="flex-1 min-w-0 text-left">
-                  <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                    {profile?.full_name || 'User'}
-                  </p>
-                  <p className="text-xs text-gray-500 dark:text-slate-400 truncate">
-                    {profile?.email}
-                  </p>
-                </div>
-              </button>
+      {/* User Profile */}
+      <div className="p-4 border-b border-gray-200 dark:border-slate-800">
+        <div className="flex items-center justify-between">
+          <div className="relative flex-1">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowProfileDropdown(!showProfileDropdown);
+              }}
+              className="flex items-center gap-3 w-full p-2 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition"
+            >
+              <div className="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold text-lg">
+                {profile?.full_name?.charAt(0) || profile?.email?.charAt(0) || 'U'}
+              </div>
+              <div className="flex-1 min-w-0 text-left">
+                <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                  {profile?.full_name || 'User'}
+                </p>
+                <p className="text-xs text-gray-500 dark:text-slate-400 truncate">
+                  {profile?.email}
+                </p>
+              </div>
+            </button>
 
-              {/* Profile Dropdown */}
-              {showProfileDropdown && (
-                <div className={`absolute top-full left-0 right-0 mt-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 overflow-hidden ${animations.slideInUp}`} style={{ minWidth: '320px' }}>
-                  {/* User Info Header */}
-                  <div className="p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/50">
-                    <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold text-xl relative">
-                        {profile?.full_name?.charAt(0) || profile?.email?.charAt(0) || 'U'}
-                        <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-white dark:border-slate-800"></div>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold text-gray-900 dark:text-white">
-                          Hi, {profile?.full_name || 'User'}!
-                        </p>
-                        <p className="text-xs text-gray-600 dark:text-slate-400 truncate">
-                          {profile?.email}
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => setShowProfileDropdown(false)}
-                        className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
+            {/* Profile Dropdown */}
+            {showProfileDropdown && (
+              <div className={`absolute top-full left-0 right-0 mt-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 overflow-hidden ${animations.slideInUp}`} style={{ minWidth: '280px' }}>
+                {/* User Info Header */}
+                <div className="p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/50">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold text-xl relative">
+                      {profile?.full_name?.charAt(0) || profile?.email?.charAt(0) || 'U'}
+                      <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-white dark:border-slate-800"></div>
                     </div>
-                  </div>
-
-                  {/* Manage Account Button */}
-                  <div className="p-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-gray-900 dark:text-white">
+                        Hi, {profile?.full_name || 'User'}!
+                      </p>
+                      <p className="text-xs text-gray-600 dark:text-slate-400 truncate">
+                        {profile?.email}
+                      </p>
+                    </div>
                     <button
-                      onClick={handleViewProfile}
-                      className="w-full px-4 py-3 text-left text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition border border-blue-200 dark:border-blue-800 mb-2 flex items-center gap-2"
+                      onClick={() => setShowProfileDropdown(false)}
+                      className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
                     >
-                      <User className="w-4 h-4" />
-                      View Profile & Carbon Credits
+                      <X className="w-4 h-4" />
                     </button>
                   </div>
+                </div>
 
-                  {/* Actions */}
-                  <div className="p-2 space-y-1">
-                    <button
-                      onClick={handleAddAccount}
-                      className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg transition flex items-center gap-3"
-                    >
-                      <Plus className="w-4 h-4 text-blue-500" />
-                      Add account
-                    </button>
-                    <button
-                      onClick={signOut}
-                      className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg transition flex items-center gap-3"
-                    >
-                      <LogOut className="w-4 h-4 text-gray-500" />
-                      Sign out
-                    </button>
-                  </div>
+                {/* Manage Account Button */}
+                <div className="p-2">
+                  <button
+                    onClick={handleViewProfile}
+                    className="w-full px-4 py-3 text-left text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition border border-blue-200 dark:border-blue-800 mb-2 flex items-center gap-2"
+                  >
+                    <User className="w-4 h-4" />
+                    View Profile & Carbon Credits
+                  </button>
+                </div>
 
-                  {/* Storage Info */}
-                  <div className="p-4 border-t border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/50">
-                    <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-slate-400">
-                      <div className="w-4 h-4 rounded-full bg-gradient-to-r from-blue-500 to-purple-500"></div>
-                      <span>8% of 1 GB used</span>
-                    </div>
-                  </div>
+                {/* Actions */}
+                <div className="p-2 space-y-1">
+                  <button
+                    onClick={handleAddAccount}
+                    className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg transition flex items-center gap-3"
+                  >
+                    <Plus className="w-4 h-4 text-blue-500" />
+                    Add account
+                  </button>
+                  <button
+                    onClick={signOut}
+                    className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg transition flex items-center gap-3"
+                  >
+                    <LogOut className="w-4 h-4 text-gray-500" />
+                    Sign out
+                  </button>
+                </div>
 
-                  {/* Footer Links */}
-                  <div className="p-3 border-t border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/50">
-                    <div className="flex justify-center gap-4 text-xs text-gray-500 dark:text-slate-500">
-                      <button className="hover:text-gray-700 dark:hover:text-slate-300 transition">Privacy Policy</button>
-                      <span>•</span>
-                      <button className="hover:text-gray-700 dark:hover:text-slate-300 transition">Terms of Service</button>
-                    </div>
+                {/* Storage Info */}
+                <div className="p-4 border-t border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/50">
+                  <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-slate-400">
+                    <div className="w-4 h-4 rounded-full bg-gradient-to-r from-blue-500 to-purple-500"></div>
+                    <span>8% of 1 GB used</span>
                   </div>
                 </div>
-              )}
-            </div>
-            <div className="ml-2">
-              <ThemeToggle />
-            </div>
-          </div>
-        </div>
 
-        {/* Compose Button */}
-        <div className="p-4">
-          <button
-            onClick={handleOpenComposeWindow}
-            className={`w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white px-4 py-2.5 rounded-xl font-medium transition-all duration-200 flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-blue-500/25 hover:scale-[1.02] ${animations.fadeInUp}`}
-          >
-            <Plus className="w-4 h-4" />
-            Compose
-          </button>
-        </div>
-
-        {/* Folders */}
-        <div className="flex-1 overflow-y-auto py-2">
-          <div className="px-2 space-y-1">
-            {['inbox', 'starred', 'snoozed', 'sent', 'drafts', 'spam', 'trash'].map((folderType) => {
-              let folder = folders.find((f) => (f.name || '').toString().toLowerCase() === folderType);
-
-              // Create virtual folders for starred, snoozed if they don't exist in backend
-              if (!folder && (folderType === 'starred' || folderType === 'snoozed')) {
-                folder = {
-                  id: folderType === 'starred' ? 'starred' : 'snoozed',
-                  name: folderType.charAt(0).toUpperCase() + folderType.slice(1),
-                  icon: folderType === 'starred' ? 'star' : folderType,
-                  color: folderType === 'starred' ? '#fbbf24' : folderType === 'snoozed' ? '#8b5cf6' : '#6b7280'
-                };
-              }
-
-              if (!folder) return null;
-
-              const Icon = folderType === 'starred' ? Star : (iconMap[folderType] || iconMap[folder.icon || 'folder'] || Circle);
-              const isActive = String(selectedFolder?.id) === String(folder.id);
-              const iconColor = folderColors[folderType] || (isActive ? '#1e40af' : undefined);
-
-              // Calculate counts differently for special folders
-              let folderCount = 0;
-              if (folderType === 'starred') {
-                folderCount = emails.filter((e) => e.is_starred).length;
-              } else if (folderType === 'snoozed') {
-                folderCount = emails.filter((e) => e.is_snoozed).length;
-              } else if (folderType === 'drafts') {
-                folderCount = emails.filter((e) => String(e.folder_id) === String(folder.id)).length;
-              } else {
-                folderCount = emails.filter((e) => String(e.folder_id) === String(folder.id) && !e.is_read).length;
-              }
-
-              return (
-                <button
-                  key={String(folder.id)}
-                  onClick={() => handleFolderClick(folderType, folder)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition ${animations.fadeInLeft} ${isActive ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 shadow-md' : 'text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800/50 hover:scale-105'}`}
-                >
-                  <Icon className="w-5 h-5 flex-shrink-0" style={{ color: iconColor }} />
-                  <span className="flex-1 text-left font-medium text-sm">{folder.name}</span>
-                  {folderCount > 0 && folderType === 'drafts' && (
-                    <span className={`bg-gray-500 text-white text-xs px-2 py-0.5 rounded-full min-w-[20px] text-center flex-shrink-0 ${animations.pulseGlow}`}>
-                      {folderCount}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-
-          </div>
-
-          {/* Labels Section */}
-          <div className="px-2 mt-4">
-            <div className="flex items-center justify-between mb-3 px-3">
-              <h3 className="text-xs font-semibold text-gray-700 dark:text-slate-300 uppercase tracking-wider">Labels</h3>
-              <button
-                onClick={handleAddLabel}
-                className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
-              >
-                <Plus className="w-3 h-3" />
-              </button>
-            </div>
-            <div className="space-y-1">
-              {labels.map((label) => (
-                <div
-                  key={label.id}
-                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg transition text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800/50 hover:scale-105 group"
-                >
-                  <Tag className="w-4 h-4 flex-shrink-0" style={{ color: label.color }} />
-                  {editingLabelId === label.id ? (
-                    <input
-                      autoFocus
-                      type="text"
-                      value={editLabelName}
-                      onChange={(e) => setEditLabelName(e.target.value)}
-                      onBlur={() => handleLabelRename(label.id)}
-                      onKeyDown={(e) => handleLabelEditKeyDown(e, label.id)}
-                      className="flex-1 bg-white dark:bg-slate-900 border border-blue-500 rounded px-1 py-0.5 text-sm outline-none text-gray-900 dark:text-white"
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  ) : (
-                    <span
-                      className="flex-1 text-left text-sm cursor-pointer"
-                      onDoubleClick={() => {
-                        setEditingLabelId(label.id);
-                        setEditLabelName(label.name);
-                      }}
-                    >
-                      {label.name}
-                    </span>
-                  )}
+                {/* Footer Links */}
+                <div className="p-3 border-t border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/50">
+                  <div className="flex justify-center gap-4 text-xs text-gray-500 dark:text-slate-500">
+                    <button className="hover:text-gray-700 dark:hover:text-slate-300 transition">Privacy Policy</button>
+                    <span>•</span>
+                    <button className="hover:text-gray-700 dark:hover:text-slate-300 transition">Terms of Service</button>
+                  </div>
                 </div>
-              ))}
-            </div>
+              </div>
+            )}
           </div>
-        </div>
-
-        {/* Gamification Badges Section */}
-        <div className="border-t border-gray-200 dark:border-slate-800 p-4">
-          <button onClick={() => setShowBadges(!showBadges)} className="flex items-center justify-between w-full mb-3 hover:opacity-80 transition">
-            <h3 className="text-xs font-semibold text-gray-700 dark:text-slate-300 uppercase tracking-wider">🏆 Achievements</h3>
-            <ChevronDown className={`w-4 h-4 text-gray-500 dark:text-slate-400 transition-transform ${showBadges ? 'rotate-180' : ''}`} />
-          </button>
-          {showBadges && <div className="max-h-96 overflow-y-auto"><GamificationBadges /></div>}
-        </div>
-
-        {/* Storage Usage - Bottom Left */}
-        <div className="p-4 border-t border-gray-200 dark:border-slate-800">
-          <div className="mb-3">
-            <div className="flex items-center justify-between text-xs text-gray-600 dark:text-slate-400 mb-2">
-              <span>Storage Used</span>
-              <span>{((profile?.storage_used || 0) / (1024 * 1024)).toFixed(1)} MB / 1024 MB</span>
-            </div>
-            <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-1.5">
-              <div className="bg-gradient-to-r from-blue-500 to-cyan-500 h-1.5 rounded-full transition-all duration-300" style={{ width: `${Math.min(((profile?.storage_used || 0) / (profile?.storage_limit || 1073741824)) * 100, 100)}%` }}></div>
-            </div>
+          <div className="ml-2">
+            <ThemeToggle />
           </div>
         </div>
       </div>
 
+      {/* Compose Button */}
+      <div className="p-4">
+        <button
+          onClick={() => {
+            handleOpenComposeWindow();
+            setMobileSidebarOpen(false);
+          }}
+          className={`w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white px-4 py-2.5 rounded-xl font-medium transition-all duration-200 flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-blue-500/25 hover:scale-[1.02] ${animations.fadeInUp}`}
+        >
+          <Plus className="w-4 h-4" />
+          Compose
+        </button>
+      </div>
+
+      {/* Folders */}
+      <div className="flex-1 overflow-y-auto py-2">
+        <div className="px-2 space-y-1">
+          {['inbox', 'starred', 'snoozed', 'sent', 'drafts', 'spam', 'trash'].map((folderType) => {
+            let folder = folders.find((f) => (f.name || '').toString().toLowerCase() === folderType);
+
+            // Create virtual folders for starred, snoozed if they don't exist in backend
+            if (!folder && (folderType === 'starred' || folderType === 'snoozed')) {
+              folder = {
+                id: folderType === 'starred' ? 'starred' : 'snoozed',
+                name: folderType.charAt(0).toUpperCase() + folderType.slice(1),
+                icon: folderType === 'starred' ? 'star' : folderType,
+                color: folderType === 'starred' ? '#fbbf24' : folderType === 'snoozed' ? '#8b5cf6' : '#6b7280'
+              };
+            }
+
+            if (!folder) return null;
+
+            const Icon = folderType === 'starred' ? Star : (iconMap[folderType] || iconMap[folder.icon || 'folder'] || Circle);
+            const isActive = String(selectedFolder?.id) === String(folder.id);
+            const iconColor = folderColors[folderType] || (isActive ? '#1e40af' : undefined);
+
+            // Calculate counts differently for special folders
+            let folderCount = 0;
+            if (folderType === 'starred') {
+              folderCount = emails.filter((e) => e.is_starred).length;
+            } else if (folderType === 'snoozed') {
+              folderCount = emails.filter((e) => e.is_snoozed).length;
+            } else if (folderType === 'drafts') {
+              folderCount = emails.filter((e) => String(e.folder_id) === String(folder.id)).length;
+            } else {
+              folderCount = emails.filter((e) => String(e.folder_id) === String(folder.id) && !e.is_read).length;
+            }
+
+            return (
+              <button
+                key={String(folder.id)}
+                onClick={() => {
+                  handleFolderClick(folderType, folder!);
+                  setMobileSidebarOpen(false);
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition ${animations.fadeInLeft} ${isActive ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 shadow-md' : 'text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800/50 hover:scale-105'}`}
+              >
+                <Icon className="w-5 h-5 flex-shrink-0" style={{ color: iconColor }} />
+                <span className="flex-1 text-left font-medium text-sm">{folder.name}</span>
+                {folderCount > 0 && folderType === 'drafts' && (
+                  <span className={`bg-gray-500 text-white text-xs px-2 py-0.5 rounded-full min-w-[20px] text-center flex-shrink-0 ${animations.pulseGlow}`}>
+                    {folderCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+
+        </div>
+
+        {/* Labels Section */}
+        <div className="px-2 mt-4">
+          <div className="flex items-center justify-between mb-3 px-3">
+            <h3 className="text-xs font-semibold text-gray-700 dark:text-slate-300 uppercase tracking-wider">Labels</h3>
+            <button
+              onClick={handleAddLabel}
+              className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
+            >
+              <Plus className="w-3 h-3" />
+            </button>
+          </div>
+          <div className="space-y-1">
+            {labels.map((label) => (
+              <div
+                key={label.id}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-lg transition text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800/50 hover:scale-105 group"
+              >
+                <Tag className="w-4 h-4 flex-shrink-0" style={{ color: label.color }} />
+                {editingLabelId === label.id ? (
+                  <input
+                    autoFocus
+                    type="text"
+                    value={editLabelName}
+                    onChange={(e) => setEditLabelName(e.target.value)}
+                    onBlur={() => handleLabelRename(label.id)}
+                    onKeyDown={(e) => handleLabelEditKeyDown(e, label.id)}
+                    className="flex-1 bg-white dark:bg-slate-900 border border-blue-500 rounded px-1 py-0.5 text-sm outline-none text-gray-900 dark:text-white"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                ) : (
+                  <span
+                    className="flex-1 text-left text-sm cursor-pointer"
+                    onDoubleClick={() => {
+                      setEditingLabelId(label.id);
+                      setEditLabelName(label.name);
+                    }}
+                  >
+                    {label.name}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Gamification Badges Section */}
+      <div className="border-t border-gray-200 dark:border-slate-800 p-4">
+        <button onClick={() => setShowBadges(!showBadges)} className="flex items-center justify-between w-full mb-3 hover:opacity-80 transition">
+          <h3 className="text-xs font-semibold text-gray-700 dark:text-slate-300 uppercase tracking-wider">🏆 Achievements</h3>
+          <ChevronDown className={`w-4 h-4 text-gray-500 dark:text-slate-400 transition-transform ${showBadges ? 'rotate-180' : ''}`} />
+        </button>
+        {showBadges && <div className="max-h-96 overflow-y-auto"><GamificationBadges /></div>}
+      </div>
+
+      {/* Storage Usage - Bottom Left */}
+      <div className="p-4 border-t border-gray-200 dark:border-slate-800">
+        <div className="mb-3">
+          <div className="flex items-center justify-between text-xs text-gray-600 dark:text-slate-400 mb-2">
+            <span>Storage Used</span>
+            <span>{((profile?.storage_used || 0) / (1024 * 1024)).toFixed(1)} MB / 1024 MB</span>
+          </div>
+          <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-1.5">
+            <div className="bg-gradient-to-r from-blue-500 to-cyan-500 h-1.5 rounded-full transition-all duration-300" style={{ width: `${Math.min(((profile?.storage_used || 0) / (profile?.storage_limit || 1073741824)) * 100, 100)}%` }}></div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+
+  return (
+    <div className="h-screen bg-gray-50 dark:bg-slate-950 flex flex-col lg:flex-row overflow-hidden">
+      {/* Desktop Sidebar - Hidden on Mobile */}
+      <div className="hidden lg:flex w-64 bg-white dark:bg-slate-900 border-r border-gray-200 dark:border-slate-800 flex-col flex-shrink-0">
+        <SidebarContent />
+      </div>
+
       {/* Mobile Sidebar Overlay */}
       {mobileSidebarOpen && (
-        <div
-          className="lg:hidden fixed inset-0 bg-black/50 z-30"
-          onClick={() => setMobileSidebarOpen(false)}
-        />
+        <div className="fixed inset-0 z-50 flex lg:hidden">
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
+            onClick={() => setMobileSidebarOpen(false)}
+          ></div>
+          <div className="relative w-72 bg-white dark:bg-slate-900 h-full shadow-2xl flex flex-col animate-in slide-in-from-left duration-200">
+            <SidebarContent />
+          </div>
+        </div>
       )}
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col bg-gray-50 dark:bg-slate-950 lg:ml-0">
-        {/* Mobile Menu Toggle */}
-        <div className="lg:hidden h-16 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 flex items-center px-4 gap-4">
-          <button className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition"
-            onClick={() => setMobileSidebarOpen(true)}
-          >
-            <div className="w-6 h-6 flex flex-col justify-center gap-1">
-              <span className="block w-full h-0.5 bg-current"></span>
-              <span className="block w-full h-0.5 bg-current"></span>
-              <span className="block w-full h-0.5 bg-current"></span>
-            </div>
-          </button>
-          <div className="flex items-center gap-3">
-            <div className="bg-gradient-to-br from-blue-500 to-cyan-500 p-2 rounded-lg">
-              <Sparkles className="w-4 h-4 text-white" />
-            </div>
-            <span className="text-gray-900 dark:text-white font-bold text-lg">Jeemail</span>
-          </div>
-        </div>
-
         {/* Top Bar */}
         <div className="h-16 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 flex items-center px-4 lg:px-6 gap-4 shadow-sm">
+          {/* Mobile Menu Button */}
+          <button
+            className="lg:hidden p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition"
+            onClick={() => setMobileSidebarOpen(true)}
+          >
+            <Menu className="w-6 h-6" />
+          </button>
+
           <div className="flex-1 max-w-xl relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-slate-500" />
             <input

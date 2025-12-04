@@ -17,6 +17,7 @@ export interface Email {
   created_at?: string;
   sent_at?: string;
   labels?: any[];
+  status?: 'sent' | 'delivered' | 'read';
   [k: string]: any;
 }
 

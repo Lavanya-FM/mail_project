@@ -2,9 +2,9 @@ import { useState, useEffect } from 'react';
 import {
     HardDrive, FolderPlus, Upload, Grid3x3, List, Search, Star,
     Clock, Trash2, Share2, Download, MoreVertical, File, Folder,
-    Image, Video, FileText, Archive, Music, ChevronRight, Home,
-    TrendingUp, Leaf, Sparkles, BarChart3, Filter, SortAsc, Eye,
-    X, Check, Tag as TagIcon, Users, Mail
+    Image, Video, FileText, Archive, Music,
+    TrendingUp, Leaf, Sparkles, Filter, SortAsc, Eye,
+    X, Check, Tag as TagIcon, Users, Mail, Menu
 } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import driveService, { DriveFile, DriveFolder } from '../lib/driveService';
@@ -54,8 +54,9 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
     const [showPreview, setShowPreview] = useState(false);
     const [previewFile, setPreviewFile] = useState<DriveFile | null>(null);
     const [showShare, setShowShare] = useState(false);
-    const [shareFile, setShareFile] = useState<DriveFile | null>(null);
+    const [shareFile] = useState<DriveFile | null>(null);
     const [activeTab, setActiveTab] = useState<'drive' | 'recent' | 'trash'>('drive');
+    const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
     useEffect(() => {
         loadDriveData();
@@ -101,12 +102,7 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
         setActiveFilter('all');
     };
 
-    const handleBreadcrumbClick = (index: number) => {
-        const newBreadcrumbs = breadcrumbs.slice(0, index + 1);
-        setBreadcrumbs(newBreadcrumbs);
-        setCurrentFolder(newBreadcrumbs[newBreadcrumbs.length - 1].id);
-        setActiveFilter('all');
-    };
+
 
     const handleStarFile = async (fileId: number, starred: boolean) => {
         await driveService.toggleStarFile(fileId, starred);
@@ -178,375 +174,293 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
         );
     }
 
-    return (
-        <div className={`flex-1 flex flex-col overflow-hidden ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
-            {/* Premium Header */}
-            <header className="sticky top-0 z-40 backdrop-blur-xl bg-white/80 dark:bg-slate-900/80 border-b border-gray-200/50 dark:border-slate-700/50 shadow-lg">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                            <div className="relative">
-                                <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-cyan-600 rounded-2xl blur-lg opacity-50 animate-pulse"></div>
-                                <div className="relative bg-gradient-to-r from-blue-600 to-cyan-600 p-3 rounded-2xl shadow-xl">
-                                    <HardDrive className="w-6 h-6 text-white" />
-                                </div>
-                            </div>
-                            <div>
-                                <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 via-cyan-600 to-purple-600 bg-clip-text text-transparent">
-                                    JeeDrive
-                                </h1>
-                                <p className="text-sm text-gray-600 dark:text-slate-400">Cloud Storage & File Management</p>
-                            </div>
-                        </div>
-
-                        {/* Quick Actions */}
-                        <div className="flex items-center gap-3">
-                            {onSwitchToMail && (
-                                <button
-                                    onClick={onSwitchToMail}
-                                    className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-300 border-2 border-gray-200 dark:border-slate-700 rounded-xl hover:border-blue-500 dark:hover:border-blue-500 transition-all duration-300 font-medium"
-                                >
-                                    <Mail className="w-4 h-4" />
-                                    Mail
-                                </button>
-                            )}
-                            <button
-                                onClick={() => setShowUpload(true)}
-                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-xl hover:from-blue-600 hover:to-cyan-600 transition-all duration-300 shadow-lg hover:shadow-xl hover:scale-105 font-medium"
-                            >
-                                <Upload className="w-4 h-4" />
-                                Upload
-                            </button>
-                            <button
-                                onClick={() => setShowNewFolder(true)}
-                                className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-300 border-2 border-gray-200 dark:border-slate-700 rounded-xl hover:border-blue-500 dark:hover:border-blue-500 transition-all duration-300 font-medium"
-                            >
-                                <FolderPlus className="w-4 h-4" />
-                                New Folder
-                            </button>
-                        </div>
-                    </div>
-
-                    {/* Tab Navigation */}
-                    <div className="flex gap-2 mt-6 border-b border-gray-200 dark:border-slate-700">
-                        <button
-                            onClick={() => setActiveTab('drive')}
-                            className={`px-4 py-2 font-medium transition-all ${activeTab === 'drive'
-                                ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400'
-                                : 'text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white'
-                                }`}
-                        >
-                            <div className="flex items-center gap-2">
-                                <HardDrive className="w-4 h-4" />
-                                My Drive
-                            </div>
-                        </button>
-                        <button
-                            onClick={() => setActiveTab('recent')}
-                            className={`px-4 py-2 font-medium transition-all ${activeTab === 'recent'
-                                ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400'
-                                : 'text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white'
-                                }`}
-                        >
-                            <div className="flex items-center gap-2">
-                                <Clock className="w-4 h-4" />
-                                Recent
-                            </div>
-                        </button>
-                        <button
-                            onClick={() => setActiveTab('trash')}
-                            className={`px-4 py-2 font-medium transition-all ${activeTab === 'trash'
-                                ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400'
-                                : 'text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white'
-                                }`}
-                        >
-                            <div className="flex items-center gap-2">
-                                <Trash2 className="w-4 h-4" />
-                                Trash
-                            </div>
-                        </button>
-                    </div>
-
-                    {/* Storage Overview Bar */}
-                    {quota && (
-                        <div className="mt-4 p-4 bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20 rounded-xl border border-blue-200/50 dark:border-blue-800/50">
-                            <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center gap-2">
-                                    <HardDrive className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                                    <span className="text-sm font-semibold text-gray-700 dark:text-slate-300">
-                                        Storage: {storageService.formatBytes(quota.used_bytes)} of {storageService.formatBytes(quota.quota_bytes)}
-                                    </span>
-                                </div>
-                                <button
-                                    onClick={() => setShowStorageBreakdown(true)}
-                                    className="text-sm text-blue-600 dark:text-blue-400 hover:underline font-medium flex items-center gap-1"
-                                >
-                                    <BarChart3 className="w-4 h-4" />
-                                    View Details
-                                </button>
-                            </div>
-                            <div className="relative w-full h-3 bg-gray-200 dark:bg-slate-700 rounded-full overflow-hidden">
-                                <div
-                                    className="h-full rounded-full transition-all duration-500 bg-gradient-to-r from-blue-500 to-cyan-500"
-                                    style={{ width: `${quota.percentage_used}%` }}
-                                ></div>
-                            </div>
-                            <div className="flex items-center justify-between mt-2">
-                                <span className="text-xs text-gray-600 dark:text-slate-400">
-                                    {quota.percentage_used.toFixed(1)}% used
-                                </span>
-                                <span className="text-xs text-gray-600 dark:text-slate-400">
-                                    {storageService.formatBytes(quota.available_bytes)} available
-                                </span>
-                            </div>
-                        </div>
-                    )}
+    const SidebarContent = () => (
+        <>
+            <div className="p-6 flex items-center gap-3">
+                <div className="bg-blue-600 p-2 rounded-lg">
+                    <HardDrive className="w-6 h-6 text-white" />
                 </div>
-            </header>
+                <h1 className="text-xl font-bold text-gray-900 dark:text-white">
+                    JeeDrive
+                </h1>
+            </div>
 
-            <div className="flex-1 overflow-y-auto">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-                    {/* Optimization Suggestions */}
-                    {suggestions.length > 0 && (
-                        <div className="mb-6 space-y-3">
-                            {suggestions.slice(0, 2).map((suggestion, index) => (
-                                <div
-                                    key={index}
-                                    className="p-4 bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-xl border border-green-200/50 dark:border-green-800/50 flex items-start gap-3"
-                                >
-                                    <Sparkles className="w-5 h-5 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" />
-                                    <div className="flex-1">
-                                        <h3 className="font-semibold text-gray-900 dark:text-white">{suggestion.title}</h3>
-                                        <p className="text-sm text-gray-600 dark:text-slate-400 mt-1">{suggestion.description}</p>
-                                        <p className="text-sm text-green-600 dark:text-green-400 font-medium mt-2">
-                                            Potential savings: {storageService.formatBytes(suggestion.potential_savings)}
-                                        </p>
+            <nav className="flex-1 px-4 space-y-1">
+                <button
+                    onClick={() => { setActiveTab('drive'); setActiveFilter('all'); setIsMobileMenuOpen(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'drive' && activeFilter === 'all'
+                        ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
+                        : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
+                        }`}
+                >
+                    <HardDrive className="w-5 h-5" />
+                    My Drive
+                </button>
+                <button
+                    onClick={() => { setActiveTab('recent'); setActiveFilter('recent'); setIsMobileMenuOpen(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'recent'
+                        ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
+                        : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
+                        }`}
+                >
+                    <Clock className="w-5 h-5" />
+                    Recent
+                </button>
+                <button
+                    onClick={() => { setActiveTab('drive'); setActiveFilter('starred'); setIsMobileMenuOpen(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeFilter === 'starred'
+                        ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
+                        : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
+                        }`}
+                >
+                    <Star className="w-5 h-5" />
+                    Starred
+                </button>
+                <button
+                    onClick={() => { setActiveTab('trash'); setIsMobileMenuOpen(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'trash'
+                        ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
+                        : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
+                        }`}
+                >
+                    <Trash2 className="w-5 h-5" />
+                    Trash
+                </button>
+                <button
+                    onClick={() => { setActiveTab('drive'); setActiveFilter('shared'); setIsMobileMenuOpen(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeFilter === 'shared'
+                        ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
+                        : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
+                        }`}
+                >
+                    <Users className="w-5 h-5" />
+                    Shared with me
+                </button>
+            </nav>
+
+            {/* Storage Widget */}
+            {quota && (
+                <div className="p-4 mt-auto border-t border-gray-200 dark:border-slate-800">
+                    <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-700 p-4 shadow-sm">
+                        <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                                Storage
+                            </span>
+                            <span className="text-xs text-gray-500 dark:text-slate-400">
+                                {storageService.formatBytes(quota.used_bytes)} of {storageService.formatBytes(quota.quota_bytes)}
+                            </span>
+                        </div>
+                        <div className="relative w-full h-2 bg-gray-100 dark:bg-slate-700 rounded-full overflow-hidden mb-4">
+                            <div
+                                className="h-full rounded-full bg-blue-600"
+                                style={{ width: `${quota.percentage_used}%` }}
+                            ></div>
+                        </div>
+
+                        {/* Donut Chart Visualization (Mock) */}
+                        <div className="flex justify-center mb-4">
+                            <div className="relative w-24 h-24">
+                                <svg viewBox="0 0 36 36" className="w-full h-full transform -rotate-90">
+                                    <path
+                                        d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                                        fill="none"
+                                        stroke="#E5E7EB"
+                                        strokeWidth="4"
+                                        className="dark:stroke-slate-700"
+                                    />
+                                    <path
+                                        d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                                        fill="none"
+                                        stroke="#2563EB"
+                                        strokeWidth="4"
+                                        strokeDasharray={`${quota.percentage_used}, 100`}
+                                    />
+                                </svg>
+                            </div>
+                        </div>
+
+                        <button className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition shadow-sm">
+                            Upgrade
+                        </button>
+                    </div>
+                </div>
+            )}
+        </>
+    );
+
+    return (
+        <div className={`flex h-full ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
+            {/* Desktop Sidebar */}
+            <div className="hidden md:flex w-64 flex-shrink-0 bg-white dark:bg-slate-900 border-r border-gray-200 dark:border-slate-800 flex-col">
+                <SidebarContent />
+            </div>
+
+            {/* Mobile Sidebar Overlay */}
+            {isMobileMenuOpen && (
+                <div className="fixed inset-0 z-50 flex md:hidden">
+                    <div
+                        className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
+                        onClick={() => setIsMobileMenuOpen(false)}
+                    ></div>
+                    <div className="relative w-72 bg-white dark:bg-slate-900 h-full shadow-2xl flex flex-col animate-in slide-in-from-left duration-200">
+                        <button
+                            onClick={() => setIsMobileMenuOpen(false)}
+                            className="absolute top-4 right-4 p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg"
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
+                        <SidebarContent />
+                    </div>
+                </div>
+            )}
+
+            {/* Main Content */}
+            <div className="flex-1 flex flex-col overflow-hidden bg-gray-50 dark:bg-slate-950">
+                {/* Top Header */}
+                <header className="bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 px-4 sm:px-8 py-4 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                        <button
+                            onClick={() => setIsMobileMenuOpen(true)}
+                            className="md:hidden p-2 -ml-2 text-gray-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg"
+                        >
+                            <Menu className="w-6 h-6" />
+                        </button>
+                        <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white truncate">
+                            {activeTab === 'drive' ? 'My Drive' :
+                                activeTab === 'recent' ? 'Recent Files' :
+                                    activeTab === 'trash' ? 'Trash' : 'JeeDrive'}
+                        </h2>
+                    </div>
+                    <div className="flex items-center gap-2 sm:gap-3">
+                        <button
+                            onClick={() => setShowNewFolder(true)}
+                            className="hidden sm:flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-300 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-700 transition font-medium text-sm"
+                        >
+                            <FolderPlus className="w-4 h-4" />
+                            <span className="hidden lg:inline">New Folder</span>
+                        </button>
+                        <button
+                            onClick={() => setShowUpload(true)}
+                            className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition shadow-sm font-medium text-sm"
+                        >
+                            <Upload className="w-4 h-4" />
+                            <span className="hidden sm:inline">Upload</span>
+                        </button>
+                        {onSwitchToMail && (
+                            <button
+                                onClick={onSwitchToMail}
+                                className="ml-1 sm:ml-2 p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg"
+                                title="Back to Mail"
+                            >
+                                <Mail className="w-5 h-5" />
+                            </button>
+                        )}
+                    </div>
+                </header>
+
+                <div className="flex-1 overflow-y-auto p-8">
+                    {/* Smart Insights */}
+                    {activeTab === 'drive' && activeFilter === 'all' && suggestions.length > 0 && (
+                        <div className="mb-8">
+                            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Smart Insights</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                {suggestions.slice(0, 2).map((suggestion, index) => (
+                                    <div key={index} className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800 shadow-sm flex flex-col">
+                                        <div className="flex items-start gap-4 mb-4">
+                                            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                                                <Sparkles className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+                                            </div>
+                                            <div>
+                                                <h4 className="font-semibold text-gray-900 dark:text-white text-lg">{suggestion.title}</h4>
+                                                <p className="text-gray-500 dark:text-slate-400 text-sm mt-1">{suggestion.description}</p>
+                                                <p className="text-sm text-gray-500 dark:text-slate-400 mt-1">
+                                                    Potential savings: <span className="font-medium text-gray-900 dark:text-white">{storageService.formatBytes(suggestion.potential_savings)}</span>
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <button
+                                            onClick={() => {
+                                                if (suggestion.type === 'duplicate') setShowDuplicates(true);
+                                                else if (suggestion.type === 'large_file') setShowLargeFiles(true);
+                                            }}
+                                            className="mt-auto self-start px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition"
+                                        >
+                                            {suggestion.action}
+                                        </button>
                                     </div>
-                                    <button
-                                        onClick={() => {
-                                            if (suggestion.type === 'duplicate') {
-                                                setShowDuplicates(true);
-                                            } else if (suggestion.type === 'large_file') {
-                                                setShowLargeFiles(true);
-                                            } else {
-                                                alert(`${suggestion.action} - This feature will be implemented by the backend team.`);
-                                            }
-                                        }}
-                                        className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition text-sm font-medium"
-                                    >
-                                        {suggestion.action}
-                                    </button>
-                                </div>
-                            ))}
+                                ))}
+                            </div>
                         </div>
                     )}
 
                     {/* Toolbar */}
-                    <div className="mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                        {/* Breadcrumbs */}
-                        <div className="flex items-center gap-2 flex-wrap">
-                            {breadcrumbs.map((crumb, index) => (
-                                <div key={index} className="flex items-center gap-2">
-                                    {index > 0 && <ChevronRight className="w-4 h-4 text-gray-400" />}
-                                    <button
-                                        onClick={() => handleBreadcrumbClick(index)}
-                                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition ${index === breadcrumbs.length - 1
-                                            ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-medium'
-                                            : 'text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800'
-                                            }`}
-                                    >
-                                        {index === 0 && <Home className="w-4 h-4" />}
-                                        {crumb.name}
-                                    </button>
-                                </div>
-                            ))}
+                    <div className="mb-6 flex items-center gap-4">
+                        <div className="relative flex-1 max-w-2xl">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                            <input
+                                type="text"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                placeholder="Search in Drive..."
+                                className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent shadow-sm"
+                            />
                         </div>
-
-                        {/* View Controls */}
-                        <div className="flex items-center gap-2">
-                            <div className="relative">
-                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                                <input
-                                    type="text"
-                                    value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                    placeholder="Search files..."
-                                    className="pl-10 pr-4 py-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                />
-                            </div>
-
-                            <div className="flex items-center gap-1 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg p-1">
-                                <button
-                                    onClick={() => setViewMode('grid')}
-                                    className={`p-2 rounded transition ${viewMode === 'grid'
-                                        ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                                        : 'text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700'
-                                        }`}
-                                >
-                                    <Grid3x3 className="w-4 h-4" />
-                                </button>
-                                <button
-                                    onClick={() => setViewMode('list')}
-                                    className={`p-2 rounded transition ${viewMode === 'list'
-                                        ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-                                        : 'text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700'
-                                        }`}
-                                >
-                                    <List className="w-4 h-4" />
-                                </button>
-                            </div>
+                        <div className="flex items-center gap-1 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-lg p-1 shadow-sm">
+                            <button
+                                onClick={() => setViewMode('grid')}
+                                className={`p-2 rounded transition ${viewMode === 'grid'
+                                    ? 'bg-gray-100 dark:bg-slate-800 text-gray-900 dark:text-white'
+                                    : 'text-gray-500 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-800'
+                                    }`}
+                            >
+                                <Grid3x3 className="w-5 h-5" />
+                            </button>
+                            <button
+                                onClick={() => setViewMode('list')}
+                                className={`p-2 rounded transition ${viewMode === 'list'
+                                    ? 'bg-gray-100 dark:bg-slate-800 text-gray-900 dark:text-white'
+                                    : 'text-gray-500 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-800'
+                                    }`}
+                            >
+                                <List className="w-5 h-5" />
+                            </button>
                         </div>
                     </div>
 
-                    {/* Quick Filters */}
-                    <div className="mb-6 flex items-center gap-2 overflow-x-auto pb-2">
-                        {[
-                            { id: 'all', label: 'All Files', icon: File },
-                            { id: 'starred', label: 'Starred', icon: Star },
-                            { id: 'recent', label: 'Recent', icon: Clock },
-                            { id: 'shared', label: 'Shared', icon: Users }
-                        ].map((filter) => {
-                            const Icon = filter.icon;
-                            return (
-                                <button
-                                    key={filter.id}
-                                    onClick={() => setActiveFilter(filter.id as any)}
-                                    className={`flex items-center gap-2 px-4 py-2 rounded-lg transition whitespace-nowrap ${activeFilter === filter.id
-                                        ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border-2 border-blue-500'
-                                        : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-slate-400 border border-gray-200 dark:border-slate-700 hover:border-blue-500'
-                                        }`}
-                                >
-                                    <Icon className="w-4 h-4" />
-                                    {filter.label}
-                                </button>
-                            );
-                        })}
-                    </div>
-
-                    {/* Tab Content */}
+                    {/* Content Area */}
                     {activeTab === 'drive' && (
                         <>
-                            {/* Files and Folders Grid/List */}
-                            {viewMode === 'grid' ? (
-                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                                    {/* Folders */}
-                                    {activeFilter === 'all' && folders.map((folder) => (
-                                        <div
-                                            key={`folder-${folder.id}`}
-                                            onClick={() => handleFolderClick(folder)}
-                                            className="group p-4 bg-white dark:bg-slate-800 rounded-xl border-2 border-gray-200 dark:border-slate-700 hover:border-blue-500 dark:hover:border-blue-500 transition-all duration-300 cursor-pointer hover:shadow-lg hover:scale-105"
-                                        >
-                                            <div className="flex flex-col items-center text-center">
-                                                <Folder
-                                                    className="w-12 h-12 mb-3 group-hover:scale-110 transition-transform"
-                                                    style={{ color: folder.color || '#6b7280' }}
-                                                />
-                                                <p className="text-sm font-medium text-gray-900 dark:text-white truncate w-full">
-                                                    {folder.name}
-                                                </p>
-                                                <p className="text-xs text-gray-500 dark:text-slate-400 mt-1">
-                                                    {folder.file_count} files
-                                                </p>
-                                            </div>
-                                        </div>
-                                    ))}
-
-                                    {/* Files */}
-                                    {sortedFiles.map((file) => (
-                                        <div
-                                            key={`file-${file.id}`}
-                                            onClick={() => {
-                                                setPreviewFile(file);
-                                                setShowPreview(true);
-                                            }}
-                                            className="group relative p-4 bg-white dark:bg-slate-800 rounded-xl border-2 border-gray-200 dark:border-slate-700 hover:border-blue-500 dark:hover:border-blue-500 transition-all duration-300 hover:shadow-lg hover:scale-105 cursor-pointer"
-                                        >
-                                            <div className="flex flex-col items-center text-center">
-                                                {getFileIcon(file)}
-                                                <p className="text-sm font-medium text-gray-900 dark:text-white truncate w-full mt-3">
-                                                    {file.name}
-                                                </p>
-                                                <p className="text-xs text-gray-500 dark:text-slate-400 mt-1">
-                                                    {driveService.formatFileSize(file.size_bytes)}
-                                                </p>
-                                                {file.tags.length > 0 && (
-                                                    <div className="flex flex-wrap gap-1 mt-2">
-                                                        {file.tags.slice(0, 2).map((tag, idx) => (
-                                                            <span
-                                                                key={idx}
-                                                                className="text-xs px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full"
-                                                            >
-                                                                {tag}
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            {/* Quick Actions */}
-                                            <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        handleStarFile(file.id, !file.is_starred);
-                                                    }}
-                                                    className="p-1.5 bg-white dark:bg-slate-700 rounded-lg shadow-lg hover:scale-110 transition"
-                                                >
-                                                    <Star
-                                                        className={`w-4 h-4 ${file.is_starred
-                                                            ? 'fill-yellow-400 text-yellow-400'
-                                                            : 'text-gray-400'
-                                                            }`}
-                                                    />
-                                                </button>
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        setShareFile(file);
-                                                        setShowShare(true);
-                                                    }}
-                                                    className="p-1.5 bg-white dark:bg-slate-700 rounded-lg shadow-lg hover:scale-110 transition"
-                                                    title="Share"
-                                                >
-                                                    <Share2 className="w-4 h-4 text-blue-500" />
-                                                </button>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : (
-                                <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-700 overflow-hidden">
+                            {viewMode === 'list' ? (
+                                <div className="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 shadow-sm overflow-hidden">
                                     <table className="w-full">
-                                        <thead className="bg-gray-50 dark:bg-slate-900 border-b border-gray-200 dark:border-slate-700">
+                                        <thead className="bg-gray-50 dark:bg-slate-800/50 border-b border-gray-200 dark:border-slate-800">
                                             <tr>
-                                                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 dark:text-slate-300">Name</th>
-                                                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 dark:text-slate-300">Size</th>
-                                                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 dark:text-slate-300">Modified</th>
-                                                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 dark:text-slate-300">Actions</th>
+                                                <th className="text-left py-3 px-6 text-xs font-semibold text-gray-500 dark:text-slate-400 uppercase tracking-wider">Name</th>
+                                                <th className="hidden md:table-cell text-left py-3 px-6 text-xs font-semibold text-gray-500 dark:text-slate-400 uppercase tracking-wider">Owner</th>
+                                                <th className="hidden lg:table-cell text-left py-3 px-6 text-xs font-semibold text-gray-500 dark:text-slate-400 uppercase tracking-wider">Last Modified</th>
+                                                <th className="hidden sm:table-cell text-left py-3 px-6 text-xs font-semibold text-gray-500 dark:text-slate-400 uppercase tracking-wider">File Size</th>
+                                                <th className="text-right py-3 px-6 text-xs font-semibold text-gray-500 dark:text-slate-400 uppercase tracking-wider">Actions</th>
                                             </tr>
                                         </thead>
-                                        <tbody>
+                                        <tbody className="divide-y divide-gray-100 dark:divide-slate-800">
                                             {activeFilter === 'all' && folders.map((folder) => (
                                                 <tr
                                                     key={`folder-${folder.id}`}
                                                     onClick={() => handleFolderClick(folder)}
-                                                    className="border-b border-gray-100 dark:border-slate-700 hover:bg-blue-50 dark:hover:bg-blue-900/20 cursor-pointer transition"
+                                                    className="hover:bg-gray-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors"
                                                 >
-                                                    <td className="py-3 px-4">
+                                                    <td className="py-4 px-6">
                                                         <div className="flex items-center gap-3">
-                                                            <Folder className="w-5 h-5" style={{ color: folder.color || '#6b7280' }} />
-                                                            <span className="font-medium text-gray-900 dark:text-white">{folder.name}</span>
+                                                            <Folder className="w-5 h-5 text-gray-400" fill="currentColor" style={{ color: folder.color || '#9CA3AF' }} />
+                                                            <span className="font-medium text-gray-900 dark:text-white truncate max-w-[150px] sm:max-w-xs">{folder.name}</span>
                                                         </div>
                                                     </td>
-                                                    <td className="py-3 px-4 text-sm text-gray-600 dark:text-slate-400">
-                                                        {folder.file_count} files
-                                                    </td>
-                                                    <td className="py-3 px-4 text-sm text-gray-600 dark:text-slate-400">
-                                                        {new Date(folder.updated_at).toLocaleDateString()}
-                                                    </td>
-                                                    <td className="py-3 px-4">
-                                                        <button className="p-1 hover:bg-gray-100 dark:hover:bg-slate-700 rounded transition">
-                                                            <MoreVertical className="w-4 h-4 text-gray-600 dark:text-slate-400" />
+                                                    <td className="hidden md:table-cell py-4 px-6 text-sm text-gray-500 dark:text-slate-400">Me</td>
+                                                    <td className="hidden lg:table-cell py-4 px-6 text-sm text-gray-500 dark:text-slate-400">{new Date(folder.updated_at).toLocaleDateString()}</td>
+                                                    <td className="hidden sm:table-cell py-4 px-6 text-sm text-gray-500 dark:text-slate-400">{folder.file_count} files</td>
+                                                    <td className="py-4 px-6 text-right">
+                                                        <button className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                                                            <MoreVertical className="w-5 h-5" />
                                                         </button>
                                                     </td>
                                                 </tr>
@@ -554,49 +468,37 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                                             {sortedFiles.map((file) => (
                                                 <tr
                                                     key={`file-${file.id}`}
-                                                    className="border-b border-gray-100 dark:border-slate-700 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition"
+                                                    onClick={() => { setPreviewFile(file); setShowPreview(true); }}
+                                                    className="hover:bg-gray-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors"
                                                 >
-                                                    <td className="py-3 px-4">
+                                                    <td className="py-4 px-6">
                                                         <div className="flex items-center gap-3">
                                                             {getFileIcon(file)}
-                                                            <div>
-                                                                <p className="font-medium text-gray-900 dark:text-white">{file.name}</p>
+                                                            <div className="min-w-0">
+                                                                <p className="font-medium text-gray-900 dark:text-white truncate max-w-[150px] sm:max-w-xs">{file.name}</p>
                                                                 {file.tags.length > 0 && (
-                                                                    <div className="flex gap-1 mt-1">
-                                                                        {file.tags.slice(0, 3).map((tag, idx) => (
-                                                                            <span
-                                                                                key={idx}
-                                                                                className="text-xs px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full"
-                                                                            >
-                                                                                {tag}
-                                                                            </span>
+                                                                    <div className="flex gap-1 mt-0.5">
+                                                                        {file.tags.slice(0, 2).map((tag, idx) => (
+                                                                            <span key={idx} className="text-[10px] px-1.5 py-0.5 bg-gray-100 dark:bg-slate-800 text-gray-500 rounded-full">{tag}</span>
                                                                         ))}
                                                                     </div>
                                                                 )}
                                                             </div>
                                                         </div>
                                                     </td>
-                                                    <td className="py-3 px-4 text-sm text-gray-600 dark:text-slate-400">
-                                                        {driveService.formatFileSize(file.size_bytes)}
-                                                    </td>
-                                                    <td className="py-3 px-4 text-sm text-gray-600 dark:text-slate-400">
-                                                        {new Date(file.updated_at).toLocaleDateString()}
-                                                    </td>
-                                                    <td className="py-3 px-4">
-                                                        <div className="flex items-center gap-2">
+                                                    <td className="hidden md:table-cell py-4 px-6 text-sm text-gray-500 dark:text-slate-400">Me</td>
+                                                    <td className="hidden lg:table-cell py-4 px-6 text-sm text-gray-500 dark:text-slate-400">{new Date(file.updated_at).toLocaleDateString()}</td>
+                                                    <td className="hidden sm:table-cell py-4 px-6 text-sm text-gray-500 dark:text-slate-400">{driveService.formatFileSize(file.size_bytes)}</td>
+                                                    <td className="py-4 px-6 text-right">
+                                                        <div className="flex items-center justify-end gap-2">
                                                             <button
-                                                                onClick={() => handleStarFile(file.id, !file.is_starred)}
-                                                                className="p-1 hover:bg-gray-100 dark:hover:bg-slate-700 rounded transition"
+                                                                onClick={(e) => { e.stopPropagation(); handleStarFile(file.id, !file.is_starred); }}
+                                                                className="text-gray-400 hover:text-yellow-400"
                                                             >
-                                                                <Star
-                                                                    className={`w-4 h-4 ${file.is_starred
-                                                                        ? 'fill-yellow-400 text-yellow-400'
-                                                                        : 'text-gray-400'
-                                                                        }`}
-                                                                />
+                                                                <Star className={`w-5 h-5 ${file.is_starred ? 'fill-yellow-400 text-yellow-400' : ''}`} />
                                                             </button>
-                                                            <button className="p-1 hover:bg-gray-100 dark:hover:bg-slate-700 rounded transition">
-                                                                <MoreVertical className="w-4 h-4 text-gray-600 dark:text-slate-400" />
+                                                            <button className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                                                                <MoreVertical className="w-5 h-5" />
                                                             </button>
                                                         </div>
                                                     </td>
@@ -605,92 +507,60 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                                         </tbody>
                                     </table>
                                 </div>
-                            )}
-
-                            {/* Empty State */}
-                            {sortedFiles.length === 0 && folders.length === 0 && (
-                                <div className="text-center py-16">
-                                    <div className="w-24 h-24 bg-gray-200 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4">
-                                        <HardDrive className="w-12 h-12 text-gray-400 dark:text-slate-600" />
-                                    </div>
-                                    <p className="text-gray-500 dark:text-slate-400 text-lg">No files or folders here</p>
-                                    <p className="text-gray-400 dark:text-slate-500 text-sm mt-2">Upload files or create folders to get started</p>
+                            ) : (
+                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
+                                    {activeFilter === 'all' && folders.map((folder) => (
+                                        <div
+                                            key={`folder-${folder.id}`}
+                                            onClick={() => handleFolderClick(folder)}
+                                            className="group p-4 bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 hover:shadow-md transition-all cursor-pointer"
+                                        >
+                                            <div className="flex flex-col items-center text-center">
+                                                <Folder className="w-12 h-12 mb-3 text-blue-500" fill="currentColor" style={{ color: folder.color || '#3B82F6' }} />
+                                                <p className="font-medium text-gray-900 dark:text-white truncate w-full">{folder.name}</p>
+                                                <p className="text-sm text-gray-500 dark:text-slate-400 mt-1">{folder.file_count} files</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {sortedFiles.map((file) => (
+                                        <div
+                                            key={`file-${file.id}`}
+                                            onClick={() => { setPreviewFile(file); setShowPreview(true); }}
+                                            className="group relative p-4 bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 hover:shadow-md transition-all cursor-pointer"
+                                        >
+                                            <div className="flex flex-col items-center text-center">
+                                                {getFileIcon(file)}
+                                                <p className="font-medium text-gray-900 dark:text-white truncate w-full mt-3">{file.name}</p>
+                                                <p className="text-sm text-gray-500 dark:text-slate-400 mt-1">{driveService.formatFileSize(file.size_bytes)}</p>
+                                            </div>
+                                            <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); handleStarFile(file.id, !file.is_starred); }}
+                                                    className="p-1.5 bg-white dark:bg-slate-800 rounded-full shadow-sm hover:bg-gray-50"
+                                                >
+                                                    <Star className={`w-4 h-4 ${file.is_starred ? 'fill-yellow-400 text-yellow-400' : 'text-gray-400'}`} />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
                                 </div>
                             )}
                         </>
                     )}
 
-                    {/* Recent Files Tab */}
-                    {activeTab === 'recent' && (
-                        <RecentFilesView
-                            onFileClick={(file) => {
-                                setPreviewFile(file);
-                                setShowPreview(true);
-                            }}
-                        />
-                    )}
-
-                    {/* Trash Tab */}
-                    {activeTab === 'trash' && (
-                        <TrashView
-                            isOpen={true}
-                            onClose={() => setActiveTab('drive')}
-                            onFileRestored={() => loadDriveData()}
-                        />
-                    )}
+                    {activeTab === 'recent' && <RecentFilesView />}
+                    {activeTab === 'trash' && <TrashView />}
                 </div>
 
                 {/* Modals */}
-                <StorageBreakdownModal
-                    isOpen={showStorageBreakdown}
-                    onClose={() => setShowStorageBreakdown(false)}
-                    userId={user?.id || 1}
-                />
-
-                <DuplicateFilesModal
-                    isOpen={showDuplicates}
-                    onClose={() => setShowDuplicates(false)}
-                    userId={user?.id || 1}
-                    onRefresh={loadDriveData}
-                />
-
-                <LargeFilesModal
-                    isOpen={showLargeFiles}
-                    onClose={() => setShowLargeFiles(false)}
-                    userId={user?.id || 1}
-                    onRefresh={loadDriveData}
-                />
-
-                <FileUploadModal
-                    isOpen={showUpload}
-                    onClose={() => setShowUpload(false)}
-                    onRefresh={loadDriveData}
-                />
-
-                <NewFolderModal
-                    isOpen={showNewFolder}
-                    onClose={() => setShowNewFolder(false)}
-                    onRefresh={loadDriveData}
-                    currentFolder={currentFolder}
-                />
-
-                <StorageAnalytics
-                    isOpen={showAnalytics}
-                    onClose={() => setShowAnalytics(false)}
-                />
-
-                <FilePreviewModal
-                    isOpen={showPreview}
-                    onClose={() => setShowPreview(false)}
-                    file={previewFile}
-                    allFiles={files}
-                />
-
-                <ShareFileModal
-                    isOpen={showShare}
-                    onClose={() => setShowShare(false)}
-                    file={shareFile}
-                />
+                <StorageBreakdownModal isOpen={showStorageBreakdown} onClose={() => setShowStorageBreakdown(false)} userId={user?.id || 1} />
+                <DuplicateFilesModal isOpen={showDuplicates} onClose={() => setShowDuplicates(false)} userId={user?.id || 1} onRefresh={loadDriveData} />
+                <LargeFilesModal isOpen={showLargeFiles} onClose={() => setShowLargeFiles(false)} userId={user?.id || 1} onRefresh={loadDriveData} />
+                <FileUploadModal isOpen={showUpload} onClose={() => setShowUpload(false)} onRefresh={loadDriveData} />
+                <NewFolderModal isOpen={showNewFolder} onClose={() => setShowNewFolder(false)} onRefresh={loadDriveData} currentFolder={currentFolder} />
+                <StorageAnalytics isOpen={showAnalytics} onClose={() => setShowAnalytics(false)} />
+                <FilePreviewModal isOpen={showPreview} onClose={() => setShowPreview(false)} file={previewFile} allFiles={files} />
+                <ShareFileModal isOpen={showShare} onClose={() => setShowShare(false)} file={shareFile} />
             </div>
         </div>
     );
