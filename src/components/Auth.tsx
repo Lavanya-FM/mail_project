@@ -58,19 +58,20 @@ export default function Auth() {
 
     setCheckingUsername(true);
     try {
-      // For now, simulate username check (replace with actual API call)
-      const existingUsernames = ['admin', 'user', 'test', 'demo', 'john', 'jane'];
+      const emailToCheck = `${username}@jeemail.in`;
+      const { emailService } = await import('../lib/emailService');
+      const result = await emailService.checkEmailExists(emailToCheck);
 
-      setTimeout(() => {
-        if (existingUsernames.includes(username.toLowerCase())) {
-          setUsernameError('Username already taken');
-        } else {
-          setUsernameError('');
-        }
-        setCheckingUsername(false);
-      }, 500);
+      if (result.data && result.data.exists) {
+        setUsernameError('Username already taken');
+      } else {
+        setUsernameError('');
+      }
     } catch (err) {
+      console.error("Error checking username:", err);
+      // Don't block user on error, just clear error
       setUsernameError('');
+    } finally {
       setCheckingUsername(false);
     }
   };
@@ -195,8 +196,8 @@ export default function Auth() {
                   <div key={step} className="flex items-center">
                     <div
                       className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all duration-300 ${step <= currentStep
-                          ? 'bg-blue-500 text-white'
-                          : 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
                         }`}
                     >
                       {step}
@@ -377,8 +378,8 @@ export default function Auth() {
                         <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                           <div
                             className={`h-2 rounded-full transition-all duration-300 ${passwordStrength <= 2 ? 'bg-red-500' :
-                                passwordStrength <= 4 ? 'bg-yellow-500' :
-                                  'bg-green-500'
+                              passwordStrength <= 4 ? 'bg-yellow-500' :
+                                'bg-green-500'
                               }`}
                             style={{ width: `${(passwordStrength / 6) * 100}%` }}
                           ></div>
@@ -400,8 +401,8 @@ export default function Auth() {
                             setPasswordMatch(password === e.target.value);
                           }}
                           className={`w-full pl-11 pr-12 py-3 bg-gray-100 dark:bg-white/10 border ${confirmPassword && !passwordMatch
-                              ? 'border-red-300 dark:border-red-500'
-                              : 'border-gray-300 dark:border-white/20'
+                            ? 'border-red-300 dark:border-red-500'
+                            : 'border-gray-300 dark:border-white/20'
                             } rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition hover:border-blue-400 dark:hover:border-blue-400/50 ${animations.fadeInLeft} delay-250`}
                           placeholder="••••••••"
                           required

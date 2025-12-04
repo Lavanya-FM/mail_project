@@ -31,38 +31,35 @@ export interface UserAnalytics {
     p2p_transfers: number;
 }
 
-// Mock superadmin credentials - Replace with actual auth
-const SUPERADMIN_EMAIL = '';
-const SUPERADMIN_PASSWORD = '';
-
-// Mock users data
+// Mock users data (empty for now, should be replaced with API calls)
 const MOCK_USERS: User[] = [];
 
-// Mock P2P transfers
+// Mock P2P transfers (empty for now)
 const MOCK_P2P_TRANSFERS: P2PTransfer[] = [];
 
 /**
- * Superadmin login (mock)
+ * Superadmin login (real)
  */
 export async function superadminLogin(email: string, password: string) {
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 500));
+    const { authService } = await import('./authService');
+    const result = await authService.login(email, password);
 
-    if (email === SUPERADMIN_EMAIL && password === SUPERADMIN_PASSWORD) {
-        const superadmin = {
-            id: 999,
-            name: 'Super Admin',
-            email: SUPERADMIN_EMAIL,
-            role: 'superadmin'
-        };
-
-        // Store in localStorage
-        localStorage.setItem('superadmin', JSON.stringify(superadmin));
-
-        return { success: true, user: superadmin };
+    if (result.success && result.user) {
+        // In a real app, we would check result.user.role === 'superadmin'
+        // For now, we enforce the email check here or assume the backend handles it.
+        // If the user managed to log in with this email, we treat them as superadmin.
+        if (email === 'superadmin@jeemail.com') {
+            const superadmin = {
+                ...result.user,
+                role: 'superadmin'
+            };
+            localStorage.setItem('superadmin', JSON.stringify(superadmin));
+            return { success: true, user: superadmin };
+        }
+        return { success: false, error: 'Not authorized as superadmin' };
     }
 
-    return { success: false, error: 'Invalid credentials' };
+    return result;
 }
 
 /**

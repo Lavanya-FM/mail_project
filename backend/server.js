@@ -100,18 +100,25 @@ app.get("/api/users/email/:email", async (req, res) => {
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
   try {
-    // Mock login for testing - accept any email/password
-    console.log("Mock login attempt:", email);
+    const [rows] = await db.query("SELECT * FROM users WHERE email = ? LIMIT 1", [email]);
 
-    // Simple mock user
-    const mockUser = {
-      id: 1,
-      name: email.split('@')[0] || "Test User",
-      email: email
-    };
+    if (rows.length === 0) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    const user = rows[0];
+    const match = await bcrypt.compare(password, user.password);
+
+    if (!match) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
 
     res.json({
-      user: mockUser
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email
+      }
     });
   } catch (err) {
     console.error("LOGIN ERROR:", err && err.message);

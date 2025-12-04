@@ -14,6 +14,9 @@ import ThemeToggle from './ThemeToggle';
 import GamificationBadges from './GamificationBadges';
 import UserProfile from './UserProfile';
 import AddAccountModal from './AddAccountModal';
+import ActivityLogModal from './ActivityLogModal';
+import PrivacyPolicyModal from './PrivacyPolicyModal';
+import TermsOfServiceModal from './TermsOfServiceModal';
 import { animations } from '../utils/animations';
 import { Email, Folder } from '../types/email';
 
@@ -63,6 +66,9 @@ export default function MailLayout() {
   const [showBadges, setShowBadges] = useState(true);
   const [showUserProfile, setShowUserProfile] = useState(false);
   const [showAddAccount, setShowAddAccount] = useState(false);
+  const [showActivityLog, setShowActivityLog] = useState(false);
+  const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
+  const [showTermsOfService, setShowTermsOfService] = useState(false);
   const [userProfileTab, setUserProfileTab] = useState<'overview' | 'carbon' | 'settings'>('carbon');
   const [labels, setLabels] = useState([
     { id: 1, name: 'Personal', color: '#10b981' },
@@ -479,14 +485,7 @@ export default function MailLayout() {
                   </div>
                 </div>
 
-                {/* Footer Links */}
-                <div className="p-3 border-t border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/50">
-                  <div className="flex justify-center gap-4 text-xs text-gray-500 dark:text-slate-500">
-                    <button className="hover:text-gray-700 dark:hover:text-slate-300 transition">Privacy Policy</button>
-                    <span>•</span>
-                    <button className="hover:text-gray-700 dark:hover:text-slate-300 transition">Terms of Service</button>
-                  </div>
-                </div>
+
               </div>
             )}
           </div>
@@ -733,6 +732,9 @@ export default function MailLayout() {
                 handleOpenMailInTab(email);
               }}
               onRefresh={refreshEmails}
+              onViewActivity={() => setShowActivityLog(true)}
+              onViewPrivacy={() => setShowPrivacyPolicy(true)}
+              onViewTerms={() => setShowTermsOfService(true)}
             />
           </div>
           <div className="flex-1 flex flex-col min-w-0">
@@ -870,6 +872,24 @@ export default function MailLayout() {
           onSuccess={handleAccountAdded}
         />
       )}
+
+      {/* Activity Log Modal */}
+      <ActivityLogModal
+        isOpen={showActivityLog}
+        onClose={() => setShowActivityLog(false)}
+      />
+
+      {/* Privacy Policy Modal */}
+      <PrivacyPolicyModal
+        isOpen={showPrivacyPolicy}
+        onClose={() => setShowPrivacyPolicy(false)}
+      />
+
+      {/* Terms of Service Modal */}
+      <TermsOfServiceModal
+        isOpen={showTermsOfService}
+        onClose={() => setShowTermsOfService(false)}
+      />
     </div>
   );
 }

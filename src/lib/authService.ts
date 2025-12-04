@@ -85,13 +85,39 @@ export function isAuthenticated() {
   return !!getCurrentUser();
 }
 
+export interface ActivityLog {
+  access_type: string;
+  location: string;
+  ip: string;
+  date: string;
+  details?: string;
+  is_current?: boolean;
+}
+
+export async function getRecentActivity(): Promise<ActivityLog[]> {
+  // In a real app, this would fetch from API
+  // return fetch(`${API}/activity`).then(res => res.json());
+
+  // Return current session for now
+  return [
+    {
+      access_type: 'Browser (Chrome)',
+      location: 'India (TN)', // Placeholder
+      ip: '127.0.0.1',
+      date: new Date().toISOString(),
+      is_current: true
+    }
+  ];
+}
+
 // convenience object used elsewhere in the app
 export const authService = {
   getCurrentUser,
   login,
   register,
   logout,
-  isAuthenticated
+  isAuthenticated,
+  getRecentActivity
 };
 
 export default authService;
