@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react';
-import { User } from '@supabase/supabase-js';
+import { User, AuthChangeEvent, Session } from '@supabase/supabase-js';
 import { supabase, Profile } from '../lib/supabase';
 import { createSampleEmails } from '../utils/sampleData';
 
@@ -20,7 +20,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(({ data: { session } }: { data: { session: Session | null } }) => {
       setUser(session?.user ?? null);
       if (session?.user) {
         loadProfile(session.user.id);
@@ -29,7 +29,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event: AuthChangeEvent, session: Session | null) => {
       (async () => {
         setUser(session?.user ?? null);
         if (session?.user) {
@@ -51,10 +51,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .eq('id', userId)
         .maybeSingle();
 
-      if (error) throw error;
-      setProfile(data);
+      if (error && error.code !== 'PGRST116') { // PGRST116 is "not found" error
+        console.error('Error loading profile:', error);
+        throw error;
+      }
+      
+      // If profile doesn't exist, create it
+      if (!data) {
+        const { data: newProfile, error: insertError } = await supabase
+          .from('profiles')
+          .insert({
+            id: userId,
+            email: '', // Will be updated when user signs in
+            full_name: null,
+            phone: null,
+            role: null
+          })
+          .select()
+          .single();
+          
+        if (insertError) {
+          console.error('Error creating profile:', insertError);
+          throw insertError;
+        }
+        
+        setProfile(newProfile);
+      } else {
+        setProfile(data);
+      }
     } catch (error) {
-      console.error('Error loading profile:', error);
+      console.error('Error in loadProfile:', error);
     } finally {
       setLoading(false);
     }
@@ -69,11 +95,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (error) throw error;
 
     if (data.user) {
-      await supabase.from('profiles').insert({
-        id: data.user.id,
-        email,
-        full_name: fullName,
-      });
+      // Create profile without updated_at
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .insert({
+          id: data.user.id,
+          email,
+          full_name: fullName,
+          phone: null,
+          role: null
+        });
+        
+      if (profileError) {
+        console.error('Profile upsert failed:', profileError);
+        // Don't throw error - user account is created, profile can be fixed later
+      }
 
       const defaultFolders = [
         { name: 'Inbox', icon: 'inbox', color: '#3B82F6', position: 0, is_system: true },
@@ -89,7 +125,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }))
       ).select();
 
-      const inboxFolder = folders?.find(f => f.name === 'Inbox');
+      const inboxFolder = folders?.find((f: { name: string }) => f.name === 'Inbox');
       if (inboxFolder) {
         await createSampleEmails(data.user.id, inboxFolder.id);
       }

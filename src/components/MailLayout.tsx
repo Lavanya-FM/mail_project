@@ -69,6 +69,8 @@ export default function MailLayout() {
     { id: 2, name: 'Work', color: '#3b82f6' },
     { id: 3, name: 'Travel', color: '#f59e0b' },
   ]);
+  const [editingLabelId, setEditingLabelId] = useState<number | null>(null);
+  const [editLabelName, setEditLabelName] = useState('');
   const [openedMailTabs, setOpenedMailTabs] = useState<Email[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [composeWindows, setComposeWindows] = useState<string[]>([]);
@@ -140,32 +142,32 @@ export default function MailLayout() {
     if (folders.length > 0 && !selectedFolder) {
       const inboxFolder = folders.find((f) => (f.name || '').toString().toLowerCase() === 'inbox');
       if (inboxFolder) {
-	setSelectedFolder({ ...inboxFolder, id: Number(inboxFolder.id) });
+        setSelectedFolder({ ...inboxFolder, id: Number(inboxFolder.id) });
       } else {
-	setSelectedFolder({ ...folders[0], id: Number(folders[0].id) });
+        setSelectedFolder({ ...folders[0], id: Number(folders[0].id) });
       }
     }
   }, [folders, selectedFolder]);
 
-const loadFolders = async () => {
-  try {
-    if (!profile?.id) return;
-    const resp = await emailService.getFolders(profile.id);
-    if (resp.error) {
-      console.error('Error loading folders:', resp.error);
+  const loadFolders = async () => {
+    try {
+      if (!profile?.id) return;
+      const resp = await emailService.getFolders(profile.id);
+      if (resp.error) {
+        console.error('Error loading folders:', resp.error);
+        setFoldersRaw([]);
+      } else {
+        setFoldersRaw(resp.data ?? []);
+        localStorage.setItem("folders", JSON.stringify(resp.data ?? []));  // <-- FIXED
+      }
+    } catch (err) {
+      console.error('Error loading folders:', err);
       setFoldersRaw([]);
-    } else {
-      setFoldersRaw(resp.data ?? []);
-      localStorage.setItem("folders", JSON.stringify(resp.data ?? []));  // <-- FIXED
+    } finally {
+      setFoldersLoaded(true);
+      setLoading(false);
     }
-  } catch (err) {
-    console.error('Error loading folders:', err);
-    setFoldersRaw([]);
-  } finally {
-    setFoldersLoaded(true);
-    setLoading(false);
-  }
-};
+  };
 
   const loadEmails = async (folderId?: string | number) => {
     try {
@@ -215,7 +217,7 @@ const loadFolders = async () => {
     const existingAccounts = JSON.parse(localStorage.getItem('additionalAccounts') || '[]');
     existingAccounts.push(account);
     localStorage.setItem('additionalAccounts', JSON.stringify(existingAccounts));
-    
+
     // Show success message or switch to the new account
     console.log('Account added:', account);
   };
@@ -236,9 +238,9 @@ const loadFolders = async () => {
   };
 
   const handleCloseTab = (emailId: string) => {
-    setOpenedMailTabs(openedMailTabs.filter(tab => tab.id !== emailId));
+    setOpenedMailTabs(openedMailTabs.filter(tab => String(tab.id) !== emailId));
     if (activeTabId === emailId) {
-      const remainingTabs = openedMailTabs.filter(tab => tab.id !== emailId);
+      const remainingTabs = openedMailTabs.filter(tab => String(tab.id) !== emailId);
       if (remainingTabs.length > 0) {
         setActiveTabId(String(remainingTabs[0].id));
       } else {
@@ -281,7 +283,7 @@ const loadFolders = async () => {
 
   const handleFolderClick = (folderType: string, folder: Folder) => {
     setSelectedFolder(folder);
-    
+
     // Load emails based on folder type
     if (folderType === 'starred') {
       loadStarredEmails();
@@ -312,6 +314,32 @@ const loadFolders = async () => {
     } catch (err) {
       console.error('Error loading starred emails:', err);
       setEmailsRaw([]);
+    }
+  };
+
+  const handleAddLabel = () => {
+    const newId = labels.length > 0 ? Math.max(...labels.map(l => l.id)) + 1 : 1;
+    const newLabel = {
+      id: newId,
+      name: 'New Label',
+      color: ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'][labels.length % 5]
+    };
+    setLabels([...labels, newLabel]);
+    setEditingLabelId(newId);
+    setEditLabelName('New Label');
+  };
+
+  const handleLabelRename = (id: number) => {
+    if (!editLabelName.trim()) return;
+    setLabels(labels.map(l => l.id === id ? { ...l, name: editLabelName } : l));
+    setEditingLabelId(null);
+  };
+
+  const handleLabelEditKeyDown = (e: React.KeyboardEvent, id: number) => {
+    if (e.key === 'Enter') {
+      handleLabelRename(id);
+    } else if (e.key === 'Escape') {
+      setEditingLabelId(null);
     }
   };
 
@@ -436,7 +464,7 @@ const loadFolders = async () => {
 
                   {/* Actions */}
                   <div className="p-2 space-y-1">
-                    <button 
+                    <button
                       onClick={handleAddAccount}
                       className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg transition flex items-center gap-3"
                     >
@@ -493,7 +521,7 @@ const loadFolders = async () => {
           <div className="px-2 space-y-1">
             {['inbox', 'starred', 'snoozed', 'sent', 'drafts', 'spam', 'trash'].map((folderType) => {
               let folder = folders.find((f) => (f.name || '').toString().toLowerCase() === folderType);
-              
+
               // Create virtual folders for starred, snoozed if they don't exist in backend
               if (!folder && (folderType === 'starred' || folderType === 'snoozed')) {
                 folder = {
@@ -503,13 +531,13 @@ const loadFolders = async () => {
                   color: folderType === 'starred' ? '#fbbf24' : folderType === 'snoozed' ? '#8b5cf6' : '#6b7280'
                 };
               }
-              
+
               if (!folder) return null;
 
               const Icon = folderType === 'starred' ? Star : (iconMap[folderType] || iconMap[folder.icon || 'folder'] || Circle);
               const isActive = String(selectedFolder?.id) === String(folder.id);
               const iconColor = folderColors[folderType] || (isActive ? '#1e40af' : undefined);
-              
+
               // Calculate counts differently for special folders
               let folderCount = 0;
               if (folderType === 'starred') {
@@ -525,7 +553,7 @@ const loadFolders = async () => {
               return (
                 <button
                   key={String(folder.id)}
-		  onClick={() => handleFolderClick(folderType, folder)}
+                  onClick={() => handleFolderClick(folderType, folder)}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition ${animations.fadeInLeft} ${isActive ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 shadow-md' : 'text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800/50 hover:scale-105'}`}
                 >
                   <Icon className="w-5 h-5 flex-shrink-0" style={{ color: iconColor }} />
@@ -538,7 +566,7 @@ const loadFolders = async () => {
                 </button>
               );
             })}
-            
+
           </div>
 
           {/* Labels Section */}
@@ -546,14 +574,7 @@ const loadFolders = async () => {
             <div className="flex items-center justify-between mb-3 px-3">
               <h3 className="text-xs font-semibold text-gray-700 dark:text-slate-300 uppercase tracking-wider">Labels</h3>
               <button
-                onClick={() => {
-                  const newLabel = {
-                    id: labels.length + 1,
-                    name: `Label ${labels.length + 1}`,
-                    color: ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'][labels.length % 5]
-                  };
-                  setLabels([...labels, newLabel]);
-                }}
+                onClick={handleAddLabel}
                 className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
               >
                 <Plus className="w-3 h-3" />
@@ -561,13 +582,34 @@ const loadFolders = async () => {
             </div>
             <div className="space-y-1">
               {labels.map((label) => (
-                <button
+                <div
                   key={label.id}
-                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg transition text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800/50 hover:scale-105"
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg transition text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800/50 hover:scale-105 group"
                 >
                   <Tag className="w-4 h-4 flex-shrink-0" style={{ color: label.color }} />
-                  <span className="flex-1 text-left text-sm">{label.name}</span>
-                </button>
+                  {editingLabelId === label.id ? (
+                    <input
+                      autoFocus
+                      type="text"
+                      value={editLabelName}
+                      onChange={(e) => setEditLabelName(e.target.value)}
+                      onBlur={() => handleLabelRename(label.id)}
+                      onKeyDown={(e) => handleLabelEditKeyDown(e, label.id)}
+                      className="flex-1 bg-white dark:bg-slate-900 border border-blue-500 rounded px-1 py-0.5 text-sm outline-none text-gray-900 dark:text-white"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <span
+                      className="flex-1 text-left text-sm cursor-pointer"
+                      onDoubleClick={() => {
+                        setEditingLabelId(label.id);
+                        setEditLabelName(label.name);
+                      }}
+                    >
+                      {label.name}
+                    </span>
+                  )}
+                </div>
               ))}
             </div>
           </div>
@@ -598,7 +640,7 @@ const loadFolders = async () => {
 
       {/* Mobile Sidebar Overlay */}
       {mobileSidebarOpen && (
-        <div 
+        <div
           className="lg:hidden fixed inset-0 bg-black/50 z-30"
           onClick={() => setMobileSidebarOpen(false)}
         />
@@ -624,7 +666,7 @@ const loadFolders = async () => {
             <span className="text-gray-900 dark:text-white font-bold text-lg">Jeemail</span>
           </div>
         </div>
-        
+
         {/* Top Bar */}
         <div className="h-16 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 flex items-center px-4 lg:px-6 gap-4 shadow-sm">
           <div className="flex-1 max-w-xl relative">
@@ -658,11 +700,10 @@ const loadFolders = async () => {
             {openedMailTabs.map((email) => (
               <div
                 key={email.id}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-t-lg cursor-pointer transition-all duration-200 min-w-0 max-w-xs ${
-                  activeTabId === String(email.id)
-                    ? 'bg-blue-50 dark:bg-blue-900/30 border-b-2 border-blue-500'
-                    : 'bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 border-b-2 border-transparent'
-                }`}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-t-lg cursor-pointer transition-all duration-200 min-w-0 max-w-xs ${activeTabId === String(email.id)
+                  ? 'bg-blue-50 dark:bg-blue-900/30 border-b-2 border-blue-500'
+                  : 'bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 border-b-2 border-transparent'
+                  }`}
                 onClick={() => setActiveTabId(String(email.id))}
               >
                 <span className="text-sm font-medium text-gray-700 dark:text-slate-300 truncate">
@@ -692,7 +733,7 @@ const loadFolders = async () => {
               onSelectEmail={(email: any) => {
                 handleOpenMailInTab(email);
               }}
-	      onRefresh={refreshEmails}
+              onRefresh={refreshEmails}
             />
           </div>
           <div className="flex-1 flex flex-col min-w-0">
@@ -701,7 +742,7 @@ const loadFolders = async () => {
                 {(() => {
                   const activeEmail = openedMailTabs.find(tab => String(tab.id) === activeTabId);
                   if (!activeEmail) return null;
-                  
+
                   if (activeEmail.thread_id) {
                     return (
                       <ThreadView
@@ -741,7 +782,7 @@ const loadFolders = async () => {
       {/* Multiple Compose Windows */}
       {composeWindows.map((composeId, index) => {
         const windowState = windowStates[composeId] || { minimized: false, maximized: false };
-        
+
         if (windowState.minimized) {
           return (
             <div
@@ -768,9 +809,8 @@ const loadFolders = async () => {
         return (
           <div
             key={composeId}
-            className={`fixed bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-slate-700 z-40 flex flex-col ${
-              windowState.maximized ? 'inset-4 rounded-2xl' : 'w-96 h-[500px]'
-            }`}
+            className={`fixed bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-slate-700 z-40 flex flex-col ${windowState.maximized ? 'inset-4 rounded-2xl' : 'w-96 h-[500px]'
+              }`}
             style={!windowState.maximized ? {
               right: `${20 + index * 420}px`,
               bottom: `${20}px`
@@ -816,9 +856,9 @@ const loadFolders = async () => {
 
       {/* User Profile Modal */}
       {showUserProfile && (
-        <UserProfile 
-          onClose={() => setShowUserProfile(false)} 
-          userEmail={profile?.email} 
+        <UserProfile
+          onClose={() => setShowUserProfile(false)}
+          userEmail={profile?.email}
           userName={profile?.full_name || profile?.email}
           initialTab={userProfileTab}
         />

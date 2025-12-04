@@ -1,16 +1,26 @@
 import { ThemeProvider } from './contexts/ThemeContext';
 import { authService } from './lib/authService';
+import { isSuperadminAuthenticated } from './lib/superadminService';
 import Auth from './components/Auth';
-import MailLayout from './components/MailLayout';
+import MainApp from './components/MainApp';
+import SuperAdminDashboard from './components/SuperAdminDashboard';
 
 function App() {
-  const isAuthenticated = authService.isAuthenticated();
+  const isSuperadmin = isSuperadminAuthenticated();
+  const isRegularUser = authService.isAuthenticated();
 
   return (
     <ThemeProvider>
-      {isAuthenticated ? <MailLayout /> : <Auth />}
+      {isSuperadmin ? (
+        <SuperAdminDashboard />
+      ) : isRegularUser ? (
+        <MainApp />
+      ) : (
+        <Auth />
+      )}
     </ThemeProvider>
   );
 }
 
 export default App;
+

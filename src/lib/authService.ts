@@ -5,6 +5,8 @@
    - named exports: getCurrentUser, login, register, logout, isAuthenticated, authService
    - default export: authService
 */
+import { USE_MOCK_DATA, mockUser } from './mockData';
+
 const API = "/api"; // relative so nginx proxy works
 
 function saveUser(user: any) {
@@ -28,6 +30,13 @@ export function getCurrentUser() {
 }
 
 export async function login(email: string, password: string) {
+  // Return mock user if mock mode is enabled
+  if (USE_MOCK_DATA) {
+    // Simple mock validation - accept any email/password
+    saveUser(mockUser);
+    return { success: true, user: getCurrentUser() };
+  }
+
   try {
     const res = await fetch(`${API}/login`, {
       method: "POST",
@@ -52,7 +61,7 @@ export async function login(email: string, password: string) {
 export async function register(name: string, email: string, password: string, dateOfBirth?: { month: string; day: string; year: string }, gender?: string) {
   try {
     const requestBody: any = { name, email, password };
-    
+
     if (dateOfBirth && dateOfBirth.month && dateOfBirth.day && dateOfBirth.year) {
       requestBody.date_of_birth = `${dateOfBirth.year}-${dateOfBirth.month}-${dateOfBirth.day}`;
     }

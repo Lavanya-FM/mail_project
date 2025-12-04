@@ -1,4 +1,4 @@
-import { Star, Reply, ReplyAll, Forward, Trash2, Archive, MoreVertical, Paperclip, X, Flag, FileEdit } from 'lucide-react';
+import { Star, Reply, ReplyAll, Forward, Trash2, Archive, MoreVertical, Paperclip, X, Flag, FileEdit, Tag, Check } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { emailService } from '../lib/emailService';
 import { authService } from '../lib/authService';
@@ -14,6 +14,7 @@ type EmailViewProps = {
     subject?: string;
     body?: string;
   }) => void;
+  labels?: { id: number; name: string; color: string }[];
 };
 
 interface ConfirmDialogState {
@@ -27,7 +28,7 @@ interface ConfirmDialogState {
   onConfirm?: () => Promise<void> | void;
 }
 
-export default function EmailView({ email, onClose, onRefresh, onCompose }: EmailViewProps) {
+export default function EmailView({ email, onClose, onRefresh, onCompose, labels = [] }: EmailViewProps) {
   const [starred, setStarred] = useState(false);
   const [showActions, setShowActions] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -43,6 +44,8 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
     onConfirm: undefined,
   };
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(initialConfirmState);
+  const [showLabelDropdown, setShowLabelDropdown] = useState(false);
+  const labelDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (email) {
@@ -58,16 +61,19 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setShowActions(false);
       }
+      if (labelDropdownRef.current && !labelDropdownRef.current.contains(event.target as Node)) {
+        setShowLabelDropdown(false);
+      }
     };
 
-    if (showActions) {
+    if (showActions || showLabelDropdown) {
       document.addEventListener('mousedown', handleClickOutside);
     }
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showActions]);
+  }, [showActions, showLabelDropdown]);
 
   const markAsRead = async (emailId: string) => {
     try {
@@ -92,11 +98,11 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
   const handleReply = () => {
     if (!email || !currentUser || !onCompose) return;
     const replySubject = email.subject?.startsWith('Re:') ? email.subject : `Re: ${email.subject || '(No subject)'}`;
-    
+
     const replyTo = email.from_email;
-    
+
     const replyBody = `\n\n--- Original Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || currentUser.email}\nSubject: ${email.subject || '(No subject)'}\n\n${email.body || ''}`;
-    
+
     onCompose({ to: replyTo, subject: replySubject, body: replyBody });
   };
 
@@ -115,11 +121,9 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
       ? email.subject
       : `Re: ${email.subject || "(No subject)"}`;
 
-    const replyBody = `\n\n--- Original Message ---\nFrom: ${
-      email.from_name || email.from_email
-    }\nTo: ${email.to_emails?.map(t => t.email).join(", ") || currentUser.email}\nSubject: ${
-      email.subject || "(No subject)"
-    }\n\n${email.body || ""}`;
+    const replyBody = `\n\n--- Original Message ---\nFrom: ${email.from_name || email.from_email
+      }\nTo: ${email.to_emails?.map(t => t.email).join(", ") || currentUser.email}\nSubject: ${email.subject || "(No subject)"
+      }\n\n${email.body || ""}`;
 
     onCompose({
       to: uniqueRecipients.join(", "),
@@ -192,16 +196,16 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
     try {
       const { data: folders, error } = await emailService.getFolders(currentUser.id);
       if (error) throw error;
-      
+
       const archiveFolder = folders?.find(f => f.name.toLowerCase() === 'archive');
-      
+
       if (!archiveFolder) {
         // If archive folder doesn't exist, try to move to a default system folder
         const systemFolder = folders?.find(f => f.system_box === 'archive' || f.system_box === 'all');
         if (systemFolder) {
           const { error: moveError } = await emailService.moveEmail(
-            Number(email.id), 
-            currentUser.id, 
+            Number(email.id),
+            currentUser.id,
             Number(systemFolder.id)
           );
           if (moveError) throw moveError;
@@ -212,13 +216,13 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
       } else {
         // Move to existing archive folder
         const { error: moveError } = await emailService.moveEmail(
-          Number(email.id), 
-          currentUser.id, 
+          Number(email.id),
+          currentUser.id,
           Number(archiveFolder.id)
         );
         if (moveError) throw moveError;
       }
-      
+
       onRefresh();
       onClose();
     } catch (error) {
@@ -238,16 +242,16 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
         try {
           const { data: folders, error } = await emailService.getFolders(currentUser.id);
           if (error) throw error;
-          
+
           const spamFolder = folders?.find(f => f.name.toLowerCase() === 'spam');
-          
+
           if (!spamFolder) {
             // If spam folder doesn't exist, try to move to a default system folder
             const systemFolder = folders?.find(f => f.system_box === 'spam' || f.system_box === 'junk');
             if (systemFolder) {
               const { error: moveError } = await emailService.moveEmail(
-                Number(email.id), 
-                currentUser.id, 
+                Number(email.id),
+                currentUser.id,
                 Number(systemFolder.id)
               );
               if (moveError) throw moveError;
@@ -258,8 +262,8 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
           } else {
             // Move to existing spam folder
             const { error: moveError } = await emailService.moveEmail(
-              Number(email.id), 
-              currentUser.id, 
+              Number(email.id),
+              currentUser.id,
               Number(spamFolder.id)
             );
             if (moveError) throw moveError;
@@ -289,6 +293,28 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
     onClose();
   };
 
+  const handleToggleLabel = async (label: { id: number; name: string; color: string }) => {
+    if (!email || !currentUser) return;
+
+    // Check if label is already applied
+    const currentLabels = email.labels || [];
+    const hasLabel = currentLabels.some(l => l.name === label.name);
+
+    let newLabels;
+    if (hasLabel) {
+      newLabels = currentLabels.filter(l => l.name !== label.name);
+    } else {
+      newLabels = [...currentLabels, label];
+    }
+
+    try {
+      await emailService.updateEmail(email.id, { user_id: currentUser.id, labels: newLabels });
+      onRefresh();
+    } catch (error) {
+      console.error('Error updating labels:', error);
+    }
+  };
+
   const formatFullDate = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleDateString('en-US', {
@@ -305,7 +331,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
     const date = new Date(dateString);
     const now = new Date();
     const diffInHours = (now.getTime() - date.getTime()) / (1000 * 60 * 60);
-    
+
     if (diffInHours < 24) {
       return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
     } else if (diffInHours < 168) {
@@ -339,7 +365,16 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
     <div className="flex-1 flex flex-col bg-gradient-to-br from-slate-50 via-white to-blue-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
       {/* Top toolbar */}
       <div className="h-14 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b border-gray-200/50 dark:border-slate-800/50 flex items-center px-4 gap-3">
-        <button onClick={onClose} className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full transition" title="Back to inbox">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            onClose();
+          }}
+          className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full transition"
+          title="Back to inbox"
+          aria-label="Close email"
+        >
           <X className="w-4 h-4" />
         </button>
 
@@ -353,6 +388,43 @@ export default function EmailView({ email, onClose, onRefresh, onCompose }: Emai
           <button onClick={handleDelete} className="p-2 text-gray-600 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition" title="Delete">
             <Trash2 className="w-4 h-4" />
           </button>
+
+          <div className="relative" ref={labelDropdownRef}>
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowLabelDropdown(!showLabelDropdown); }}
+              className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full transition"
+              title="Labels"
+            >
+              <Tag className="w-4 h-4" />
+            </button>
+
+            {showLabelDropdown && (
+              <div className="absolute left-0 top-full mt-1 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg shadow-xl py-2 z-50 min-w-[240px]">
+                <div className="px-3 py-2 border-b border-gray-100 dark:border-slate-700">
+                  <h3 className="text-xs font-semibold text-gray-500 dark:text-slate-400 uppercase tracking-wider">Label as:</h3>
+                </div>
+                <div className="max-h-64 overflow-y-auto">
+                  {labels.map((label) => {
+                    const isApplied = email.labels?.some(l => l.name === label.name);
+
+                    return (
+                      <div
+                        key={label.id}
+                        className="flex items-center px-3 py-2 hover:bg-gray-50 dark:hover:bg-slate-700/50 cursor-pointer"
+                        onClick={() => handleToggleLabel(label)}
+                      >
+                        <div className={`w-4 h-4 rounded border flex items-center justify-center mr-3 ${isApplied ? 'bg-blue-500 border-blue-500' : 'border-gray-300 dark:border-slate-600'}`}>
+                          {isApplied && <Check className="w-3 h-3 text-white" />}
+                        </div>
+                        <span className="w-3 h-3 rounded-full mr-3" style={{ backgroundColor: label.color }}></span>
+                        <span className="text-sm text-gray-700 dark:text-slate-200 flex-1">{label.name}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
 
           <div className="relative" ref={dropdownRef}>
             <button onClick={(e) => { e.stopPropagation(); setShowActions(!showActions); }} className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full transition" title="More actions">

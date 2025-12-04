@@ -1,5 +1,6 @@
-// src/lib/emailService.ts
-type ApiResult<T> = Promise<{ data?: T; error?: any; status: number }>;
+import { USE_MOCK_DATA, mockFolders, mockEmails } from './mockData';
+
+type ApiResult<T> = Promise<{ data?: T; error?: any; status: number;[key: string]: any }>;
 
 // Automatically use same origin unless overridden
 const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
@@ -53,8 +54,14 @@ export const emailService = {
   // GET FOLDERS
   // -----------------------------------------------------
   async getFolders(userId: number | string): ApiResult<any[]> {
+    // Return mock data if enabled
+    if (USE_MOCK_DATA) {
+      localStorage.setItem("folders", JSON.stringify(mockFolders));
+      return { data: mockFolders, status: 200 };
+    }
+
     const url = apiUrl(`/api/folders/${encodeURIComponent(String(userId))}`);
-    const resp = await fetch(url, { 
+    const resp = await fetch(url, {
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       credentials: 'include'
     });
@@ -81,6 +88,22 @@ export const emailService = {
   // GET EMAILS
   // -----------------------------------------------------
   async getEmails(userId: number | string, folderId?: string | number): ApiResult<any[]> {
+    // Return mock data if enabled
+    if (USE_MOCK_DATA) {
+      let fid: number | null;
+      if (!folderId) {
+        fid = getFolderIdByName("inbox");
+      } else if (isNaN(Number(folderId))) {
+        fid = getFolderIdByName(String(folderId));
+      } else {
+        fid = Number(folderId);
+      }
+
+      // Filter mock emails by folder
+      const filteredEmails = fid ? mockEmails.filter(e => e.folder_id === fid) : mockEmails;
+      return { data: filteredEmails, status: 200 };
+    }
+
     let fid: number | null;
 
     if (!folderId) {
@@ -97,18 +120,18 @@ export const emailService = {
     }
 
     const url = apiUrl(`/api/emails/${encodeURIComponent(String(userId))}/${encodeURIComponent(fid)}`);
-    const resp = await fetch(url, { 
+    const resp = await fetch(url, {
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      credentials: 'include' 
+      credentials: 'include'
     });
 
-const r = await handleResp<any>(resp);
-return { 
-  data: r.data?.data || [], 
-  count: r.data?.count || 0, 
-  unread: r.data?.unread || 0, 
-  status: r.status 
-};
+    const r = await handleResp<any>(resp);
+    return {
+      data: r.data?.data || [],
+      count: r.data?.count || 0,
+      unread: r.data?.unread || 0,
+      status: r.status
+    };
   },
 
   // -----------------------------------------------------
@@ -167,34 +190,44 @@ return {
     return handleResp<any>(resp);
   },
 
-// -----------------------------------------------------
-// UPDATE EMAIL (read, star, folder_id)
-// -----------------------------------------------------
-async updateEmail(emailId: number | string, data: any): ApiResult<any> {
-  const url = apiUrl('/api/email/update');
-  const payload = {
-    email_id: Number(emailId),
-    ...data
-  };
+  // -----------------------------------------------------
+  // UPDATE EMAIL (read, star, folder_id)
+  // -----------------------------------------------------
+  async updateEmail(emailId: number | string, data: any): ApiResult<any> {
+    // Handle mock data
+    if (USE_MOCK_DATA) {
+      const email = mockEmails.find(e => e.id === Number(emailId));
+      if (email) {
+        Object.assign(email, data);
+        return { data: email, status: 200 };
+      }
+      return { error: "Email not found", status: 404 };
+    }
 
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    credentials: 'include',
-    body: JSON.stringify(payload),
-  });
+    const url = apiUrl('/api/email/update');
+    const payload = {
+      email_id: Number(emailId),
+      ...data
+    };
 
-  return handleResp<any>(resp);
-},
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+
+    return handleResp<any>(resp);
+  },
 
   // -----------------------------------------------------
   // CHECK IF USER EXISTS
   // -----------------------------------------------------
   async checkEmailExists(email: string): ApiResult<any> {
     const url = apiUrl(`/api/users/email/${encodeURIComponent(email)}`);
-    const resp = await fetch(url, { 
-      headers: { 'Content-Type': 'application/json', ...authHeaders() }, 
-      credentials: 'include' 
+    const resp = await fetch(url, {
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      credentials: 'include'
     });
 
     return handleResp<any>(resp);

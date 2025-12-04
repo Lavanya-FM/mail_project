@@ -1,5 +1,6 @@
-import { Star, Paperclip, Circle } from 'lucide-react';
+import { Star, Paperclip, Circle, Inbox, Tag, Users } from 'lucide-react';
 import { Email } from '../types/email';
+import { useState } from 'react';
 
 type EmailListProps = {
   emails: Email[];
@@ -13,6 +14,8 @@ export default function EmailList({
   selectedEmail,
   onSelectEmail,
 }: EmailListProps) {
+  const [activeTab, setActiveTab] = useState<'primary' | 'social' | 'promotions'>('primary');
+
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     const now = new Date();
@@ -47,95 +50,149 @@ export default function EmailList({
     return text.slice(0, maxLength) + '...';
   };
 
+  const getInitials = (name?: string) => {
+    if (!name) return "U";
+    const safe = String(name).trim();
+    if (!safe) return "U";
+    return safe
+      .split(" ")
+      .filter(Boolean)
+      .map((n) => n.charAt(0))
+      .join("")
+      .toUpperCase()
+      .slice(0, 2);
+  };
+
+  // Filter emails by tab (for now, show all in primary)
+  const filteredEmails = emails;
+
   return (
-    <div className="w-full lg:w-96 border-r border-gray-200 dark:border-slate-800 flex flex-col bg-white dark:bg-slate-900 h-full">
+    <div className="w-full lg:w-96 border-r border-gray-200 dark:border-gray-700 flex flex-col bg-white dark:bg-gray-900 h-full">
+      {/* Tabs */}
+      <div className="border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
+        <div className="flex">
+          <button
+            onClick={() => setActiveTab('primary')}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-all ${activeTab === 'primary'
+                ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400 bg-blue-50/50 dark:bg-blue-900/20'
+                : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
+              }`}
+          >
+            <Inbox className="w-4 h-4" />
+            <span className="hidden sm:inline">Primary</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('social')}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-all ${activeTab === 'social'
+                ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400 bg-blue-50/50 dark:bg-blue-900/20'
+                : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
+              }`}
+          >
+            <Users className="w-4 h-4" />
+            <span className="hidden sm:inline">Social</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('promotions')}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-all ${activeTab === 'promotions'
+                ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400 bg-blue-50/50 dark:bg-blue-900/20'
+                : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
+              }`}
+          >
+            <Tag className="w-4 h-4" />
+            <span className="hidden sm:inline">Promotions</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Email List */}
       <div className="flex-1 overflow-y-auto">
-        {emails.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-gray-500 dark:text-slate-500">
+        {filteredEmails.length === 0 ? (
+          <div className="flex items-center justify-center h-full text-gray-500 dark:text-gray-400">
             <div className="text-center">
               <Circle className="w-12 h-12 mx-auto mb-3 opacity-50" />
               <p>No emails found</p>
             </div>
           </div>
         ) : (
-          <div className="divide-y divide-gray-200 dark:divide-slate-800">
-            {emails.map((email) => {
+          <div>
+            {filteredEmails.map((email) => {
               const isSelected = selectedEmail?.id === email.id;
-	      const getInitials = (name?: string) => {
-		  if (!name) return "U";
-
-		  const safe = String(name).trim();
-		  if (!safe) return "U";
-	
-		  return safe
-		    .split(" ")
-		    .filter(Boolean)
-		    .map((n) => n.charAt(0))
-		    .join("")
-		    .toUpperCase()
-		    .slice(0, 2);
-		};
 
               return (
                 <button
                   key={email.id}
                   onClick={() => onSelectEmail(email)}
-                  className={`w-full text-left p-3 lg:p-4 transition hover:bg-gray-100 dark:hover:bg-slate-800/50 ${
-                    isSelected ? 'bg-gray-100 dark:bg-slate-800' : ''
-                  } ${!email.is_read ? 'border-l-2 border-blue-500' : ''}`}
+                  className={`w-full text-left px-4 py-2 transition-all border-b border-gray-100 dark:border-gray-800 hover:shadow-md dark:hover:shadow-gray-900/50 ${isSelected
+                      ? 'bg-blue-50 dark:bg-blue-900/20 border-l-4 border-l-blue-600 dark:border-l-blue-400'
+                      : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                    } ${!email.is_read ? 'bg-white dark:bg-gray-900' : 'bg-gray-50/50 dark:bg-gray-800/30'}`}
                 >
-                  <div className="flex items-start gap-2 lg:gap-3">
-                    <div className="flex-shrink-0 w-8 h-8 lg:w-10 lg:h-10 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-white text-xs lg:text-sm font-semibold">
-			{getInitials(email.from_name || email.from_email || 'User')}
+                  <div className="flex items-start gap-3">
+                    {/* Checkbox placeholder (for Gmail-like selection) */}
+                    <div className="flex-shrink-0 pt-1">
+                      <div className="w-5 h-5 rounded border-2 border-gray-300 dark:border-gray-600"></div>
                     </div>
 
+                    {/* Star */}
+                    <div className="flex-shrink-0 pt-1">
+                      {email.is_starred ? (
+                        <Star className="w-5 h-5 text-yellow-500 fill-yellow-500" />
+                      ) : (
+                        <Star className="w-5 h-5 text-gray-300 dark:text-gray-600 hover:text-gray-500 dark:hover:text-gray-400" />
+                      )}
+                    </div>
+
+                    {/* Avatar */}
+                    <div className="flex-shrink-0">
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-white text-sm font-semibold shadow-md">
+                        {getInitials(email.from_name || email.from_email || 'User')}
+                      </div>
+                    </div>
+
+                    {/* Email Content */}
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1 lg:gap-2 mb-1">
+                      <div className="flex items-baseline gap-2 mb-1">
                         <span
-                          className={`text-xs lg:text-sm truncate ${
-                            !email.is_read
-                              ? 'font-semibold text-gray-900 dark:text-white'
-                              : 'font-medium text-gray-600 dark:text-slate-300'
-                          }`}
+                          className={`text-sm truncate ${!email.is_read
+                              ? 'font-bold text-gray-900 dark:text-white'
+                              : 'font-medium text-gray-700 dark:text-gray-300'
+                            }`}
                         >
                           {email.from_name || email.from_email}
                         </span>
-                        <span className="text-xs text-gray-500 dark:text-slate-500 flex-shrink-0">
-                          {formatDate(email.sent_at || email.created_at || '')}
-                        </span>
+                        {!email.is_read && (
+                          <span className="flex-shrink-0 w-2 h-2 bg-blue-600 dark:bg-blue-400 rounded-full"></span>
+                        )}
                       </div>
 
-                      <div className="mb-1">
+                      <div className="flex items-baseline gap-2">
                         <h3
-                          className={`text-xs lg:text-sm truncate ${
-                            !email.is_read
+                          className={`text-sm flex-1 truncate ${!email.is_read
                               ? 'font-semibold text-gray-900 dark:text-white'
-                              : 'text-gray-600 dark:text-slate-400'
-                          }`}
+                              : 'text-gray-600 dark:text-gray-400'
+                            }`}
                         >
                           {email.subject || '(No subject)'}
                         </h3>
                       </div>
 
-                      <p className="text-xs text-gray-500 dark:text-slate-500 line-clamp-1 lg:line-clamp-2">
-                        {truncateText(stripHtmlTags(email.body || ''), 100)}
+                      <p className="text-sm text-gray-500 dark:text-gray-500 line-clamp-1 mt-0.5">
+                        {truncateText(stripHtmlTags(email.body || ''), 80)}
                       </p>
 
-                      <div className="flex items-center gap-1 lg:gap-2 mt-1 lg:mt-2">
+                      {/* Labels and Attachments */}
+                      <div className="flex items-center gap-2 mt-1">
                         {email.has_attachments && (
-                          <div className="flex items-center gap-1 text-gray-500 dark:text-slate-500">
+                          <div className="flex items-center gap-1 text-gray-500 dark:text-gray-500">
                             <Paperclip className="w-3 h-3" />
                           </div>
-                        )}
-                        {email.is_starred && (
-                          <Star className="w-3 h-3 text-yellow-500 fill-yellow-500" />
                         )}
                         {email.labels && email.labels.length > 0 && (
                           <div className="flex gap-1">
                             {email.labels.slice(0, 2).map((label, idx) => (
                               <span
                                 key={idx}
-                                className="text-xs px-2 py-0.5 rounded-full"
+                                className="text-xs px-2 py-0.5 rounded-full font-medium"
                                 style={{
                                   backgroundColor: label.color + '20',
                                   color: label.color,
@@ -147,6 +204,11 @@ export default function EmailList({
                           </div>
                         )}
                       </div>
+                    </div>
+
+                    {/* Date */}
+                    <div className="flex-shrink-0 text-xs text-gray-500 dark:text-gray-500 pt-1">
+                      {formatDate(email.sent_at || email.created_at || '')}
                     </div>
                   </div>
                 </button>

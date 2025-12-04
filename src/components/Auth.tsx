@@ -60,7 +60,7 @@ export default function Auth() {
     try {
       // For now, simulate username check (replace with actual API call)
       const existingUsernames = ['admin', 'user', 'test', 'demo', 'john', 'jane'];
-      
+
       setTimeout(() => {
         if (existingUsernames.includes(username.toLowerCase())) {
           setUsernameError('Username already taken');
@@ -132,6 +132,19 @@ export default function Auth() {
         // Registration successful, user is now logged in
         window.location.reload(); // Refresh to show the main app
       } else {
+        // Check for superadmin login
+        if (email === 'superadmin@jeemail.com') {
+          const { superadminLogin } = await import('../lib/superadminService');
+          const result = await superadminLogin(email, password);
+          if (!result.success) {
+            setError(result.error || 'Login failed');
+            return;
+          }
+          // Login successful
+          window.location.reload();
+          return;
+        }
+
         const result = await authService.login(email, password);
         if (!result.success) {
           setError(result.error || 'Login failed');
@@ -150,7 +163,7 @@ export default function Auth() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-100 via-gray-50 to-gray-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNiAxOGMzLjMxNCAwIDYgMi42ODYgNiA2cy0yLjY4NiA2LTYgNi02LTIuNjg2LTYtNiAyLjY4Ni02IDYtNnoiIHN0cm9rZT0iIzFmMjkzNyIgc3Ryb2tlLXdpZHRoPSIyIiBvcGFjaXR5PSIuMSIvPjwvZz48L3N2Zz4=')] opacity-20"></div>
-      
+
       <div className="absolute top-4 right-4">
         <ThemeToggle />
       </div>
@@ -167,10 +180,10 @@ export default function Auth() {
             {isSignUp ? `Create Account - Step ${currentStep}/3` : 'Welcome Back'}
           </h1>
           <p className={`text-gray-600 dark:text-slate-300 text-center mb-8 ${animations.fadeIn}`}>
-            {isSignUp ? 
+            {isSignUp ?
               (currentStep === 1 ? 'Let\'s start with your basic info' :
-               currentStep === 2 ? 'Tell us more about yourself' :
-               'Set up your secure password') :
+                currentStep === 2 ? 'Tell us more about yourself' :
+                  'Set up your secure password') :
               'Sign in to continue to access'
             }
           </p>
@@ -181,19 +194,17 @@ export default function Auth() {
                 {[1, 2, 3].map((step) => (
                   <div key={step} className="flex items-center">
                     <div
-                      className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all duration-300 ${
-                        step <= currentStep
+                      className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all duration-300 ${step <= currentStep
                           ? 'bg-blue-500 text-white'
                           : 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
-                      }`}
+                        }`}
                     >
                       {step}
                     </div>
                     {step < 3 && (
                       <div
-                        className={`w-8 h-0.5 mx-2 transition-all duration-300 ${
-                          step < currentStep ? 'bg-blue-500' : 'bg-gray-200 dark:bg-gray-700'
-                        }`}
+                        className={`w-8 h-0.5 mx-2 transition-all duration-300 ${step < currentStep ? 'bg-blue-500' : 'bg-gray-200 dark:bg-gray-700'
+                          }`}
                       />
                     )}
                   </div>
@@ -356,20 +367,19 @@ export default function Auth() {
                           <span className="text-xs text-gray-600 dark:text-slate-400">Password Strength</span>
                           <span className="text-xs font-medium text-gray-600 dark:text-slate-400">
                             {passwordStrength === 0 ? 'Very Weak' :
-                             passwordStrength === 1 ? 'Weak' :
-                             passwordStrength === 2 ? 'Fair' :
-                             passwordStrength === 3 ? 'Good' :
-                             passwordStrength === 4 ? 'Strong' :
-                             passwordStrength === 5 ? 'Very Strong' : 'Excellent'}
+                              passwordStrength === 1 ? 'Weak' :
+                                passwordStrength === 2 ? 'Fair' :
+                                  passwordStrength === 3 ? 'Good' :
+                                    passwordStrength === 4 ? 'Strong' :
+                                      passwordStrength === 5 ? 'Very Strong' : 'Excellent'}
                           </span>
                         </div>
                         <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                           <div
-                            className={`h-2 rounded-full transition-all duration-300 ${
-                              passwordStrength <= 2 ? 'bg-red-500' :
-                              passwordStrength <= 4 ? 'bg-yellow-500' :
-                              'bg-green-500'
-                            }`}
+                            className={`h-2 rounded-full transition-all duration-300 ${passwordStrength <= 2 ? 'bg-red-500' :
+                                passwordStrength <= 4 ? 'bg-yellow-500' :
+                                  'bg-green-500'
+                              }`}
                             style={{ width: `${(passwordStrength / 6) * 100}%` }}
                           ></div>
                         </div>
@@ -389,11 +399,10 @@ export default function Auth() {
                             setConfirmPassword(e.target.value);
                             setPasswordMatch(password === e.target.value);
                           }}
-                          className={`w-full pl-11 pr-12 py-3 bg-gray-100 dark:bg-white/10 border ${
-                            confirmPassword && !passwordMatch
+                          className={`w-full pl-11 pr-12 py-3 bg-gray-100 dark:bg-white/10 border ${confirmPassword && !passwordMatch
                               ? 'border-red-300 dark:border-red-500'
                               : 'border-gray-300 dark:border-white/20'
-                          } rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition hover:border-blue-400 dark:hover:border-blue-400/50 ${animations.fadeInLeft} delay-250`}
+                            } rounded-xl text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition hover:border-blue-400 dark:hover:border-blue-400/50 ${animations.fadeInLeft} delay-250`}
                           placeholder="••••••••"
                           required
                         />

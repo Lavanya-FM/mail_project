@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Send, Paperclip, Link, Smile, Clock, Share2, Zap, Info } from 'lucide-react';
+import { X, Send, Paperclip, Link, Smile, Clock, Share2, Zap, Info, HardDrive, Upload } from 'lucide-react';
 import { emailService } from '../lib/emailService';
 import { authService } from '../lib/authService';
 import { p2pService } from '../lib/p2pService';
+import { DriveFile } from '../lib/driveService';
+import AttachFromDriveModal from './AttachFromDriveModal';
 
 const getFolderIdByName = (name: string) => {
   const folders = JSON.parse(localStorage.getItem("folders") || "[]");
@@ -63,10 +65,12 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
   const [p2pProgress, setP2pProgress] = useState(0);
   const [showP2pMenu, setShowP2pMenu] = useState(false);
   const [p2pConnected, setP2pConnected] = useState(false);
-  
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [showDriveModal, setShowDriveModal] = useState(false);
+
   // Threading state
   const [threadId, setThreadId] = useState<string | undefined>(undefined);
-  
+
   const textareaRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const savedSelectionRef = useRef<Range | null>(null);
@@ -80,19 +84,19 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
 
   // Initialize with pre-filled data
   useEffect(() => {
- if (prefilledData) {
-   setTo(normalizeEmailField(prefilledData.to));
-   setCc(normalizeEmailField(prefilledData.cc));
-   setBcc(normalizeEmailField((prefilledData as any).bcc));
- 
-   setSubject(prefilledData.subject || '');
-   setBody(prefilledData.body || '');
-      
+    if (prefilledData) {
+      setTo(normalizeEmailField(prefilledData.to));
+      setCc(normalizeEmailField(prefilledData.cc));
+      setBcc(normalizeEmailField((prefilledData as any).bcc));
+
+      setSubject(prefilledData.subject || '');
+      setBody(prefilledData.body || '');
+
       // Set threading info
       if (prefilledData.threadId) {
         setThreadId(prefilledData.threadId);
       }
-      
+
       // Show CC field if there's CC data
       if (prefilledData.cc) {
         setShowCc(true);
@@ -125,20 +129,20 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
       const ccList = normalizeEmailField(cc);
       const bccList = normalizeEmailField(bcc);
 
-const toEmails = toList.split(',').map(email => ({
-  email: email.trim(),
-  name: email.trim()
-})).filter(x => x.email);
+      const toEmails = toList.split(',').map(email => ({
+        email: email.trim(),
+        name: email.trim()
+      })).filter(x => x.email);
 
-const ccEmails = ccList.split(',').map(email => ({
-  email: email.trim(),
-  name: email.trim()
-})).filter(x => x.email);
+      const ccEmails = ccList.split(',').map(email => ({
+        email: email.trim(),
+        name: email.trim()
+      })).filter(x => x.email);
 
-const bccEmails = bccList.split(',').map(email => ({
-  email: email.trim(),
-  name: email.trim()
-})).filter(x => x.email);
+      const bccEmails = bccList.split(',').map(email => ({
+        email: email.trim(),
+        name: email.trim()
+      })).filter(x => x.email);
 
       const draftsFolderId = getFolderIdByName("drafts");
 
@@ -165,7 +169,7 @@ const bccEmails = bccList.split(',').map(email => ({
 
       setDraftStatus('saved');
       onDraftSaved();
-      
+
       setTimeout(() => setDraftStatus('idle'), 2000);
     } catch (error) {
       console.error('Error saving draft:', error);
@@ -298,7 +302,7 @@ const bccEmails = bccList.split(',').map(email => ({
 
     setUsePeerToPeer(true);
     setShowP2pMenu(false);
-    
+
     try {
       // Connect to P2P network if not already connected
       if (!p2pConnected) {
@@ -307,10 +311,10 @@ const bccEmails = bccList.split(',').map(email => ({
       }
 
       // Check if recipient is online
-const toList = normalizeEmailField(to);
-const recipientEmail = toList.split(',')[0]?.trim() || "";
+      const toList = normalizeEmailField(to);
+      const recipientEmail = toList.split(',')[0]?.trim() || "";
       const isRecipientOnline = p2pService.isPeerOnline(recipientEmail);
-      
+
       if (!isRecipientOnline) {
         alert(`⚠️ Recipient (${recipientEmail}) is not online.\n\nFor P2P mode to work:\n1. Recipient must be logged in\n2. Both systems must be connected to the P2P network\n\nWaiting for recipient to come online...`);
       }
@@ -343,24 +347,24 @@ const recipientEmail = toList.split(',')[0]?.trim() || "";
 
     setSending(true);
     try {
-const toList = normalizeEmailField(to);
-const ccList = normalizeEmailField(cc);
-const bccList = normalizeEmailField(bcc);
+      const toList = normalizeEmailField(to);
+      const ccList = normalizeEmailField(cc);
+      const bccList = normalizeEmailField(bcc);
 
-const toEmails = toList.split(',').map(email => ({
-  email: email.trim(),
-  name: email.trim()
-})).filter(x => x.email);
+      const toEmails = toList.split(',').map(email => ({
+        email: email.trim(),
+        name: email.trim()
+      })).filter(x => x.email);
 
-const ccEmails = ccList.split(',').map(email => ({
-  email: email.trim(),
-  name: email.trim()
-})).filter(x => x.email);
+      const ccEmails = ccList.split(',').map(email => ({
+        email: email.trim(),
+        name: email.trim()
+      })).filter(x => x.email);
 
-const bccEmails = bccList.split(',').map(email => ({
-  email: email.trim(),
-  name: email.trim()
-})).filter(x => x.email);
+      const bccEmails = bccList.split(',').map(email => ({
+        email: email.trim(),
+        name: email.trim()
+      })).filter(x => x.email);
 
       const sentFolderId = getFolderIdByName("sent");
 
@@ -394,7 +398,24 @@ const bccEmails = bccList.split(',').map(email => ({
   };
 
   const handleAttachment = () => {
+    setShowAttachMenu(!showAttachMenu);
+  };
+
+  const handleLocalAttach = () => {
     fileInputRef.current?.click();
+    setShowAttachMenu(false);
+  };
+
+  const handleDriveAttach = (files: DriveFile[]) => {
+    const newAttachments = files.map(file => {
+      // Create a mock File object with the correct size and name
+      const mockFile = new File([""], file.name, { type: file.mime_type || 'application/octet-stream' });
+      Object.defineProperty(mockFile, 'size', { value: file.size_bytes });
+      return mockFile;
+    });
+    setAttachments(prev => [...prev, ...newAttachments]);
+    setShowDriveModal(false);
+    setShowAttachMenu(false);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -450,13 +471,13 @@ const bccEmails = bccList.split(',').map(email => ({
             className="flex-1 bg-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none text-sm"
           />
           <div className="flex items-center gap-2 ml-2">
-            <button 
+            <button
               onClick={() => setShowCc(!showCc)}
               className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
             >
               Cc
             </button>
-            <button 
+            <button
               onClick={() => setShowBcc(!showBcc)}
               className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
             >
@@ -495,7 +516,7 @@ const bccEmails = bccList.split(',').map(email => ({
 
         {/* Subject Field */}
         <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-3 lg:px-4 py-2 lg:py-3">
-          <label className="text-sm text-gray-600 dark:text-slate-400 w-8 lg:w-12 flex-shrink-0">Subject:</label>
+          <label className="text-sm text-gray-600 dark:text-slate-400 w-8 lg:w-12 flex-shrink-0">Sub:</label>
           <input
             type="text"
             value={subject}
@@ -516,7 +537,7 @@ const bccEmails = bccList.split(',').map(email => ({
               <span className="text-xs text-orange-700 dark:text-orange-400">{Math.round(p2pProgress)}%</span>
             </div>
             <div className="w-full bg-orange-200 dark:bg-orange-900/50 rounded-full h-2 mb-2">
-              <div 
+              <div
                 className="bg-gradient-to-r from-orange-500 to-orange-600 h-2 rounded-full transition-all duration-300"
                 style={{ width: `${p2pProgress}%` }}
               ></div>
@@ -536,7 +557,7 @@ const bccEmails = bccList.split(',').map(email => ({
             onInput={(e) => setBody(e.currentTarget.innerHTML || '')}
             onKeyDown={handleKeyDown}
             className="w-full h-48 lg:h-64 bg-transparent text-gray-900 dark:text-white focus:outline-none text-sm leading-relaxed"
-            style={{ 
+            style={{
               fontSize: '14px',
               lineHeight: '1.6',
               minHeight: '192px'
@@ -576,13 +597,41 @@ const bccEmails = bccList.split(',').map(email => ({
       {/* Footer */}
       <div className="flex items-center justify-between p-3 lg:p-4 border-t border-gray-200 dark:border-slate-700 flex-wrap gap-2">
         <div className="relative flex items-center gap-1 lg:gap-2 order-2 lg:order-1">
-          <button
-            onClick={handleAttachment}
-            className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition"
-            title="Attach file"
-          >
-            <Paperclip className="w-4 h-4" />
-          </button>
+          <div className="relative">
+            <button
+              onClick={handleAttachment}
+              className={`p-2 rounded-lg transition ${showAttachMenu
+                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                : 'text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800'
+                }`}
+              title="Attach file"
+            >
+              <Paperclip className="w-4 h-4" />
+            </button>
+
+            {/* Attachment Menu */}
+            {showAttachMenu && (
+              <div className="absolute bottom-full left-0 mb-2 w-48 bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-gray-200 dark:border-slate-700 overflow-hidden z-50">
+                <button
+                  onClick={handleLocalAttach}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-700 transition text-left"
+                >
+                  <Upload className="w-4 h-4" />
+                  Local System
+                </button>
+                <button
+                  onClick={() => {
+                    setShowDriveModal(true);
+                    setShowAttachMenu(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-sm text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-700 transition text-left"
+                >
+                  <HardDrive className="w-4 h-4" />
+                  JeeDrive
+                </button>
+              </div>
+            )}
+          </div>
           <input
             ref={fileInputRef}
             type="file"
@@ -760,6 +809,12 @@ const bccEmails = bccList.split(',').map(email => ({
           </div>
         </div>
       )}
+      {/* Drive Modal */}
+      <AttachFromDriveModal
+        isOpen={showDriveModal}
+        onClose={() => setShowDriveModal(false)}
+        onAttach={handleDriveAttach}
+      />
     </div>
   );
 }

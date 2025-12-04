@@ -1,0 +1,7 @@
+import { useState, useEffect, useRef } from 'react';
+import { X, Send, Paperclip, Link, Smile, Clock, Share2, Zap, Info, HardDrive } from 'lucide-react';
+import { emailService } from '../lib/emailService';
+import { authService } from '../lib/authService';
+import { p2pService } from '../lib/p2pService';
+import AttachFromDriveModal from './AttachFromDriveModal';
+import type { DriveFile } from '../lib/driveService';

@@ -102,14 +102,14 @@ app.post("/api/login", async (req, res) => {
   try {
     // Mock login for testing - accept any email/password
     console.log("Mock login attempt:", email);
-    
+
     // Simple mock user
     const mockUser = {
       id: 1,
       name: email.split('@')[0] || "Test User",
       email: email
     };
-    
+
     res.json({
       user: mockUser
     });
@@ -130,7 +130,7 @@ app.get("/api/folders/:userId", async (req, res) => {
       { id: 5, name: "Trash", system_box: "trash" },
       { id: 6, name: "Starred", system_box: "starred" }
     ];
-    
+
     res.json({ data: mockFolders });
   } catch (err) {
     console.error("GET FOLDERS ERROR:", err);
@@ -163,7 +163,7 @@ app.get("/api/emails/:userId/:folderAny", async (req, res) => {
       id: 2,
       subject: "Test email",
       from: "test@example.com",
-      to: "user@example.com", 
+      to: "user@example.com",
       body: "This is a test email.",
       read: true,
       starred: false,
@@ -224,7 +224,7 @@ app.post("/api/email/create", async (req, res) => {
     const insertRecipient = async (emailId, list, type) => {
       if (!list) return [];
       const addresses = [];
-      
+
       if (Array.isArray(list)) {
         for (const addr of list) {
           const address = typeof addr === 'string' ? addr : (addr.email || addr.address || '');
@@ -272,8 +272,8 @@ app.post("/api/email/create", async (req, res) => {
       created_at: new Date().toISOString()
     };
 
-    res.json({ 
-      message: "Email created successfully", 
+    res.json({
+      message: "Email created successfully",
       emailId,
       data: emailObject
     });
@@ -286,32 +286,32 @@ app.post("/api/email/create", async (req, res) => {
 app.put('/api/email/:emailId', async (req, res) => {
   const { emailId } = req.params;
   const { user_id, is_read, is_starred } = req.body;
-  
+
   try {
     const updates = [];
     const values = [];
-    
+
     if (typeof is_read !== 'undefined') {
       updates.push('is_read = ?');
       values.push(is_read ? 1 : 0);
     }
-    
+
     if (typeof is_starred !== 'undefined') {
       updates.push('is_starred = ?');
       values.push(is_starred ? 1 : 0);
     }
-    
+
     if (updates.length === 0) {
       return res.json({ ok: true, message: 'No updates' });
     }
-    
+
     values.push(emailId, user_id);
-    
+
     await db.query(
       `UPDATE email_mailbox SET ${updates.join(', ')} WHERE email_id = ? AND user_id = ?`,
       values
     );
-    
+
     return res.json({ ok: true });
   } catch (err) {
     console.error("UPDATE EMAIL ERROR:", err && err.message);
@@ -378,7 +378,7 @@ app.post('/api/email/read', async (req, res) => {
   try {
     await db.query(
       `UPDATE email_mailbox SET is_read=? WHERE email_id=? AND user_id=?`,
-      [is_read?1:0, email_id, user_id]
+      [is_read ? 1 : 0, email_id, user_id]
     );
     res.json({ ok: true });
   } catch (err) {
