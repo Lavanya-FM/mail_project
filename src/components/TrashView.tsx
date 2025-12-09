@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Trash2, RotateCcw, X, AlertTriangle, Clock, File, Image, FileText, Music, Video, Archive } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
-import driveService, { DriveFile } from '../lib/driveService';
+import * as driveService from "../lib/driveService";
 import { authService } from '../lib/authService';
 
 interface TrashItem extends DriveFile {
@@ -20,16 +20,17 @@ export default function TrashView() {
         loadTrashItems();
     }, []);
 
-    const loadTrashItems = async () => {
-        setLoading(true);
-        try {
-            setTrashItems([]);
-        } catch (error) {
-            console.error('Error loading trash items:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
+const loadTrashItems = async () => {
+  setLoading(true);
+  try {
+    const files = await driveService.getTrashFiles(user?.id || 1);
+    setTrashItems(files);
+  } catch (error) {
+    console.error('Error loading trash items:', error);
+  } finally {
+    setLoading(false);
+  }
+};
 
     const handleRestore = async () => {
         if (selectedItems.size === 0) return;

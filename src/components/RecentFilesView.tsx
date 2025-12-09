@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Clock, File, Image, FileText, Music, Video, Archive, Star } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
-import driveService, { DriveFile } from '../lib/driveService';
+import * as driveService from "../lib/driveService";
 import { authService } from '../lib/authService';
 
 export default function RecentFilesView() {

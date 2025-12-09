@@ -1,7 +1,7 @@
 import { X, FileArchive, Trash2, Download, AlertTriangle } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import storageService, { LargeFile } from '../lib/storageService';
-import driveService from '../lib/driveService';
+import * as driveService from "../lib/driveService";
 import { useEffect, useState } from 'react';
 
 interface LargeFilesModalProps {

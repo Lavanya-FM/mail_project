@@ -1,6 +1,8 @@
 import { X, FolderPlus } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useState } from 'react';
+import * as driveService from '../lib/driveService';
+import { authService } from '../lib/authService';
 
 interface NewFolderModalProps {
     isOpen: boolean;
@@ -13,23 +15,40 @@ export default function NewFolderModal({ isOpen, onClose, onRefresh, currentFold
     const { theme } = useTheme();
     const [folderName, setFolderName] = useState('');
     const [creating, setCreating] = useState(false);
+    const [error, setError] = useState('');
+    
+    const user = authService.getCurrentUser();
 
     const handleCreate = async () => {
         if (!folderName.trim()) {
-            alert('Please enter a folder name');
+            setError('Please enter a folder name');
+            return;
+        }
+
+        if (!user) {
+            setError('You must be logged in to create folders');
             return;
         }
 
         setCreating(true);
+        setError('');
 
-        // Simulate folder creation
-        setTimeout(() => {
-            alert(`Folder creation will be implemented by backend team.\nCreating folder: "${folderName}"`);
+        try {
+            const result = await driveService.createFolder(user.id, currentFolder, folderName.trim());
+            
+            if (result.success) {
+                setFolderName('');
+                onRefresh();
+                onClose();
+            } else {
+                setError(result.error || 'Failed to create folder');
+            }
+        } catch (err) {
+            console.error('Create folder error:', err);
+            setError('Failed to create folder. Please try again.');
+        } finally {
             setCreating(false);
-            setFolderName('');
-            onRefresh();
-            onClose();
-        }, 500);
+        }
     };
 
     const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -38,6 +57,12 @@ export default function NewFolderModal({ isOpen, onClose, onRefresh, currentFold
         } else if (e.key === 'Escape') {
             onClose();
         }
+    };
+
+    const handleClose = () => {
+        setFolderName('');
+        setError('');
+        onClose();
     };
 
     if (!isOpen) return null;
@@ -57,7 +82,7 @@ export default function NewFolderModal({ isOpen, onClose, onRefresh, currentFold
                         </div>
                     </div>
                     <button
-                        onClick={onClose}
+                        onClick={handleClose}
                         className="p-2 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition"
                     >
                         <X className="w-6 h-6 text-gray-600 dark:text-slate-400" />
@@ -78,6 +103,11 @@ export default function NewFolderModal({ isOpen, onClose, onRefresh, currentFold
                         autoFocus
                         className="w-full px-4 py-3 bg-white dark:bg-slate-800 border-2 border-gray-200 dark:border-slate-700 rounded-xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
                     />
+                    {error && (
+                        <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+                            {error}
+                        </p>
+                    )}
                     <p className="mt-2 text-xs text-gray-500 dark:text-slate-400">
                         Press Enter to create or Esc to cancel
                     </p>
@@ -86,7 +116,7 @@ export default function NewFolderModal({ isOpen, onClose, onRefresh, currentFold
                 {/* Footer */}
                 <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-800">
                     <button
-                        onClick={onClose}
+                        onClick={handleClose}
                         disabled={creating}
                         className="px-4 py-2 text-gray-700 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-700 rounded-lg transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                     >

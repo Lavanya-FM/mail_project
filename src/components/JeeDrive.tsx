@@ -7,7 +7,7 @@ import {
     X, Check, Tag as TagIcon, Users, Mail, Menu
 } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
-import driveService, { DriveFile, DriveFolder } from '../lib/driveService';
+import * as driveService from "../lib/driveService";
 import storageService, { StorageQuota, OptimizationSuggestion } from '../lib/storageService';
 import { authService } from '../lib/authService';
 import StorageBreakdownModal from './StorageBreakdownModal';
@@ -62,39 +62,41 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
         loadDriveData();
     }, [currentFolder, activeFilter]);
 
-    const loadDriveData = async () => {
-        // setLoading(true); // Removed to prevent blocking UI on every click
-        try {
-            const userId = user?.id || 1;
+const loadDriveData = async () => {
+    try {
+        const userId = user?.id || 1;
 
-            // Load based on active filter
-            let filesData: DriveFile[];
-            if (activeFilter === 'starred') {
-                filesData = await driveService.getStarredFiles(userId);
-            } else if (activeFilter === 'recent') {
-                filesData = await driveService.getRecentFiles(userId, 20);
-            } else {
-                const contents = await driveService.getFolderContents(currentFolder);
-                filesData = contents.files;
-                setFolders(contents.folders);
-            }
+const safeFolder = currentFolder && currentFolder !== 0 ? currentFolder : null;
 
-            setFiles(filesData);
+const contents = await driveService.getFolderContents(safeFolder, userId);
 
-            // Load quota and suggestions
-            const [quotaData, suggestionsData] = await Promise.all([
-                storageService.getUserQuota(userId),
-                storageService.getOptimizationSuggestions(userId)
-            ]);
+        // Always keep folders defined (never undefined)
+        setFolders(activeFilter === "all" ? (contents.folders || []) : []);
 
-            setQuota(quotaData);
-            setSuggestions(suggestionsData);
-        } catch (error) {
-            console.error('Error loading drive data:', error);
-        } finally {
-            setLoading(false);
+        let filesData = contents.files || [];
+
+        if (activeFilter === "starred") {
+            filesData = await driveService.getStarredFiles(userId);
+        } else if (activeFilter === "recent") {
+            filesData = await driveService.getRecentFiles(userId, 20);
         }
-    };
+
+        setFiles(filesData);
+
+        const [quotaData, suggestionsData] = await Promise.all([
+            storageService.getUserQuota(userId),
+            storageService.getOptimizationSuggestions(userId)
+        ]);
+
+        setQuota(quotaData);
+        setSuggestions(suggestionsData);
+
+    } catch (err) {
+        console.error("LOAD DRIVE ERROR:", err);
+    } finally {
+        setLoading(false);
+    }
+};
 
     const handleFolderClick = (folder: DriveFolder) => {
         setCurrentFolder(folder.id);
@@ -104,18 +106,19 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
 
 
 
-    const handleStarFile = async (fileId: number, starred: boolean) => {
-        await driveService.toggleStarFile(fileId, starred);
+const handleStarFile = async (fileId: number, starred: boolean) => {
+    const userId = user?.id || 1;
+    await driveService.toggleStarFile(fileId, starred, userId);
+    loadDriveData();
+};
+
+const handleDeleteFile = async (fileId: number) => {
+    if (confirm('Move this file to trash?')) {
+        const userId = user?.id || 1;
+        await driveService.deleteFile(fileId, userId);
         loadDriveData();
-    };
-
-    const handleDeleteFile = async (fileId: number) => {
-        if (confirm('Move this file to trash?')) {
-            await driveService.deleteFile(fileId);
-            loadDriveData();
-        }
-    };
-
+    }
+};
     const toggleSelectItem = (id: number) => {
         const newSelected = new Set(selectedItems);
         if (newSelected.has(id)) {
@@ -138,10 +141,17 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
         return <Icon className="w-8 h-8" style={{ color: driveService.getFileColor(file.file_type) }} />;
     };
 
-    const filteredFiles = files.filter(file =>
-        file.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        file.tags.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase()))
+const filteredFiles = files.filter(file => {
+    const nameMatch = file.name?.toLowerCase().includes(searchQuery.toLowerCase());
+
+    // SAFE TAG HANDLING (prevents "void 0 is not a function")
+    const tagList = Array.isArray(file.tags) ? file.tags : [];
+    const tagMatch = tagList.some(tag =>
+        tag.toLowerCase().includes(searchQuery.toLowerCase())
     );
+
+    return nameMatch || tagMatch;
+});
 
     const sortedFiles = [...filteredFiles].sort((a, b) => {
         switch (sortBy) {
@@ -364,7 +374,8 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                         <div className="mb-8">
                             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Smart Insights</h3>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                {suggestions.slice(0, 2).map((suggestion, index) => (
+                                {Array.isArray(suggestions) && suggestions.length > 0 &&
+    suggestions.slice(0, 2).map((suggestion, index) => (
                                     <div key={index} className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800 shadow-sm flex flex-col">
                                         <div className="flex items-start gap-4 mb-4">
                                             <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
@@ -443,7 +454,8 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-100 dark:divide-slate-800">
-                                            {activeFilter === 'all' && folders.map((folder) => (
+                                            {activeFilter === 'all' && Array.isArray(folders) && folders.map((folder) => (
+
                                                 <tr
                                                     key={`folder-${folder.id}`}
                                                     onClick={() => handleFolderClick(folder)}
@@ -451,12 +463,14 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                                                 >
                                                     <td className="py-4 px-6">
                                                         <div className="flex items-center gap-3">
-                                                            <Folder className="w-5 h-5 text-gray-400" fill="currentColor" style={{ color: folder.color || '#9CA3AF' }} />
+                                                            <Folder className="w-5 h-5 text-gray-400" fill="currentColor" style={{ color: folder?.color ?? '#9CA3AF' }}
+ />
                                                             <span className="font-medium text-gray-900 dark:text-white truncate max-w-[150px] sm:max-w-xs">{folder.name}</span>
                                                         </div>
                                                     </td>
                                                     <td className="hidden md:table-cell py-4 px-6 text-sm text-gray-500 dark:text-slate-400">Me</td>
-                                                    <td className="hidden lg:table-cell py-4 px-6 text-sm text-gray-500 dark:text-slate-400">{new Date(folder.updated_at).toLocaleDateString()}</td>
+                                                    <td className="hidden lg:table-cell py-4 px-6 text-sm text-gray-500 dark:text-slate-400">{new Date(folder.updated_at || folder.created_at).toLocaleDateString()
+}</td>
                                                     <td className="hidden sm:table-cell py-4 px-6 text-sm text-gray-500 dark:text-slate-400">{folder.file_count} files</td>
                                                     <td className="py-4 px-6 text-right">
                                                         <button className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
@@ -465,7 +479,7 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                                                     </td>
                                                 </tr>
                                             ))}
-                                            {sortedFiles.map((file) => (
+{Array.isArray(sortedFiles) && sortedFiles.map((file) => (
                                                 <tr
                                                     key={`file-${file.id}`}
                                                     onClick={() => { setPreviewFile(file); setShowPreview(true); }}
@@ -476,13 +490,18 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                                                             {getFileIcon(file)}
                                                             <div className="min-w-0">
                                                                 <p className="font-medium text-gray-900 dark:text-white truncate max-w-[150px] sm:max-w-xs">{file.name}</p>
-                                                                {file.tags.length > 0 && (
-                                                                    <div className="flex gap-1 mt-0.5">
-                                                                        {file.tags.slice(0, 2).map((tag, idx) => (
-                                                                            <span key={idx} className="text-[10px] px-1.5 py-0.5 bg-gray-100 dark:bg-slate-800 text-gray-500 rounded-full">{tag}</span>
-                                                                        ))}
-                                                                    </div>
-                                                                )}
+{Array.isArray(file.tags) && file.tags.length > 0 && (
+    <div className="flex gap-1 mt-0.5">
+        {file.tags.slice(0, 2).map((tag, idx) => (
+            <span
+                key={idx}
+                className="text-[10px] px-1.5 py-0.5 bg-gray-100 dark:bg-slate-800 text-gray-500 rounded-full"
+            >
+                {tag}
+            </span>
+        ))}
+    </div>
+)}
                                                             </div>
                                                         </div>
                                                     </td>
@@ -509,7 +528,8 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                                 </div>
                             ) : (
                                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
-                                    {activeFilter === 'all' && folders.map((folder) => (
+                                    {activeFilter === 'all' && Array.isArray(folders) && folders.map((folder) => (
+
                                         <div
                                             key={`folder-${folder.id}`}
                                             onClick={() => handleFolderClick(folder)}
@@ -518,11 +538,14 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                                             <div className="flex flex-col items-center text-center">
                                                 <Folder className="w-12 h-12 mb-3 text-blue-500" fill="currentColor" style={{ color: folder.color || '#3B82F6' }} />
                                                 <p className="font-medium text-gray-900 dark:text-white truncate w-full">{folder.name}</p>
-                                                <p className="text-sm text-gray-500 dark:text-slate-400 mt-1">{folder.file_count} files</p>
+                                                <p className="text-sm text-gray-500 dark:text-slate-400 mt-1">
+    {folder?.file_count ?? 0} files
+</p>
+
                                             </div>
                                         </div>
                                     ))}
-                                    {sortedFiles.map((file) => (
+{Array.isArray(sortedFiles) && sortedFiles.map((file) => (
                                         <div
                                             key={`file-${file.id}`}
                                             onClick={() => { setPreviewFile(file); setShowPreview(true); }}

@@ -1,7 +1,7 @@
 import { X, Copy, Trash2, Check, AlertCircle } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import storageService, { DuplicateFile } from '../lib/storageService';
-import driveService from '../lib/driveService';
+import * as driveService from "../lib/driveService";
 import { useEffect, useState } from 'react';
 
 interface DuplicateFilesModalProps {

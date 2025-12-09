@@ -17,11 +17,7 @@ export default function FileUploadModal({ isOpen, onClose, onRefresh }: FileUplo
     const handleDrag = (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        if (e.type === "dragenter" || e.type === "dragover") {
-            setDragActive(true);
-        } else if (e.type === "dragleave") {
-            setDragActive(false);
-        }
+        setDragActive(e.type === "dragenter" || e.type === "dragover");
     };
 
     const handleDrop = (e: React.DragEvent) => {
@@ -40,24 +36,58 @@ export default function FileUploadModal({ isOpen, onClose, onRefresh }: FileUplo
         }
     };
 
-    const handleUpload = async () => {
-        if (!selectedFiles || selectedFiles.length === 0) {
-            alert('Please select files to upload');
-            return;
+const handleUpload = async () => {
+    if (!selectedFiles || selectedFiles.length === 0) {
+        alert("Please select files to upload");
+        return;
+    }
+
+    const savedUser = localStorage.getItem("user");
+    let user_id = null;
+
+    if (savedUser) {
+        try {
+            user_id = JSON.parse(savedUser).id;
+        } catch (e) {
+            console.error("User parse error:", e);
         }
+    }
 
-        setUploading(true);
+    if (!user_id) {
+        alert("User not logged in");
+        return;
+    }
 
-        // Simulate upload
-        setTimeout(() => {
-            alert(`Upload functionality will be implemented by backend team.\n${selectedFiles.length} file(s) ready to upload.`);
-            setUploading(false);
-            setSelectedFiles(null);
+    setUploading(true);
+
+    try {
+        const formData = new FormData();
+        formData.append("file", selectedFiles[0]);
+
+        // FIXED: Add user_id as query parameter, not in form body
+        const res = await fetch(`/api/drive/upload?user_id=${user_id}`, {
+            method: "POST",
+            body: formData
+        });
+
+        const data = await res.json();
+
+        if (!data.success) {
+            alert("Upload failed: " + (data.error || "Unknown error"));
+        } else {
+            alert("Uploaded successfully!");
             onRefresh();
             onClose();
-        }, 1500);
-    };
+            setSelectedFiles(null); // Clear selection
+        }
 
+    } catch (err) {
+        console.error(err);
+        alert("Upload failed: " + (err instanceof Error ? err.message : "Network error"));
+    }
+
+    setUploading(false);
+};
     if (!isOpen) return null;
 
     const fileArray = selectedFiles ? Array.from(selectedFiles) : [];
@@ -74,6 +104,7 @@ export default function FileUploadModal({ isOpen, onClose, onRefresh }: FileUplo
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
             <div className={`w-full max-w-2xl overflow-hidden rounded-2xl shadow-2xl ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}>
+                
                 {/* Header */}
                 <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-slate-700">
                     <div className="flex items-center gap-3">
@@ -158,7 +189,6 @@ export default function FileUploadModal({ isOpen, onClose, onRefresh }: FileUplo
                                 ))}
                             </div>
 
-                            {/* Warning for large files */}
                             {totalSize > 100000000 && (
                                 <div className="mt-3 p-3 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg flex items-start gap-2">
                                     <AlertCircle className="w-5 h-5 text-orange-600 dark:text-orange-400 flex-shrink-0 mt-0.5" />

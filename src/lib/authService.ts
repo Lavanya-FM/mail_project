@@ -29,7 +29,7 @@ export function getCurrentUser() {
 
 export async function login(email: string, password: string) {
   try {
-    const res = await fetch(`${API}/login`, {
+      const res = await fetch(`${API}/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
@@ -49,15 +49,46 @@ export async function login(email: string, password: string) {
   }
 }
 
-export async function register(name: string, email: string, password: string, dateOfBirth?: { month: string; day: string; year: string }, gender?: string) {
+export async function register(
+  name: string,
+  emailOrUsername: string,
+  password: string,
+  dateOfBirth?: { month: string; day: string; year: string },
+  gender?: string
+) {
   try {
-    const requestBody: any = { name, email, password };
+    // --- FIX 1: Ensure email belongs to jeemail.in ---
+    let finalEmail = emailOrUsername.trim().toLowerCase();
 
-    if (dateOfBirth && dateOfBirth.month && dateOfBirth.day && dateOfBirth.year) {
-      requestBody.date_of_birth = `${dateOfBirth.year}-${dateOfBirth.month}-${dateOfBirth.day}`;
+    // User typed only username → make username@jeemail.in
+    if (!finalEmail.includes("@")) {
+      finalEmail = `${finalEmail}@jeemail.in`;
     }
+
+    // User typed wrong domain → force correct domain
+    const [userPart, domain] = finalEmail.split("@");
+    if (domain !== "jeemail.in") {
+      finalEmail = `${userPart}@jeemail.in`;
+    }
+
+    // --- FIX 2: Backend expects nested dateOfBirth object ---
+    const requestBody: any = {
+      name,
+      email: finalEmail,
+      password
+    };
+
+    if (dateOfBirth) {
+      requestBody.dateOfBirth = {
+        year: dateOfBirth.year,
+        month: dateOfBirth.month.padStart(2, "0"),
+        day: dateOfBirth.day.padStart(2, "0")
+      };
+    }
+
     if (gender) requestBody.gender = gender;
 
+    // --- API CALL ---
     const res = await fetch(`${API}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -71,8 +102,10 @@ export async function register(name: string, email: string, password: string, da
     }
 
     if (data.user) saveUser(data.user);
+
     return { success: true, user: getCurrentUser() };
-  } catch {
+
+  } catch (err) {
     return { success: false, error: "Network error" };
   }
 }

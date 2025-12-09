@@ -21,14 +21,19 @@ export default function AddAccountModal({ onClose, onSuccess }: AddAccountModalP
     setError('');
 
     try {
-      // Check if email exists
-      const resp = await fetch('/api/users/check-email', {
-        method: 'POST',
+      const resp = await fetch(`/api/users/email/${encodeURIComponent(email)}`, {
+        method: 'GET',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email })
       });
 
-      if (resp.ok) {
+      if (!resp.ok) {
+        setError('Failed to verify email. Please try again.');
+        return;
+      }
+
+      const data = await resp.json();
+
+      if (data.exists) {
         setStep('password');
       } else {
         setError('This email is not registered or already added');
@@ -46,31 +51,44 @@ export default function AddAccountModal({ onClose, onSuccess }: AddAccountModalP
     setError('');
 
     try {
-      // Attempt to login with credentials
       const resp = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
       });
 
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data.requiresVerification) {
-          setStep('verify');
+      if (!resp.ok) {
+        if (resp.status === 404) {
+          setError('User not found for this email.');
+        } else if (resp.status === 401) {
+          setError('Invalid password. Please try again.');
         } else {
-          // Account added successfully
-          onSuccess({
-            email,
-            name: data.user?.full_name || email.split('@')[0],
-            avatar: data.user?.avatar || null,
-            token: data.token
-          });
-          onClose();
+          let j = {};
+          try { j = await resp.json(); } catch (e) {}
+          setError(j.error || j.message || 'Failed to verify password. Please try again.');
         }
-      } else {
-        setError('Invalid password. Please try again.');
+        return;
       }
+
+      const data = await resp.json();
+
+      if (!data || !data.user) {
+        setError('Unexpected server response. Please try again.');
+        return;
+      }
+
+      const account = {
+        id: data.user.id,
+        email: data.user.email,
+        name: data.user.full_name || data.user.name || data.user.email?.split('@')[0],
+        avatar: data.user.avatar || null,
+        token: data.token || null
+      };
+
+      onSuccess(account);
+      onClose();
     } catch (err) {
+      console.error("Password check error:", err);
       setError('Failed to verify password. Please try again.');
     } finally {
       setLoading(false);

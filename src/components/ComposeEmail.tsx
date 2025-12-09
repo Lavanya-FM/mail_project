@@ -5,6 +5,7 @@ import { authService } from '../lib/authService';
 import { p2pService } from '../lib/p2pService';
 import { DriveFile } from '../lib/driveService';
 import AttachFromDriveModal from './AttachFromDriveModal';
+import { normalizeEmailBody } from '../utils/email';
 
 const getFolderIdByName = (name: string) => {
   const folders = JSON.parse(localStorage.getItem("folders") || "[]");
@@ -12,20 +13,11 @@ const getFolderIdByName = (name: string) => {
   return f ? Number(f.id) : null;
 };
 
-
 interface ComposeEmailProps {
   onClose: () => void;
   onSent: () => void;
   onDraftSaved: () => void;
-  prefilledData?: {
-    to?: string;
-    cc?: string;
-    subject?: string;
-    body?: string;
-    threadId?: string;
-    isReply?: boolean;
-    isForward?: boolean;
-  };
+  prefilledData?: any;
 }
 
 const normalizeEmailField = (val: any): string => {
@@ -45,17 +37,22 @@ const normalizeEmailField = (val: any): string => {
 };
 
 export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledData }: ComposeEmailProps) {
+
+  // -------------------- STATE --------------------
   const [to, setTo] = useState('');
   const [cc, setCc] = useState('');
   const [bcc, setBcc] = useState('');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
+
   const [showCc, setShowCc] = useState(false);
   const [showBcc, setShowBcc] = useState(false);
   const [sending, setSending] = useState(false);
   const [draftStatus, setDraftStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [attachments, setAttachments] = useState<File[]>([]);
   const [profile, setProfile] = useState<any>(null);
+
+  // UI state
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showScheduleMenu, setShowScheduleMenu] = useState(false);
   const [linkDialog, setLinkDialog] = useState<{ open: boolean; url: string; error?: string }>({ open: false, url: '' });
@@ -68,115 +65,80 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showDriveModal, setShowDriveModal] = useState(false);
 
-  // Threading state
   const [threadId, setThreadId] = useState<string | undefined>(undefined);
-
   const textareaRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const savedSelectionRef = useRef<Range | null>(null);
 
   const emojis = ['😊', '😂', '😍', '👍', '🙏', '🎉', '😎', '😢'];
 
+  // -------------------- LOAD USER --------------------
   useEffect(() => {
-    const currentUser = authService.getCurrentUser();
-    setProfile(currentUser);
+    setProfile(authService.getCurrentUser());
   }, []);
 
-  // Initialize with pre-filled data
+  // -------------------- PREFILL --------------------
   useEffect(() => {
-    if (prefilledData) {
-      setTo(normalizeEmailField(prefilledData.to));
-      setCc(normalizeEmailField(prefilledData.cc));
-      setBcc(normalizeEmailField((prefilledData as any).bcc));
+    if (!prefilledData) return;
 
-      setSubject(prefilledData.subject || '');
-      setBody(prefilledData.body || '');
+    setTo(normalizeEmailField(prefilledData.to));
+    setCc(normalizeEmailField(prefilledData.cc));
+    setBcc(normalizeEmailField(prefilledData.bcc));
+    setSubject(prefilledData.subject || "");
 
-      // Set threading info
-      if (prefilledData.threadId) {
-        setThreadId(prefilledData.threadId);
-      }
+    // normalize prefilled body to prevent stray '0' or weird values
+    const normalizedPrefillBody = normalizeEmailBody(prefilledData.body) || "";
+    setBody(normalizedPrefillBody);
 
-      // Show CC field if there's CC data
-      if (prefilledData.cc) {
-        setShowCc(true);
-      }
+    if (prefilledData.threadId) setThreadId(prefilledData.threadId);
+    if (prefilledData.cc) setShowCc(true);
 
-      // Initialize editor content without making it a controlled component
-      if (textareaRef.current) {
-        textareaRef.current.innerHTML = prefilledData.body || '';
-      }
-    }
+    if (textareaRef.current) textareaRef.current.innerHTML = normalizedPrefillBody;
   }, [prefilledData]);
 
-  // Auto-save draft every 3 seconds
+  // -------------------- AUTO SAVE DRAFT --------------------
   useEffect(() => {
     if (!to && !subject && !body) return;
 
-    const timer = setTimeout(() => {
-      saveDraft();
-    }, 3000);
-
-    return () => clearTimeout(timer);
+    const t = setTimeout(() => saveDraft(), 3000);
+    return () => clearTimeout(t);
   }, [to, cc, bcc, subject, body]);
 
   const saveDraft = async () => {
     if (!profile || (!to.trim() && !subject.trim() && !body.trim())) return;
 
-    setDraftStatus('saving');
+    setDraftStatus("saving");
+
+    const draftsFolderId = getFolderIdByName("drafts");
+
     try {
-      const toList = normalizeEmailField(to);
-      const ccList = normalizeEmailField(cc);
-      const bccList = normalizeEmailField(bcc);
-
-      const toEmails = toList.split(',').map(email => ({
-        email: email.trim(),
-        name: email.trim()
-      })).filter(x => x.email);
-
-      const ccEmails = ccList.split(',').map(email => ({
-        email: email.trim(),
-        name: email.trim()
-      })).filter(x => x.email);
-
-      const bccEmails = bccList.split(',').map(email => ({
-        email: email.trim(),
-        name: email.trim()
-      })).filter(x => x.email);
-
-      const draftsFolderId = getFolderIdByName("drafts");
-
-      // Get plain text version for preview
-      const plainTextBody = (() => {
-        const div = document.createElement('div');
-        div.innerHTML = body;
-        return div.textContent || div.innerText || '';
-      })();
-
       await emailService.createEmail({
         user_id: profile.id,
         from_email: profile.email,
         from_name: profile.full_name || profile.email,
-        to_emails: toEmails,
-        cc_emails: ccEmails,
-        bcc_emails: bccEmails,
-        subject: subject || '(no subject)',
-        body: plainTextBody,
+
+        to_emails: to.split(",").map(e => ({ email: e.trim(), name: e.trim() })).filter(e => e.email),
+        cc_emails: cc.split(",").map(e => ({ email: e.trim(), name: e.trim() })).filter(e => e.email),
+        bcc_emails: bcc.split(",").map(e => ({ email: e.trim(), name: e.trim() })).filter(e => e.email),
+
+        subject: subject || "(no subject)",
+        // normalize from editor OR state (ensures no numeric 0 or whitespace-only)
+        body: normalizeEmailBody(textareaRef.current?.textContent) || normalizeEmailBody(body) || "",
         is_draft: true,
         folder_id: draftsFolderId,
         thread_id: threadId
       });
 
-      setDraftStatus('saved');
+      setDraftStatus("saved");
       onDraftSaved();
-
-      setTimeout(() => setDraftStatus('idle'), 2000);
+      setTimeout(() => setDraftStatus("idle"), 2000);
     } catch (error) {
       console.error('Error saving draft:', error);
-      setDraftStatus('idle');
+      setDraftStatus("idle");
     }
   };
 
+  // -------------------- FORMATTING --------------------
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.ctrlKey || e.metaKey) {
       if (e.key === 'b') {
@@ -195,7 +157,6 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
   const handleBold = () => {
     const editor = textareaRef.current;
     if (!editor) return;
-
     editor.focus();
     document.execCommand('bold', false);
   };
@@ -203,7 +164,6 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
   const handleItalic = () => {
     const editor = textareaRef.current;
     if (!editor) return;
-
     editor.focus();
     document.execCommand('italic', false);
   };
@@ -256,12 +216,14 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
       document.execCommand('insertHTML', false, `<a href="${finalUrl}" target="_blank" rel="noopener noreferrer">${finalUrl}</a>`);
     }
 
-    setBody(editor.innerHTML);
+    // normalize and set body state
+    setBody(normalizeEmailBody(editor.innerHTML));
     closeLinkDialog();
   };
 
   const handleInsertEmoji = () => {
     setShowScheduleMenu(false);
+    setShowP2pMenu(false);
     setShowEmojiPicker((prev) => !prev);
   };
 
@@ -271,12 +233,13 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
 
     editor.focus();
     document.execCommand('insertText', false, emoji);
-    setBody(editor.innerHTML);
+    setBody(normalizeEmailBody(editor.innerHTML));
     setShowEmojiPicker(false);
   };
 
   const handleScheduleSend = () => {
     setShowEmojiPicker(false);
+    setShowP2pMenu(false);
     setShowScheduleMenu((prev) => !prev);
   };
 
@@ -304,13 +267,11 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
     setShowP2pMenu(false);
 
     try {
-      // Connect to P2P network if not already connected
       if (!p2pConnected) {
         await p2pService.connect(profile.id, profile.email);
         setP2pConnected(true);
       }
 
-      // Check if recipient is online
       const toList = normalizeEmailField(to);
       const recipientEmail = toList.split(',')[0]?.trim() || "";
       const isRecipientOnline = p2pService.isPeerOnline(recipientEmail);
@@ -319,7 +280,6 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
         alert(`⚠️ Recipient (${recipientEmail}) is not online.\n\nFor P2P mode to work:\n1. Recipient must be logged in\n2. Both systems must be connected to the P2P network\n\nWaiting for recipient to come online...`);
       }
 
-      // Send P2P email with attachments
       await p2pService.sendP2PEmail(
         recipientEmail,
         subject || '(no subject)',
@@ -342,61 +302,7 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
     }
   };
 
-  const handleSend = async () => {
-    if (!profile || !to.trim()) return;
-
-    setSending(true);
-    try {
-      const toList = normalizeEmailField(to);
-      const ccList = normalizeEmailField(cc);
-      const bccList = normalizeEmailField(bcc);
-
-      const toEmails = toList.split(',').map(email => ({
-        email: email.trim(),
-        name: email.trim()
-      })).filter(x => x.email);
-
-      const ccEmails = ccList.split(',').map(email => ({
-        email: email.trim(),
-        name: email.trim()
-      })).filter(x => x.email);
-
-      const bccEmails = bccList.split(',').map(email => ({
-        email: email.trim(),
-        name: email.trim()
-      })).filter(x => x.email);
-
-      const sentFolderId = getFolderIdByName("sent");
-
-      // Get plain text version for preview
-      const plainTextBody = (() => {
-        const div = document.createElement('div');
-        div.innerHTML = body;
-        return div.textContent || div.innerText || '';
-      })();
-
-      await emailService.createEmail({
-        user_id: profile.id,
-        from_email: profile.email,
-        from_name: profile.full_name || profile.email,
-        to_emails: toEmails,
-        cc_emails: ccEmails,
-        bcc_emails: bccEmails,
-        subject: subject || '(no subject)',
-        body: plainTextBody,
-        is_draft: false,
-        folder_id: sentFolderId,
-        thread_id: threadId
-      });
-
-      onSent();
-    } catch (error) {
-      console.error('Error sending email:', error);
-    } finally {
-      setSending(false);
-    }
-  };
-
+  // -------------------- ATTACHMENTS --------------------
   const handleAttachment = () => {
     setShowAttachMenu(!showAttachMenu);
   };
@@ -408,7 +314,6 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
 
   const handleDriveAttach = (files: DriveFile[]) => {
     const newAttachments = files.map(file => {
-      // Create a mock File object with the correct size and name
       const mockFile = new File([""], file.name, { type: file.mime_type || 'application/octet-stream' });
       Object.defineProperty(mockFile, 'size', { value: file.size_bytes });
       return mockFile;
@@ -437,20 +342,54 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
     return `${gb.toFixed(1)} GB`;
   };
 
+  // -------------------- SEND EMAIL --------------------
+  const handleSend = async () => {
+    if (!profile || !to.trim()) return;
+
+    setSending(true);
+
+    const sentFolderId = getFolderIdByName("sent");
+
+    try {
+      await emailService.createEmail({
+        user_id: profile.id,
+        from_email: profile.email,
+        from_name: profile.full_name || profile.email,
+
+        to_emails: to.split(",").map(e => ({ email: e.trim(), name: e.trim() })).filter(e => e.email),
+        cc_emails: cc.split(",").map(e => ({ email: e.trim(), name: e.trim() })).filter(e => e.email),
+        bcc_emails: bcc.split(",").map(e => ({ email: e.trim(), name: e.trim() })).filter(e => e.email),
+
+        subject: subject || "(no subject)",
+        // normalize send body too
+        body: normalizeEmailBody(textareaRef.current?.textContent) || normalizeEmailBody(body) || "",
+        is_draft: false,
+        folder_id: sentFolderId,
+        thread_id: threadId
+      });
+
+      onSent();
+    } catch (error) {
+      console.error('Error sending email:', error);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // -------------------- UI --------------------
   return (
     <div className="fixed inset-0 lg:inset-auto lg:bottom-4 lg:right-4 z-50 w-full lg:w-[500px] max-h-[600px] bg-white dark:bg-slate-900 rounded-none lg:rounded-xl shadow-2xl border border-gray-200 dark:border-slate-700 flex flex-col">
-      {/* Header */}
+
+      {/* HEADER */}
       <div className="flex items-center justify-between p-3 lg:p-4 border-b border-gray-200 dark:border-slate-700">
         <h2 className="text-base lg:text-lg font-medium text-gray-900 dark:text-white">New Message</h2>
+
         <div className="flex items-center gap-2">
-          {draftStatus === 'saving' && (
-            <span className="text-sm text-gray-500 dark:text-slate-400">Saving...</span>
-          )}
-          {draftStatus === 'saved' && (
-            <span className="text-sm text-green-600 dark:text-green-400">Draft saved</span>
-          )}
-          <button
-            onClick={onClose}
+          {draftStatus === "saving" && <span className="text-sm text-gray-500 dark:text-slate-400">Saving...</span>}
+          {draftStatus === "saved" && <span className="text-sm text-green-600 dark:text-green-400">Draft saved</span>}
+
+          <button 
+            onClick={onClose} 
             className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition"
           >
             <X className="w-5 h-5" />
@@ -458,75 +397,66 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
         </div>
       </div>
 
-      {/* Form */}
+      {/* FORM */}
       <div className="flex-1 overflow-y-auto">
-        {/* To Field */}
+
+        {/* TO */}
         <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-3 lg:px-4 py-2 lg:py-3">
           <label className="text-sm text-gray-600 dark:text-slate-400 w-8 lg:w-12 flex-shrink-0">To:</label>
           <input
             type="email"
+            className="flex-1 bg-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none text-sm"
             value={to}
             onChange={(e) => setTo(e.target.value)}
-            placeholder=""
-            className="flex-1 bg-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none text-sm"
           />
           <div className="flex items-center gap-2 ml-2">
-            <button
-              onClick={() => setShowCc(!showCc)}
-              className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-            >
+            <button onClick={() => setShowCc(!showCc)} className="text-xs text-blue-600 dark:text-blue-400 hover:underline">
               Cc
             </button>
-            <button
-              onClick={() => setShowBcc(!showBcc)}
-              className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-            >
+            <button onClick={() => setShowBcc(!showBcc)} className="text-xs text-blue-600 dark:text-blue-400 hover:underline">
               Bcc
             </button>
           </div>
         </div>
 
-        {/* CC Field */}
+        {/* CC */}
         {showCc && (
           <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-3 lg:px-4 py-2 lg:py-3">
             <label className="text-sm text-gray-600 dark:text-slate-400 w-8 lg:w-12 flex-shrink-0">Cc:</label>
             <input
               type="email"
+              className="flex-1 bg-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none text-sm"
               value={cc}
               onChange={(e) => setCc(e.target.value)}
-              placeholder=""
-              className="flex-1 bg-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none text-sm"
             />
           </div>
         )}
 
-        {/* BCC Field */}
+        {/* BCC */}
         {showBcc && (
           <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-3 lg:px-4 py-2 lg:py-3">
             <label className="text-sm text-gray-600 dark:text-slate-400 w-8 lg:w-12 flex-shrink-0">Bcc:</label>
             <input
               type="email"
+              className="flex-1 bg-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none text-sm"
               value={bcc}
               onChange={(e) => setBcc(e.target.value)}
-              placeholder=""
-              className="flex-1 bg-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none text-sm"
             />
           </div>
         )}
 
-        {/* Subject Field */}
+        {/* SUBJECT */}
         <div className="flex items-center border-b border-gray-200 dark:border-slate-700 px-3 lg:px-4 py-2 lg:py-3">
           <label className="text-sm text-gray-600 dark:text-slate-400 w-8 lg:w-12 flex-shrink-0">Sub:</label>
           <input
             type="text"
+            className="flex-1 bg-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none text-sm"
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
-            placeholder=""
-            className="flex-1 bg-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none text-sm"
           />
         </div>
 
-        {/* P2P Status */}
+        {/* P2P STATUS */}
         {usePeerToPeer && (
           <div className="border-b border-gray-200 dark:border-slate-700 p-4 bg-orange-50 dark:bg-orange-900/20">
             <div className="flex items-center justify-between mb-2">
@@ -549,12 +479,12 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
           </div>
         )}
 
-        {/* Body Field */}
+        {/* BODY */}
         <div className="flex-1 p-3 lg:p-4">
           <div
             ref={textareaRef}
             contentEditable
-            onInput={(e) => setBody(e.currentTarget.innerHTML || '')}
+            onInput={(e) => setBody(e.currentTarget.innerHTML ? normalizeEmailBody(e.currentTarget.innerHTML) : '')}
             onKeyDown={handleKeyDown}
             className="w-full h-48 lg:h-64 bg-transparent text-gray-900 dark:text-white focus:outline-none text-sm leading-relaxed"
             style={{
@@ -565,7 +495,7 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
           />
         </div>
 
-        {/* Attachments */}
+        {/* ATTACHMENTS */}
         {attachments.length > 0 && (
           <div className="border-t border-gray-200 dark:border-slate-700 p-3 lg:p-4">
             <h4 className="text-sm font-medium text-gray-700 dark:text-slate-300 mb-2">Attachments</h4>
@@ -594,9 +524,10 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
         )}
       </div>
 
-      {/* Footer */}
+      {/* FOOTER */}
       <div className="flex items-center justify-between p-3 lg:p-4 border-t border-gray-200 dark:border-slate-700 flex-wrap gap-2">
         <div className="relative flex items-center gap-1 lg:gap-2 order-2 lg:order-1">
+          {/* ATTACH */}
           <div className="relative">
             <button
               onClick={handleAttachment}
@@ -609,7 +540,6 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
               <Paperclip className="w-4 h-4" />
             </button>
 
-            {/* Attachment Menu */}
             {showAttachMenu && (
               <div className="absolute bottom-full left-0 mb-2 w-48 bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-gray-200 dark:border-slate-700 overflow-hidden z-50">
                 <button
@@ -632,6 +562,7 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
               </div>
             )}
           </div>
+
           <input
             ref={fileInputRef}
             type="file"
@@ -639,6 +570,8 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
             onChange={handleFileSelect}
             className="hidden"
           />
+
+          {/* LINK */}
           <button
             onClick={handleInsertLink}
             className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition"
@@ -646,6 +579,8 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
           >
             <Link className="w-4 h-4" />
           </button>
+
+          {/* EMOJI */}
           <button
             onClick={handleInsertEmoji}
             className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition"
@@ -653,6 +588,8 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
           >
             <Smile className="w-4 h-4" />
           </button>
+
+          {/* SCHEDULE */}
           <button
             onClick={handleScheduleSend}
             className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition"
@@ -660,6 +597,8 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
           >
             <Clock className="w-4 h-4" />
           </button>
+
+          {/* P2P */}
           <button
             onClick={handleP2pSend}
             className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200 dark:hover:bg-slate-800 rounded-lg transition"
@@ -668,6 +607,7 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
             <Share2 className="w-4 h-4" />
           </button>
 
+          {/* EMOJI PICKER */}
           {showEmojiPicker && (
             <div className="absolute bottom-12 left-12 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg shadow-lg p-2 flex flex-wrap gap-1 max-w-[200px] z-50">
               {emojis.map((emoji) => (
@@ -683,6 +623,7 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
             </div>
           )}
 
+          {/* SCHEDULE MENU */}
           {showScheduleMenu && (
             <div className="absolute bottom-12 left-32 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg shadow-lg py-2 w-40 z-50 text-sm">
               <button
@@ -709,6 +650,7 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
             </div>
           )}
 
+          {/* P2P MENU */}
           {showP2pMenu && (
             <div className="absolute bottom-12 left-56 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg shadow-lg py-2 w-56 z-50 text-sm">
               <div className="px-3 py-2 border-b border-gray-200 dark:border-slate-700 flex items-center justify-between">
@@ -744,6 +686,8 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
             </div>
           )}
         </div>
+
+        {/* ACTION BUTTONS */}
         <div className="flex items-center gap-2 order-1 lg:order-2 w-full lg:w-auto justify-between">
           <button
             onClick={onClose}
@@ -771,6 +715,7 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
         </div>
       </div>
 
+      {/* LINK DIALOG */}
       {linkDialog.open && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 px-4">
           <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-2xl shadow-2xl border border-gray-200 dark:border-slate-700 p-6">
@@ -809,7 +754,8 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
           </div>
         </div>
       )}
-      {/* Drive Modal */}
+
+      {/* DRIVE MODAL */}
       <AttachFromDriveModal
         isOpen={showDriveModal}
         onClose={() => setShowDriveModal(false)}

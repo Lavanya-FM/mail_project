@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { X, HardDrive, Folder, File, Check } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
-import driveService, { DriveFile } from '../lib/driveService';
+import * as driveService from "../lib/driveService";
+import type { DriveFile } from "../lib/driveService";
 import { authService } from '../lib/authService';
 
 interface AttachFromDriveModalProps {

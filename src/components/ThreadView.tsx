@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { emailService } from '../lib/emailService';
 import { threadingService } from '../lib/threadingService';
 import { authService } from '../lib/authService';
+import { normalizeEmailBody } from '../utils/email';
 
 interface ThreadEmail {
   id: string;
@@ -86,7 +87,8 @@ export default function ThreadView({ threadId, userId, onClose, onCompose }: Thr
     if (!currentUser || !onCompose) return;
     
     const replySubject = email.subject?.startsWith('Re:') ? email.subject : `Re: ${email.subject || '(No subject)'}`;
-    const replyBody = `\n\n--- Original Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || 'me'}\nSubject: ${email.subject || '(No subject)'}\n\n${email.body || ''}`;
+    const originalBody = normalizeEmailBody(email.body) || "";
+    const replyBody = `\n\n--- Original Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || 'me'}\nSubject: ${email.subject || '(No subject)'}\n\n${originalBody}`;
     
     onCompose({ 
       to: email.from_email, 
@@ -104,7 +106,8 @@ export default function ThreadView({ threadId, userId, onClose, onCompose }: Thr
       .filter(emailAddr => emailAddr !== currentUser.email);
     
     const replySubject = email.subject?.startsWith('Re:') ? email.subject : `Re: ${email.subject || '(No subject)'}`;
-    const replyBody = `\n\n--- Original Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || 'me'}\nSubject: ${email.subject || '(No subject)'}\n\n${email.body || ''}`;
+    const originalBody = normalizeEmailBody(email.body) || "";
+    const replyBody = `\n\n--- Original Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || 'me'}\nSubject: ${email.subject || '(No subject)'}\n\n${originalBody}`;
     
     onCompose({ 
       to: allRecipients.join(', '), 
@@ -118,12 +121,14 @@ export default function ThreadView({ threadId, userId, onClose, onCompose }: Thr
   const formatDate = (dateString: string) => {
     // Parse the date string properly
     let date;
-    if (dateString.includes('T')) {
+    if (dateString && dateString.includes('T')) {
       // ISO format
       date = new Date(dateString);
-    } else {
+    } else if (dateString) {
       // SQLite format (YYYY-MM-DD HH:MM:SS)
       date = new Date(dateString.replace(' ', 'T'));
+    } else {
+      date = new Date();
     }
     
     const today = new Date();
@@ -242,7 +247,7 @@ export default function ThreadView({ threadId, userId, onClose, onCompose }: Thr
 
         {/* Email Body */}
         <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words leading-relaxed mb-6">
-          {currentEmail.body || '(No content)'}
+          { normalizeEmailBody(currentEmail.body) || (currentEmail.text_preview || '(No content)') }
         </div>
 
         {/* Action Buttons */}

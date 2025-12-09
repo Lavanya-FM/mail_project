@@ -1,8 +1,10 @@
+// src/components/EmailView.tsx
 import { Star, Reply, ReplyAll, Forward, Trash2, Archive, MoreVertical, Paperclip, X, Flag, FileEdit, Tag, Check } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { emailService } from '../lib/emailService';
 import { authService } from '../lib/authService';
 import { Email } from '../types/email';
+import { normalizeEmailBody } from '../utils/email';
 
 type EmailViewProps = {
   email: Email | null;
@@ -13,6 +15,13 @@ type EmailViewProps = {
     cc?: string;
     subject?: string;
     body?: string;
+    isReply?: boolean;
+    isReplyAll?: boolean;
+    isForward?: boolean;
+    isDraft?: boolean;
+    threadId?: string;
+    originalSender?: string;
+    originalCc?: string;
   }) => void;
   labels?: { id: number; name: string; color: string }[];
 };
@@ -47,13 +56,43 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
   const [showLabelDropdown, setShowLabelDropdown] = useState(false);
   const labelDropdownRef = useRef<HTMLDivElement>(null);
 
+  // -----------------------
+  // Sanitizer: remove lines that are empty or only zeros
+  // -----------------------
+  const sanitizeBody = (text?: string) => {
+    if (!text) return "";
+    // normalize CRLF -> LF
+    const normalized = text.replace(/\r/g, "");
+    // Split into lines, trim, and remove lines that are empty or only zeros
+    const lines = normalized.split("\n").map(l => l.replace(/\u00A0/g, " ").trim());
+    const filtered = lines.filter(line => {
+      if (!line) return false;
+      // If line is only zeros like "0", "000", or whitespace+zeros -> remove
+      if (/^0+$/.test(line)) return false;
+      return true;
+    });
+    return filtered.join("\n");
+  };
+
+  // Helper to create safe HTML for display
+  const bodyToHtml = (text?: string) => {
+    const cleaned = sanitizeBody(text);
+    // convert newlines to <br> and escape HTML
+    const escaped = cleaned
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    return escaped.replace(/\n/g, "<br>");
+  };
+
   useEffect(() => {
     if (email) {
-      setStarred(email.is_starred || false);
+      setStarred(Boolean(email.is_starred));
       if (!email.is_read) {
         markAsRead(String(email.id));
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [email]);
 
   useEffect(() => {
@@ -75,6 +114,64 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
     };
   }, [showActions, showLabelDropdown]);
 
+  const openConfirmDialog = (opts: Partial<ConfirmDialogState>) => {
+    setConfirmDialog(prev => ({ ...initialConfirmState, ...opts, open: true }));
+  };
+
+  const closeConfirmDialog = () => setConfirmDialog(initialConfirmState);
+
+  const executeConfirmAction = async () => {
+    if (!confirmDialog.onConfirm) return;
+    try {
+      setConfirmDialog(prev => ({ ...prev, processing: true }));
+      await confirmDialog.onConfirm();
+      setConfirmDialog(initialConfirmState);
+    } catch (err: any) {
+      setConfirmDialog(prev => ({ ...prev, processing: false, error: err?.message || String(err) }));
+    }
+  };
+
+  const handleDelete = () => {
+    if (!email || !currentUser) return;
+
+    openConfirmDialog({
+      title: "Delete this email?",
+      message: "This email will be moved to Trash.",
+      confirmLabel: "Delete",
+      cancelLabel: "Cancel",
+
+      onConfirm: async () => {
+        try {
+          const { data: folders } = await emailService.getFolders(currentUser.id);
+
+          // Find Trash folder
+          const trashFolder = folders?.find(
+            (f: any) => (f.name || '').toString().toLowerCase() === "trash" || f.system_box === "trash"
+          );
+
+          if (!trashFolder) {
+            alert("Trash folder not found. Please create a Trash folder.");
+            return;
+          }
+
+          const { error } = await emailService.moveEmail(
+            Number(email.id),
+            currentUser.id,
+            Number(trashFolder.id)
+          );
+
+          if (error) throw error;
+
+          onRefresh();
+          onClose();
+        } catch (err) {
+          console.error("Delete error:", err);
+          alert("Failed to delete email.");
+        }
+      }
+    });
+  };
+
   const markAsRead = async (emailId: string) => {
     try {
       await emailService.updateEmail(emailId, { user_id: currentUser.id, is_read: true });
@@ -95,99 +192,96 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
     }
   };
 
+  // ---------------------- REPLY ----------------------
   const handleReply = () => {
     if (!email || !currentUser || !onCompose) return;
-    const replySubject = email.subject?.startsWith('Re:') ? email.subject : `Re: ${email.subject || '(No subject)'}`;
 
-    const replyTo = email.from_email;
+    const normalized = normalizeEmailBody(email.body ?? email.text_preview ?? "");
+    const quoted = bodyToHtml(normalized).replace(/<br>$/,"");
 
-    const replyBody = `\n\n--- Original Message ---\nFrom: ${email.from_name || email.from_email}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || currentUser.email}\nSubject: ${email.subject || '(No subject)'}\n\n${email.body || ''}`;
-
-    onCompose({ to: replyTo, subject: replySubject, body: replyBody });
+    onCompose({
+      isReply: true,
+      threadId: email.thread_id || String(email.id),
+      originalSender: email.from_email,
+      body: `
+<br><br>
+<div style="border-left:2px solid #ccc; margin-left:8px; padding-left:8px;">
+  <b>On ${formatFullDate(email.sent_at || email.created_at || "")}, ${
+        email.from_name || email.from_email
+      } wrote:</b><br>
+  ${quoted}
+</div>
+`.trim(),
+      subject: email.subject?.startsWith("Re:")
+        ? email.subject
+        : `Re: ${email.subject || "(No subject)"}`,
+      to: email.from_email,
+      cc: "", // only reply to sender
+    });
   };
 
+  // ---------------------- REPLY ALL ----------------------
   const handleReplyAll = () => {
     if (!email || !currentUser || !onCompose) return;
 
     const allRecipients = [
       email.from_email,
-      ...(email.to_emails?.map(t => t.email) || []),
-      ...(email.cc_emails?.map(cc => cc.email) || [])
+      ...(email.to_emails?.map(t => (typeof t === 'string' ? t : (t?.email || ""))) || []),
+      ...(email.cc_emails?.map(t => (typeof t === 'string' ? t : (t?.email || ""))) || []),
     ].filter(addr => addr && addr !== currentUser.email);
 
     const uniqueRecipients = Array.from(new Set(allRecipients));
 
-    const replySubject = email.subject?.startsWith("Re:")
-      ? email.subject
-      : `Re: ${email.subject || "(No subject)"}`;
-
-    const replyBody = `\n\n--- Original Message ---\nFrom: ${email.from_name || email.from_email
-      }\nTo: ${email.to_emails?.map(t => t.email).join(", ") || currentUser.email}\nSubject: ${email.subject || "(No subject)"
-      }\n\n${email.body || ""}`;
+    const quoted = bodyToHtml(normalizeEmailBody(email.body ?? email.text_preview ?? "")).replace(/<br>$/,"");
 
     onCompose({
+      isReplyAll: true,
+      threadId: email.thread_id || String(email.id),
+      originalSender: email.from_email,
+      originalCc: email.cc_emails?.map((c: any) => (typeof c === 'string' ? c : c?.email)).join(", ") || "",
       to: uniqueRecipients.join(", "),
-      subject: replySubject,
-      body: replyBody,
+      cc: email.cc_emails?.map((cc: any) => (typeof cc === 'string' ? cc : cc?.email)).join(", ") || "",
+      bcc: "",
+      subject: email.subject?.startsWith("Re:")
+        ? email.subject
+        : `Re: ${email.subject || "(No subject)"}`,
+      body: `
+<br><br>
+<div style="border-left:2px solid #ccc; margin-left:8px; padding-left:8px;">
+<b>On ${formatFullDate(email.sent_at || email.created_at || "")}, ${
+        email.from_name || email.from_email
+      } wrote:</b><br>
+${quoted}
+</div>
+    `.trim(),
     });
   };
 
+  // ---------------------- FORWARD ----------------------
   const handleForward = () => {
     if (!email || !onCompose) return;
-    const forwardSubject = email.subject?.startsWith('Fwd:') ? email.subject : `Fwd: ${email.subject || '(No subject)'}`;
-    const forwardBody = `\n\n--- Forwarded Message ---\nFrom: ${email.from_name || email.from_email || ''}\nTo: ${email.to_emails?.map(to => to.email).join(', ') || currentUser.email}\nSubject: ${email.subject || '(No subject)'}\nDate: ${formatFullDate(email.sent_at || email.created_at || '')}\n\n${email.body || ''}`;
-    onCompose({ subject: forwardSubject, body: forwardBody });
-  };
 
-  const openConfirmDialog = (config: Omit<ConfirmDialogState, 'open' | 'processing'>) => {
-    setConfirmDialog({
-      ...initialConfirmState,
-      open: true,
-      ...config,
-    });
-  };
+    const quoted = bodyToHtml(normalizeEmailBody(email.body ?? email.text_preview ?? "")).replace(/<br>$/,"");
 
-  const closeConfirmDialog = () => setConfirmDialog(initialConfirmState);
-
-  const executeConfirmAction = async () => {
-    if (!confirmDialog.onConfirm) return;
-    setConfirmDialog(prev => ({ ...prev, processing: true, error: undefined }));
-    try {
-      await confirmDialog.onConfirm();
-      closeConfirmDialog();
-    } catch (error) {
-      console.error('Confirm dialog action failed:', error);
-      setConfirmDialog(prev => ({ ...prev, processing: false, error: 'Something went wrong. Please try again.' }));
-    }
-  };
-
-  const handleDelete = () => {
-    if (!email || !currentUser) return;
-    openConfirmDialog({
-      title: 'Delete email?',
-      message: 'Are you sure you want to delete this email? It will be moved to your Trash folder.',
-      confirmLabel: 'Move to Trash',
-      cancelLabel: 'Cancel',
-      onConfirm: async () => {
-        const { data: folders, error } = await emailService.getFolders(currentUser.id);
-        if (error) throw error;
-        const trashFolder = folders?.find(f => f.name.toLowerCase() === 'trash');
-
-        if (trashFolder) {
-          const { error: updateError } = await emailService.updateEmail(email.id, {
-            user_id: currentUser.id,
-            folder_id: trashFolder.id
-          });
-
-          if (updateError) throw updateError;
-        } else {
-          const { error: deleteError } = await emailService.deleteEmail(Number(email.id), currentUser.id);
-          if (deleteError) throw deleteError;
-        }
-
-        onRefresh();
-        onClose();
-      }
+    onCompose({
+      isForward: true,
+      threadId: email.thread_id || String(email.id),
+      to: "",
+      cc: "",
+      bcc: "",
+      subject: email.subject?.startsWith("Fwd:")
+        ? email.subject
+        : `Fwd: ${email.subject || "(No subject)"}`,
+      body: `
+<br><br>
+---------- Forwarded message ---------<br>
+<b>From:</b> ${email.from_name || email.from_email} &lt;${email.from_email}&gt;<br>
+<b>To:</b> ${email.to_emails?.map(t => (typeof t === 'string' ? t : (t?.email || ""))).join(", ") || ""}<br>
+<b>Cc:</b> ${email.cc_emails?.map((cc: any) => (typeof cc === 'string' ? cc : (cc?.email || ""))).join(", ") || ""}<br>
+<b>Date:</b> ${formatFullDate(email.sent_at || email.created_at || "")}<br>
+<b>Subject:</b> ${email.subject || "(No subject)"}<br><br>
+${quoted}
+    `.trim(),
     });
   };
 
@@ -197,11 +291,10 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
       const { data: folders, error } = await emailService.getFolders(currentUser.id);
       if (error) throw error;
 
-      const archiveFolder = folders?.find(f => f.name.toLowerCase() === 'archive');
+      const archiveFolder = folders?.find((f: any) => (f.name || '').toString().toLowerCase() === 'archive');
 
       if (!archiveFolder) {
-        // If archive folder doesn't exist, try to move to a default system folder
-        const systemFolder = folders?.find(f => f.system_box === 'archive' || f.system_box === 'all');
+        const systemFolder = folders?.find((f: any) => f.system_box === 'archive' || f.system_box === 'all');
         if (systemFolder) {
           const { error: moveError } = await emailService.moveEmail(
             Number(email.id),
@@ -214,7 +307,6 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
           return;
         }
       } else {
-        // Move to existing archive folder
         const { error: moveError } = await emailService.moveEmail(
           Number(email.id),
           currentUser.id,
@@ -243,11 +335,10 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
           const { data: folders, error } = await emailService.getFolders(currentUser.id);
           if (error) throw error;
 
-          const spamFolder = folders?.find(f => f.name.toLowerCase() === 'spam');
+          const spamFolder = folders?.find((f: any) => (f.name || '').toString().toLowerCase() === 'spam');
 
           if (!spamFolder) {
-            // If spam folder doesn't exist, try to move to a default system folder
-            const systemFolder = folders?.find(f => f.system_box === 'spam' || f.system_box === 'junk');
+            const systemFolder = folders?.find((f: any) => f.system_box === 'spam' || f.system_box === 'junk');
             if (systemFolder) {
               const { error: moveError } = await emailService.moveEmail(
                 Number(email.id),
@@ -260,7 +351,6 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
               return;
             }
           } else {
-            // Move to existing spam folder
             const { error: moveError } = await emailService.moveEmail(
               Number(email.id),
               currentUser.id,
@@ -280,29 +370,35 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
   };
 
   const handleEditDraft = async () => {
-    if (!email || !onCompose) return;
-    const toEmails = email.to_emails?.map(to => to.email).join(', ') || '';
-    const ccEmails = email.cc_emails?.map(cc => cc.email).join(', ') || '';
+    if (!email || !onCompose || !currentUser) return;
+    const toEmails = email.to_emails?.map((to: any) => (typeof to === 'string' ? to : (to?.email || ""))).join(', ') || '';
+    const ccEmails = email.cc_emails?.map((cc: any) => (typeof cc === 'string' ? cc : (cc?.email || ""))).join(', ') || '';
     try {
+      // delete the draft so compose opens a fresh draft (your previous logic did this)
       await emailService.deleteEmail(Number(email.id), currentUser.id);
       onRefresh();
     } catch (error) {
       console.error('Error deleting draft:', error);
     }
-    onCompose({ to: toEmails, cc: ccEmails, subject: email.subject || '', body: email.body || '' });
+
+    onCompose({
+      to: toEmails,
+      cc: ccEmails,
+      subject: email.subject || '',
+      body: normalizeEmailBody(email.body ?? email.text_preview ?? '') || ''
+    });
     onClose();
   };
 
   const handleToggleLabel = async (label: { id: number; name: string; color: string }) => {
     if (!email || !currentUser) return;
 
-    // Check if label is already applied
     const currentLabels = email.labels || [];
-    const hasLabel = currentLabels.some(l => l.name === label.name);
+    const hasLabel = currentLabels.some((l: any) => l.name === label.name);
 
     let newLabels;
     if (hasLabel) {
-      newLabels = currentLabels.filter(l => l.name !== label.name);
+      newLabels = currentLabels.filter((l: any) => l.name !== label.name);
     } else {
       newLabels = [...currentLabels, label];
     }
@@ -360,6 +456,18 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
       </div>
     );
   }
+
+  // prepare HTML safely
+const normalizedBody = normalizeEmailBody(email.body ?? email.text_preview ?? "");
+
+// REMOVE lines that contain only "0"
+const cleanedBody = normalizedBody
+  .split("\n")
+  .filter(line => line.trim() !== "0")   // <- this removes the 0
+  .join("\n");
+
+  const normalizedHtml = bodyToHtml(cleanedBody);
+  const displayHtml = normalizedHtml && normalizedHtml.trim() !== '' ? normalizedHtml : '<em>(No content)</em>';
 
   return (
     <div className="flex-1 flex flex-col bg-gradient-to-br from-slate-50 via-white to-blue-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
@@ -442,7 +550,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
                     <span className="w-16 font-semibold text-gray-500 dark:text-slate-400 shrink-0">to:</span>
                     <span className="text-gray-900 dark:text-slate-200 break-all">
                       {email.to_emails?.length
-                        ? email.to_emails.map(t => t.email).join(', ')
+                        ? email.to_emails.map(t => (typeof t === 'string' ? t : (t?.email || ""))).join(', ')
                         : currentUser.email}
                     </span>
                   </div>
@@ -515,11 +623,11 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
                       </div>
                       <div className="text-xs lg:text-sm text-gray-600 dark:text-slate-400 mt-1">
                         to {email.to_emails?.length
-                          ? email.to_emails.map(t => t.email).join(', ')
+                          ? email.to_emails.map(t => (typeof t === 'string' ? t : (t?.email || ""))).join(', ')
                           : currentUser.email
                         }
                         {email.cc_emails && email.cc_emails.length > 0 && (
-                          <span>, cc {email.cc_emails.map((cc) => cc.email).join(', ')}</span>
+                          <span>, cc {email.cc_emails.map((cc: any) => (typeof cc === 'string' ? cc : cc?.email)).join(', ')}</span>
                         )}
                       </div>
                     </div>
@@ -534,7 +642,10 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
             {/* Email Body */}
             <div className="px-4 lg:px-6 pb-4 lg:pb-6 pt-3 lg:pt-4 border-t border-gray-100 dark:border-slate-800">
               <div className="prose dark:prose-invert max-w-none" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                <div className="text-xs lg:text-sm text-gray-800 dark:text-slate-200 leading-relaxed" dangerouslySetInnerHTML={{ __html: email.body?.replace(/\n/g, '<br>') || '' }} />
+                <div
+                  className="text-xs lg:text-sm text-gray-800 dark:text-slate-200 leading-relaxed"
+                  dangerouslySetInnerHTML={{ __html: displayHtml }}
+                />
               </div>
 
               {email.has_attachments && (

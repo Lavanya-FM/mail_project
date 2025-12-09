@@ -1,8 +1,10 @@
+// src/components/UserProfile.tsx
 import { useState, useEffect } from 'react';
 import { X, Mail, Leaf, Settings } from 'lucide-react';
 import CarbonBadges from './CarbonBadges';
 import { authService } from '../lib/authService';
 import { emailService } from '../lib/emailService';
+import AccountSwitcher from "./AccountSwitcher";
 
 interface UserProfileProps {
   onClose: () => void;
@@ -11,7 +13,12 @@ interface UserProfileProps {
   initialTab?: 'overview' | 'carbon' | 'settings';
 }
 
-export default function UserProfile({ onClose, userEmail = 'user@example.com', userName = 'User', initialTab = 'overview' }: UserProfileProps) {
+export default function UserProfile({
+  onClose,
+  userEmail = 'user@example.com',
+  userName = 'User',
+  initialTab = 'overview'
+}: UserProfileProps) {
   const [activeTab, setActiveTab] = useState<'overview' | 'carbon' | 'settings'>(initialTab);
   const [userStats, setUserStats] = useState({
     emailCount: 0,
@@ -20,11 +27,25 @@ export default function UserProfile({ onClose, userEmail = 'user@example.com', u
   });
   const [loading, setLoading] = useState(true);
 
+  // Read current profile from authService (keeps initial values consistent)
+  const currentProfile = authService.getCurrentUser?.() || {
+    id: undefined,
+    name: userName,
+    email: userEmail,
+    avatar: undefined,
+    created_at: undefined
+  };
+
+  // Keep displayed header fields in local state so they can be updated if you later wire a switch event
+  const [displayName, setDisplayName] = useState<string>(currentProfile.name || userName);
+  const [displayEmail, setDisplayEmail] = useState<string>(currentProfile.email || userEmail);
+
   useEffect(() => {
     const fetchUserStats = async () => {
       try {
-        const profile = authService.getCurrentUser();
-        if (!profile) {
+        // Ensure we use the latest profile (authService may update elsewhere)
+        const profile = authService.getCurrentUser?.() || currentProfile;
+        if (!profile || !profile.id) {
           setLoading(false);
           return;
         }
@@ -46,6 +67,11 @@ export default function UserProfile({ onClose, userEmail = 'user@example.com', u
           storageUsed: storageUsedGB,
           memberSince
         });
+
+        // also keep header in sync
+        setDisplayName(profile.name || userName);
+        setDisplayEmail(profile.email || userEmail);
+
       } catch (error) {
         console.error('Error fetching user stats:', error);
       } finally {
@@ -54,6 +80,8 @@ export default function UserProfile({ onClose, userEmail = 'user@example.com', u
     };
 
     fetchUserStats();
+    // Note: no dependencies so runs once on mount. If you want to refresh on auth changes,
+    // you can listen to an auth event or add a small interval here.
   }, []);
 
   return (
@@ -62,10 +90,10 @@ export default function UserProfile({ onClose, userEmail = 'user@example.com', u
         {/* Header */}
         <div className="sticky top-0 bg-gradient-to-r from-blue-500 to-cyan-500 px-6 py-6 flex items-center justify-between z-10">
           <div>
-            <h2 className="text-2xl font-bold text-white mb-1">{userName}</h2>
+            <h2 className="text-2xl font-bold text-white mb-1">{displayName}</h2>
             <p className="text-blue-100 flex items-center gap-2">
               <Mail className="w-4 h-4" />
-              {userEmail}
+              {displayEmail}
             </p>
           </div>
           <button
@@ -74,6 +102,18 @@ export default function UserProfile({ onClose, userEmail = 'user@example.com', u
           >
             <X className="w-6 h-6" />
           </button>
+        </div>
+
+        {/* Account Switcher (placed above tabs) */}
+        <div className="px-6 py-4 border-b border-gray-200 dark:border-slate-700">
+          <AccountSwitcher
+            currentUser={{
+              id: currentProfile?.id,
+              name: currentProfile?.name || userName,
+              email: currentProfile?.email || userEmail,
+              avatar: currentProfile?.avatar || null,
+            }}
+          />
         </div>
 
         {/* Tabs */}

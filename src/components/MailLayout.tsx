@@ -1,3 +1,4 @@
+// src/components/MailLayout.tsx
 import { useState, useEffect } from 'react';
 import {
   Inbox, Send, FileEdit, Trash2, Plus, Star, Archive,
@@ -19,6 +20,7 @@ import PrivacyPolicyModal from './PrivacyPolicyModal';
 import TermsOfServiceModal from './TermsOfServiceModal';
 import { animations } from '../utils/animations';
 import { Email, Folder } from '../types/email';
+import { normalizeEmailBody } from '../utils/email'; // <-- import added
 
 const iconMap: Record<string, typeof Inbox> = {
   inbox: Inbox,
@@ -164,7 +166,7 @@ export default function MailLayout() {
         setFoldersRaw([]);
       } else {
         setFoldersRaw(resp.data ?? []);
-        localStorage.setItem("folders", JSON.stringify(resp.data ?? []));  // <-- FIXED
+        localStorage.setItem("folders", JSON.stringify(resp.data ?? []));
       }
     } catch (err) {
       console.error('Error loading folders:', err);
@@ -365,7 +367,7 @@ export default function MailLayout() {
       ((email.subject || '') + '').toString().toLowerCase().includes(q) ||
       ((email.from_name || '') + '').toString().toLowerCase().includes(q) ||
       ((email.from_email || '') + '').toString().toLowerCase().includes(q) ||
-      ((email.body || '') + '').toString().toLowerCase().includes(q)
+      ((normalizeEmailBody(email.body) || '') + '').toString().toLowerCase().includes(q)
     );
   });
 
@@ -533,14 +535,19 @@ export default function MailLayout() {
 
             // Calculate counts differently for special folders
             let folderCount = 0;
-            if (folderType === 'starred') {
-              folderCount = emails.filter((e) => e.is_starred).length;
-            } else if (folderType === 'snoozed') {
-              folderCount = emails.filter((e) => e.is_snoozed).length;
-            } else if (folderType === 'drafts') {
-              folderCount = emails.filter((e) => String(e.folder_id) === String(folder.id)).length;
-            } else {
-              folderCount = emails.filter((e) => String(e.folder_id) === String(folder.id) && !e.is_read).length;
+            try {
+              if (folderType === 'starred') {
+                folderCount = emails.filter((e) => e.is_starred).length;
+              } else if (folderType === 'snoozed') {
+                folderCount = emails.filter((e) => e.is_snoozed).length;
+              } else if (folderType === 'drafts') {
+                folderCount = emails.filter((e) => String(e.folder_id) === String(folder.id)).length;
+              } else {
+                folderCount = emails.filter((e) => String(e.folder_id) === String(folder.id) && !e.is_read).length;
+              }
+              folderCount = Number(folderCount) || 0;
+            } catch (err) {
+              folderCount = 0;
             }
 
             return (
@@ -554,8 +561,12 @@ export default function MailLayout() {
               >
                 <Icon className="w-5 h-5 flex-shrink-0" style={{ color: iconColor }} />
                 <span className="flex-1 text-left font-medium text-sm">{folder.name}</span>
-                {folderCount > 0 && folderType === 'drafts' && (
-                  <span className={`bg-gray-500 text-white text-xs px-2 py-0.5 rounded-full min-w-[20px] text-center flex-shrink-0 ${animations.pulseGlow}`}>
+
+                {/* Show badge only when count > 0 to avoid rendering `0` */}
+                {folderCount > 0 && (
+                  <span
+                    className={`text-xs text-white px-2 py-0.5 rounded-full min-w-[20px] text-center flex-shrink-0 ${folderType === 'drafts' ? 'bg-gray-500' : 'bg-blue-600' } ${animations.pulseGlow}`}
+                  >
                     {folderCount}
                   </span>
                 )}

@@ -1,0 +1,187 @@
+#!/usr/bin/env node
+/**
+ * JeeMail Incoming Message Processor (UPDATED)
+ * - Uses TCP (127.0.0.1) to connect to MariaDB
+ * - Inserts into emails with a schema-matching column list
+ */
+
+const { simpleParser } = require("mailparser");
+const mysql = require("mysql2/promise");
+
+const db = mysql.createPool({
+  host: "127.0.0.1",
+  user: "mailuser",
+  password: "StrongPassword123!",
+  database: "maildb",
+});
+
+/* ------------------------------------------------------------
+   Extract TO / CC / BCC + fallback recipients
+------------------------------------------------------------ */
+function extractAllRecipients(parsed) {
+  const to = parsed.to?.value?.map(x => x.address) || [];
+  const cc = parsed.cc?.value?.map(x => x.address) || [];
+  const bcc = parsed.bcc?.value?.map(x => x.address) || []; // works only if passed from MTA
+
+  const delivered = parsed.headers.get("delivered-to");
+  const original = parsed.headers.get("x-original-to");
+
+  const final = [
+    ...to,
+    ...cc,
+    ...bcc,
+    delivered,
+    original
+  ].filter(Boolean);
+
+  return [...new Set(final.map(r => r.toLowerCase().trim()))];
+}
+
+/* ------------------------------------------------------------
+   Save email into DB
+------------------------------------------------------------ */
+async function saveEmail(parsed) {
+  const recipients = extractAllRecipients(parsed);
+
+  if (!recipients.length) {
+    console.log("❌ No recipients — skipping");
+    return;
+  }
+
+  // Map recipients to users
+  const placeholders = recipients.map(() => "?").join(",");
+  const [users] = await db.query(
+    `SELECT id, email FROM users WHERE email IN (${placeholders})`,
+    recipients
+  );
+
+  if (!users.length) {
+    console.log("❌ No matching JeeMail users — skipping");
+    return;
+  }
+
+  const from = parsed.from?.value?.[0] || {};
+  const subject = parsed.subject || "(No subject)";
+
+  const body =
+    parsed.html ||
+    parsed.textAsHtml ||
+    `<pre>${parsed.text || ""}</pre>`;
+
+  const messageId = parsed.messageId || null;
+  const inReplyTo = parsed.inReplyTo || null;
+  const references = parsed.references ? parsed.references.join(",") : null;
+
+  // Build header strings
+  const toHeader = (parsed.to && parsed.to.value) ? parsed.to.value.map(x => x.address).join(", ") : "";
+  const ccHeader = (parsed.cc && parsed.cc.value) ? parsed.cc.value.map(x => x.address).join(", ") : "";
+  const bccHeader = (parsed.bcc && parsed.bcc.value) ? parsed.bcc.value.map(x => x.address).join(", ") : "";
+
+  /* ------------------------------------------------------------
+     INSERT main email record (schema-matching)
+  ------------------------------------------------------------ */
+  const [insertEmail] = await db.query(
+    `INSERT INTO emails (
+       user_id,
+       thread_id,
+       from_name,
+       from_email,
+       subject,
+       body,
+       is_html,
+       message_id,
+       in_reply_to,
+       references_header,
+       to_header,
+       cc_header,
+       bcc_header,
+       folder_id,
+       is_draft,
+       created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+    [
+      null,                // user_id (incoming mail may not be tied to a sending user)
+      null,                // thread_id (unknown at this stage)
+      from.name || "",
+      from.address || "",
+      subject,
+      body,
+      1,                   // is_html
+      messageId,
+      inReplyTo,
+      references,
+      toHeader,
+      ccHeader,
+      bccHeader,
+      null,                // folder_id (delivery logic will pick mailbox)
+      0                    // is_draft
+    ]
+  );
+
+  const emailId = insertEmail.insertId;
+  console.log("📩 Stored incoming email:", emailId);
+
+  /* ------------------------------------------------------------
+     Save header-level recipients
+  ------------------------------------------------------------ */
+  const storeHeaderList = (list, type) =>
+    Promise.all(
+      (list || []).map(addr =>
+        db.query(
+          `INSERT INTO email_recipients (email_id, address, type)
+           VALUES (?, ?, ?)`,
+          [emailId, addr, type]
+        )
+      )
+    );
+
+  await storeHeaderList(parsed.to?.value?.map(x => x.address), "to");
+  await storeHeaderList(parsed.cc?.value?.map(x => x.address), "cc");
+  await storeHeaderList(parsed.bcc?.value?.map(x => x.address), "bcc");
+
+  /* ------------------------------------------------------------
+     Deliver email into each user's INBOX
+  ------------------------------------------------------------ */
+  for (const user of users) {
+    const [[inbox]] = await db.query(
+      `SELECT id FROM mailboxes
+       WHERE user_id = ? AND system_box = 'inbox'
+       LIMIT 1`,
+      [user.id]
+    );
+
+    if (!inbox) {
+      console.log(`⚠ No inbox found for user ${user.email}`);
+      continue;
+    }
+
+    await db.query(
+      `INSERT INTO email_mailbox
+        (user_id, email_id, mailbox_id, is_read)
+       VALUES (?, ?, ?, 0)`,
+      [user.id, emailId, inbox.id]
+    );
+  }
+
+  console.log(`📥 Delivered to ${users.length} mailbox(es)`);
+}
+
+/* ------------------------------------------------------------
+   MAIN ENTRY: read email piped from Postfix
+------------------------------------------------------------ */
+async function main() {
+  let raw = "";
+  process.stdin.on("data", chunk => (raw += chunk));
+
+  process.stdin.on("end", async () => {
+    try {
+      const parsed = await simpleParser(raw);
+      await saveEmail(parsed);
+    } catch (err) {
+      console.error("❌ Processing error:", err);
+    }
+    process.exit(0);
+  });
+}
+
+main();

@@ -1,273 +1,236 @@
-/**
- * JeeDrive Service
- * Backend implementation required for data fetching.
- */
+const API = "/api/drive";
 
-export interface DriveFile {
-    id: number;
-    user_id: number;
-    folder_id: number | null;
-    name: string;
-    file_type: string;
-    mime_type: string;
-    size_bytes: number;
-    storage_path: string;
-    thumbnail_path?: string;
-    is_starred: boolean;
-    is_deleted: boolean;
-    deleted_at?: string;
-    tags: string[];
-    created_at: string;
-    updated_at: string;
+/* ===============================
+   UPLOAD FILE
+================================ */
+export async function uploadFile(file: File, userId: number, folderId: number | null) {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("folder_id", folderId ? folderId.toString() : "");
+
+    const res = await fetch(`${API}/upload?user_id=${userId}`, {
+        method: "POST",
+        body: fd
+    });
+
+    return res.json();
 }
 
-export interface DriveFolder {
-    id: number;
-    user_id: number;
-    parent_folder_id: number | null;
-    name: string;
-    color?: string;
-    is_shared: boolean;
-    file_count: number;
-    total_size: number;
-    created_at: string;
-    updated_at: string;
-}
-
-export interface FileShare {
-    id: number;
-    file_id?: number;
-    folder_id?: number;
-    owner_id: number;
-    shared_with_user_id: number;
-    permission: 'view' | 'edit' | 'download' | 'full';
-    expires_at?: string;
-    created_at: string;
-}
-
-export interface DriveActivity {
-    id: number;
-    user_id: number;
-    file_id?: number;
-    folder_id?: number;
-    action: 'upload' | 'download' | 'delete' | 'rename' | 'move' | 'share' | 'unshare' | 'restore';
-    details: string;
-    created_at: string;
-}
-
-export interface StorageBreakdown {
-    by_type: {
-        documents: number;
-        images: number;
-        videos: number;
-        audio: number;
-        archives: number;
-        others: number;
-    };
-    by_folder: {
-        folder_id: number;
-        folder_name: string;
-        size_bytes: number;
-    }[];
-    timeline: {
-        date: string;
-        size_bytes: number;
-    }[];
-}
-
-// Mock data - Replace with actual API calls
-const MOCK_FOLDERS: DriveFolder[] = [];
-
-const MOCK_FILES: DriveFile[] = [];
-
-const MOCK_ACTIVITY: DriveActivity[] = [];
-
-/**
- * Get all folders for a user
- */
-export async function getFolders(userId: number): Promise<DriveFolder[]> {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    return MOCK_FOLDERS.filter(f => f.user_id === userId);
-}
-
-/**
- * Get folder contents (files and subfolders)
- */
-export async function getFolderContents(folderId: number | null): Promise<{ files: DriveFile[], folders: DriveFolder[] }> {
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    const files = MOCK_FILES.filter(f => f.folder_id === folderId && !f.is_deleted);
-    const folders = MOCK_FOLDERS.filter(f => f.parent_folder_id === folderId);
-
-    return { files, folders };
-}
-
-/**
- * Get all files for a user
- */
-export async function getAllFiles(userId: number): Promise<DriveFile[]> {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    return MOCK_FILES.filter(f => f.user_id === userId && !f.is_deleted);
-}
-
-/**
- * Get starred files
- */
-export async function getStarredFiles(userId: number): Promise<DriveFile[]> {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    return MOCK_FILES.filter(f => f.user_id === userId && f.is_starred && !f.is_deleted);
-}
-
-/**
- * Get recent files
- */
-export async function getRecentFiles(userId: number, limit: number = 10): Promise<DriveFile[]> {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    return MOCK_FILES
-        .filter(f => f.user_id === userId && !f.is_deleted)
-        .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
-        .slice(0, limit);
-}
-
-/**
- * Get deleted files (trash)
- */
-export async function getDeletedFiles(userId: number): Promise<DriveFile[]> {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    return MOCK_FILES.filter(f => f.user_id === userId && f.is_deleted);
-}
-
-/**
- * Search files
- */
-export async function searchFiles(userId: number, query: string): Promise<DriveFile[]> {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    const lowerQuery = query.toLowerCase();
-    return MOCK_FILES.filter(f =>
-        f.user_id === userId &&
-        !f.is_deleted &&
-        (f.name.toLowerCase().includes(lowerQuery) ||
-            f.tags.some(tag => tag.toLowerCase().includes(lowerQuery)))
+/* ===============================
+   GET FOLDER CONTENTS
+================================ */
+export async function getFolderContents(folderId: number | null, userId: number) {
+    const res = await fetch(
+        `${API}/contents?user_id=${userId}&folder_id=${folderId ?? ""}`
     );
-}
 
-/**
- * Get file by ID
- */
-export async function getFileById(fileId: number): Promise<DriveFile | null> {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    return MOCK_FILES.find(f => f.id === fileId) || null;
-}
+    const data = await res.json();
 
-/**
- * Star/unstar a file
- */
-export async function toggleStarFile(fileId: number, starred: boolean): Promise<boolean> {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    const file = MOCK_FILES.find(f => f.id === fileId);
-    if (file) {
-        file.is_starred = starred;
-        return true;
-    }
-    return false;
-}
+    if (!data.success) return { files: [], folders: [] };
 
-/**
- * Delete file (move to trash)
- */
-export async function deleteFile(fileId: number): Promise<boolean> {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    const file = MOCK_FILES.find(f => f.id === fileId);
-    if (file) {
-        file.is_deleted = true;
-        file.deleted_at = new Date().toISOString();
-        return true;
-    }
-    return false;
-}
+    const files = (data.files || []).map((file: any) => {
+        const filename = file.filename || file.name || '';
+        const ext = filename.split(".").pop()?.toLowerCase() || '';
 
-/**
- * Restore file from trash
- */
-export async function restoreFile(fileId: number): Promise<boolean> {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    const file = MOCK_FILES.find(f => f.id === fileId);
-    if (file) {
-        file.is_deleted = false;
-        file.deleted_at = undefined;
-        return true;
-    }
-    return false;
-}
+        return {
+            ...file,
+            filename,
+            name: filename,
+            user_id: userId,
+            file_type: ext,
+            previewUrl: `/uploads/${userId}/${filename}`,
+            size_bytes: file.size_bytes ?? file.size ?? 0,
+            tags: file.tags || []
+        };
+    });
 
-/**
- * Get recent activity
- */
-export async function getRecentActivity(userId: number, limit: number = 20): Promise<DriveActivity[]> {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    return MOCK_ACTIVITY
-        .filter(a => a.user_id === userId)
-        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-        .slice(0, limit);
-}
-
-/**
- * Format file size to human readable
- */
-export function formatFileSize(bytes: number): string {
-    if (bytes === 0) return '0 Bytes';
-
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
-}
-
-/**
- * Get file icon based on type
- */
-export function getFileIcon(fileType: string): string {
-    const icons: Record<string, string> = {
-        'document': '📄',
-        'image': '🖼️',
-        'video': '🎥',
-        'audio': '🎵',
-        'archive': '📦',
-        'code': '💻'
+    return {
+        files,
+        folders: data.folders ?? []
     };
-    return icons[fileType] || '📁';
 }
 
-/**
- * Get file color based on type
- */
-export function getFileColor(fileType: string): string {
-    const colors: Record<string, string> = {
-        'document': '#3b82f6',
-        'image': '#8b5cf6',
-        'video': '#ef4444',
-        'audio': '#10b981',
-        'archive': '#f59e0b',
-        'code': '#6366f1'
-    };
-    return colors[fileType] || '#6b7280';
+/* ===============================
+   GET FOLDERS LIST
+================================ */
+export async function getFolders(userId: number, parentFolderId: number | null = null) {
+    const res = await fetch(
+        `${API}/folders?user_id=${userId}&parent_folder_id=${parentFolderId ?? ""}`
+    );
+
+    const data = await res.json();
+    return data.folders || [];
 }
 
-export default {
-    getFolders,
-    getFolderContents,
-    getAllFiles,
-    getStarredFiles,
-    getRecentFiles,
-    getDeletedFiles,
-    searchFiles,
-    getFileById,
-    toggleStarFile,
-    deleteFile,
-    restoreFile,
-    getRecentActivity,
-    formatFileSize,
-    getFileIcon,
-    getFileColor
-};
+/* ===============================
+   CREATE FOLDER
+================================ */
+export async function createFolder(userId: number, parentId: number | null, name: string) {
+    const res = await fetch(`${API}/folder`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            user_id: userId,
+            parent_folder_id: parentId,
+            name
+        })
+    });
+
+    return res.json();
+}
+
+/* ===============================
+   STAR / UNSTAR FILE
+   Accepts (fileId, starred, userId) - userId optional for backward compat
+================================ */
+export async function toggleStarFile(fileId: number, starred: boolean, userId: number = 1) {
+    const res = await fetch(`${API}/toggle-star`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            file_id: fileId,
+            is_starred: starred,
+            user_id: userId
+        })
+    });
+
+    return res.json();
+}
+
+/* ===============================
+   MOVE FILE TO FOLDER
+================================ */
+export async function moveFile(fileId: number, folderId: number | null, userId: number) {
+    const res = await fetch(`${API}/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            file_id: fileId,
+            folder_id: folderId,
+            user_id: userId
+        })
+    });
+
+    return res.json();
+}
+
+/* ===============================
+   MOVE TO TRASH
+================================ */
+export async function moveToTrash(fileId: number, userId: number) {
+    const res = await fetch(`${API}/trash`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            file_id: fileId,
+            user_id: userId
+        })
+    });
+
+    return res.json();
+}
+
+/* ===============================
+   DELETE FILE (Frontend calls /delete)
+================================ */
+export async function deleteFile(fileId: number, userId: number) {
+    const res = await fetch(`${API}/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            file_id: fileId,
+            user_id: userId
+        })
+    });
+
+    return res.json();
+}
+
+/* ===============================
+   RESTORE FROM TRASH
+================================ */
+export async function restoreFromTrash(fileId: number, userId: number) {
+    const res = await fetch(`${API}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            file_id: fileId,
+            user_id: userId
+        })
+    });
+
+    return res.json();
+}
+
+/* ===============================
+   DELETE PERMANENTLY
+================================ */
+export async function deletePermanently(fileId: number, userId: number) {
+    const res = await fetch(`${API}/delete-permanent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            file_id: fileId,
+            user_id: userId
+        })
+    });
+
+    return res.json();
+}
+
+/* ===============================
+   EMPTY TRASH
+================================ */
+export async function emptyTrash(userId: number) {
+    const res = await fetch(`${API}/empty-trash`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId })
+    });
+
+    return res.json();
+}
+
+/* ===============================
+   GET STARRED FILES
+================================ */
+export async function getStarredFiles(userId: number) {
+    const res = await fetch(`${API}/starred?user_id=${userId}`);
+    const data = await res.json();
+    return data.files || [];
+}
+
+/* ===============================
+   GET RECENT FILES
+================================ */
+export async function getRecentFiles(userId: number, limit = 20) {
+    const res = await fetch(`${API}/recent?user_id=${userId}&limit=${limit}`);
+    const data = await res.json();
+    return data.files || [];
+}
+
+/* ===============================
+   UI helpers
+================================ */
+export function getFileColor(type?: string) {
+  if (!type) return "#9CA3AF";
+  const t = String(type).toLowerCase().trim();
+  if (["jpg","jpeg","png","gif","webp","svg","bmp","ico","tiff","image"].includes(t)) return "#3B82F6";
+  if (["mp4","mov","avi","mkv","webm","video"].includes(t)) return "#8B5CF6";
+  if (["pdf","txt","doc","docx","document"].includes(t)) return "#10B981";
+  if (["zip","rar","7z","tar","gz","archive"].includes(t)) return "#F59E0B";
+  if (["mp3","wav","flac","ogg","audio"].includes(t)) return "#EF4444";
+  return "#9CA3AF";
+}
+
+export function formatFileSize(bytes: number) {
+  if (!bytes && bytes !== 0) return "0 B";
+  const units = ["B","KB","MB","GB","TB"];
+  let i = 0;
+  let val = Number(bytes);
+  while (val >= 1024 && i < units.length - 1) {
+    val /= 1024;
+    i++;
+  }
+  return `${Math.round(val * 10) / 10} ${units[i]}`;
+}

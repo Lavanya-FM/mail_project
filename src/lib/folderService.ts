@@ -1,6 +1,6 @@
 // src/lib/emailService.ts
 
-const API = "https://jeemail.in/api";
+const API = import.meta.env.VITE_API_URL;
 
 export const emailService = {
   async getEmails(userId: number, folderId: number) {

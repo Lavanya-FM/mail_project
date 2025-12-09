@@ -26,7 +26,7 @@ export default function ShareFileModal({ isOpen, onClose, file }: ShareFileModal
     };
 
     const handleCopyLink = () => {
-        const shareLink = `https://jeemail.com/drive/share/${file.id}`;
+        const shareLink = `https://jeemail.com/drive/share/${file?.id ?? ""}`;
         navigator.clipboard.writeText(shareLink);
         setLinkCopied(true);
         setTimeout(() => setLinkCopied(false), 2000);
@@ -37,7 +37,7 @@ export default function ShareFileModal({ isOpen, onClose, file }: ShareFileModal
     };
 
     const handleShare = () => {
-        console.log('Sharing file:', file.name, 'with:', shares);
+        console.log('Sharing file:', file?.name || "Untitled", 'with:', shares);
         onClose();
     };
 
@@ -52,7 +52,7 @@ export default function ShareFileModal({ isOpen, onClose, file }: ShareFileModal
                         </div>
                         <div>
                             <h2 className="text-xl font-bold text-gray-900 dark:text-white">Share File</h2>
-                            <p className="text-sm text-gray-600 dark:text-slate-400">{file.name}</p>
+                            <p className="text-sm text-gray-600 dark:text-slate-400">{file?.name || "Untitled File"}</p>
                         </div>
                     </div>
                     <button
@@ -73,7 +73,7 @@ export default function ShareFileModal({ isOpen, onClose, file }: ShareFileModal
                         <div className="flex gap-2">
                             <input
                                 type="text"
-                                value={`https://jeemail.com/drive/share/${file.id}`}
+                                value={`https://jeemail.com/drive/share/${file?.id ?? ""}`}
                                 readOnly
                                 className="flex-1 px-4 py-2 bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg text-gray-900 dark:text-white text-sm"
                             />
