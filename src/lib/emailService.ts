@@ -277,6 +277,40 @@ export const emailService = {
     return handleResp<any>(resp);
   },
 
+// call metrics for logged-in user (no userId needed)
+async getCarbonMetricsMe(mode?: 'realistic'|'medium'|'gamified') {
+  const qs = mode ? `?mode=${encodeURIComponent(mode)}` : '';
+  const url = apiUrl(`/api/carbon/metrics/me${qs}`);
+  const resp = await fetch(url, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    credentials: 'include',
+  });
+  const parsed = await handleResp<any>(resp);
+  if (parsed.error) return { error: parsed.error, status: parsed.status };
+  return { data: parsed.data || parsed, status: parsed.status };
+},
+
+  async submitCarbonCredits(payload: {
+    userId: string,
+    mode?: 'realistic'|'medium'|'gamified',
+    credits?: number,
+    co2eSaved?: number,
+    gamifiedPoints?: number,
+    metadata?: any
+  }) {
+    const url = apiUrl('/api/carbon/submit');
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const parsed = await handleResp<any>(resp);
+    if (parsed.error) return { error: parsed.error, status: parsed.status };
+    return { data: parsed.data || parsed, status: parsed.status };
+  },
+
   // -------------------------------------------------------------
   // CHECK EMAIL EXISTENCE
   // -------------------------------------------------------------

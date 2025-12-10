@@ -234,15 +234,3 @@ export function formatFileSize(bytes: number) {
   }
   return `${Math.round(val * 10) / 10} ${units[i]}`;
 }
-
-// --- Safety helpers injected by dev-assistant ---
-export async function getTrash(userId:number) {
-  try {
-    const res = await fetch(`/api/drive/trash?user_id=${userId}`);
-    const data = await res.json();
-    return { files: Array.isArray(data?.files) ? data.files : [] };
-  } catch(e) {
-    console.error('driveService.getTrash ERROR', e);
-    return { files: [] };
-  }
-}

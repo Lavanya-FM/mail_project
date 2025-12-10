@@ -2,17 +2,21 @@
 /**
  * JeeMail Incoming Message Processor (FINAL FIXED VERSION)
  * - Fully aligned to emails table schema
+ * - Stores size_kb and has_attachments for metrics
  */
 
 const { simpleParser } = require("mailparser");
 const mysql = require("mysql2/promise");
 
-// Database pool
+// Database pool (adjust credentials via env or config)
 const db = mysql.createPool({
   host: "127.0.0.1",
   user: "mailuser",
   password: "StrongPassword123!",
   database: "maildb",
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
 });
 
 /* ------------------------------------------------------------
@@ -31,7 +35,7 @@ function extractAllRecipients(parsed) {
   if (delivered) recipients.push(delivered);
   if (original) recipients.push(original);
 
-  return [...new Set(recipients.map(r => r.toLowerCase().trim()))];
+  return [...new Set(recipients.map(r => (r || "").toLowerCase().trim()))];
 }
 
 /* ------------------------------------------------------------
@@ -73,6 +77,14 @@ async function saveEmail(parsed) {
   const ccHeader = parsed.cc?.value?.map(x => x.address).join(", ") || "";
   const bccHeader = parsed.bcc?.value?.map(x => x.address).join(", ") || "";
 
+  // compute attachments info from parsed.attachments
+  const attachmentsList = Array.isArray(parsed.attachments) ? parsed.attachments : [];
+  const attachmentsTotalBytes = attachmentsList.reduce((s, a) => s + (Number(a.size || 0)), 0);
+  const bodyBytes = Buffer.byteLength(body || '', 'utf8');
+  const totalBytes = (bodyBytes || 0) + attachmentsTotalBytes;
+  const size_kb = Math.max(1, Math.round((totalBytes || 0) / 1024));
+  const has_attachments = attachmentsList.length ? 1 : 0;
+
   const [insertEmail] = await db.query(
     `INSERT INTO emails (
       user_id,
@@ -93,11 +105,12 @@ async function saveEmail(parsed) {
       is_read,
       is_starred,
       has_attachments,
+      size_kb,
       is_draft
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      null,
-      null,
+      null,           // user_id (will map to mailboxes below)
+      null,           // thread_id
       from.name || "",
       from.address || "",
       subject,
@@ -109,11 +122,12 @@ async function saveEmail(parsed) {
       toHeader,
       ccHeader,
       bccHeader,
-      null,
-      0,
-      0,
-      0,
-      0
+      null,           // folder_id (per-user inbox will be used)
+      0,              // is_read
+      0,              // is_starred
+      has_attachments,
+      size_kb,
+      0               // is_draft
     ]
   );
 

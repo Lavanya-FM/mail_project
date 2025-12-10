@@ -1,6 +1,6 @@
 /**
  * backend/mail.js
- * MAIL FUNCTIONS ONLY
+ * MAIL FUNCTIONS ONLY (updated to store size_kb and has_attachments)
  */
 
 const express = require("express");
@@ -18,7 +18,7 @@ const TRASH_RETENTION_DAYS = 30;
 
 // -------------------- HELPERS --------------------
 function isValidDomain(email) {
-  if (!email.includes("@")) return false;
+  if (!email || !email.includes("@")) return false;
   return email.split("@")[1].toLowerCase() === ALLOWED_DOMAIN;
 }
 
@@ -208,6 +208,7 @@ router.post("/email/create", async (req, res) => {
     is_draft,
     in_reply_to,
     folder_id,
+    attachments // optional array of { filename, size } provided by frontend if available
   } = req.body;
 
   if (!user_id) return res.status(400).json({ error: "Missing user_id" });
@@ -245,17 +246,17 @@ router.post("/email/create", async (req, res) => {
     );
 
     // resolve folder
-    let folderId = folder_id;
-    if (!folderId) {
+    let resolvedFolderId = folder_id;
+    if (!resolvedFolderId) {
       const box = is_draft ? "drafts" : "sent";
       const [[row]] = await conn.query(
         "SELECT id FROM mailboxes WHERE user_id = ? AND system_box = ?",
         [user_id, box]
       );
-      folderId = row.id;
+      resolvedFolderId = row ? row.id : null;
     }
 
-    // insert email metadata
+    // insert email metadata (initial insert; we'll update size_kb/has_attachments after)
     const [insert] = await conn.query(
       `INSERT INTO emails 
       (user_id, from_name, from_email, subject, body, is_html, in_reply_to,
@@ -271,7 +272,7 @@ router.post("/email/create", async (req, res) => {
         toList.join(", "),
         ccList.join(", "),
         bccList.join(", "),
-        folderId,
+        resolvedFolderId,
         is_draft ? 1 : 0,
       ]
     );
@@ -299,7 +300,20 @@ router.post("/email/create", async (req, res) => {
     await conn.query(
       `INSERT INTO email_mailbox (user_id, email_id, mailbox_id, is_read)
        VALUES (?, ?, ?, 1)`,
-      [user_id, emailId, folderId]
+      [user_id, emailId, resolvedFolderId]
+    );
+
+    // compute size_kb and has_attachments
+    const attachmentsList = Array.isArray(attachments) ? attachments : [];
+    const attachmentsTotalBytes = attachmentsList.reduce((s, a) => s + (Number(a.size || 0)), 0);
+    const rawBytes = Buffer.byteLength(cleanBody || '', 'utf8') + attachmentsTotalBytes;
+    const size_kb = Math.max(1, Math.round((rawBytes || 0) / 1024)); // at least 1 KB
+    const has_attachments = attachmentsList.length ? 1 : 0;
+
+    // update inserted email with size_kb and has_attachments (and folder_id just in case)
+    await conn.query(
+      'UPDATE emails SET has_attachments = ?, size_kb = ?, folder_id = ? WHERE id = ?',
+      [has_attachments, size_kb, resolvedFolderId, emailId]
     );
 
     // send mail via SMTP if not draft
@@ -310,14 +324,37 @@ router.post("/email/create", async (req, res) => {
         secure: false,
         tls: { rejectUnauthorized: false },
       });
-      await transporter.sendMail({
+
+      const sendOptions = {
         from: `"${sender.name}" <${sender.email}>`,
         to: toList.join(", "),
-        cc: ccList.length ? ccList.join(", ") : undefined,
-        bcc: bccList.length ? bccList.join(", ") : undefined,
-        subject,
+        subject: subject,
         html: cleanBody,
-      });
+      };
+      if (ccList.length) sendOptions.cc = ccList.join(", ");
+      if (bccList.length) sendOptions.bcc = bccList.join(", ");
+
+      // If frontend included attachments and they are available as objects with `path` or `content`,
+      // you could attach them here. For now we don't attach the actual file unless you manage upload storage.
+      if (attachmentsList.length) {
+        // map to nodemailer attachments if they have `filename` and `content` or `path`
+        sendOptions.attachments = attachmentsList
+          .map((a) => {
+            const item = {};
+            if (a.path) item.path = a.path;
+            if (a.content) item.content = a.content;
+            if (a.filename) item.filename = a.filename;
+            return Object.keys(item).length ? item : null;
+          })
+          .filter(Boolean);
+      }
+
+      try {
+        await transporter.sendMail(sendOptions);
+      } catch (smtpErr) {
+        // Non-fatal: log but continue — message still stored in your DB
+        console.error("SMTP send error:", smtpErr);
+      }
     }
 
     // deliver to recipients inbox
@@ -333,6 +370,7 @@ router.post("/email/create", async (req, res) => {
           "SELECT id FROM mailboxes WHERE user_id = ? AND system_box = 'inbox'",
           [rcp.id]
         );
+        if (!inbox) continue;
         await conn.query(
           `INSERT INTO email_mailbox (user_id, email_id, mailbox_id, is_read)
            VALUES (?, ?, ?, 0)`,

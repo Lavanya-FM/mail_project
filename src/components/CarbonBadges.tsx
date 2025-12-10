@@ -1,3 +1,4 @@
+// src/components/CarbonBadges.tsx
 import { useState, useEffect } from 'react';
 import { Leaf, TrendingUp, Award, Share2, Download } from 'lucide-react';
 import {
@@ -6,6 +7,8 @@ import {
   getProgressToNextTier,
   formatCarbonCredits,
   formatCO2eSavings,
+  getBadgeForGamifiedPoints,
+  gamifiedPointsToCredits,
   CARBON_BADGE_TIERS,
 } from '../lib/carbonService';
 import { authService } from '../lib/authService';
@@ -22,15 +25,26 @@ export default function CarbonBadges({
   dataTransferReducedGB,
   networkType = 'internet',
 }: CarbonBadgesProps) {
-  const [metrics, setMetrics] = useState({ storageSavedGB: 0, dataTransferReducedGB: 0, totalCO2eSavedKg: 0, carbonCreditsEarned: 0 });
+  const [metrics, setMetrics] = useState({
+    storageSavedGB: 0,
+    dataTransferReducedGB: 0,
+    totalCO2eSavedKg: 0,
+    carbonCreditsEarned: 0,
+    gamifiedPoints: 0,
+  });
   const [currentBadge, setCurrentBadge] = useState(getBadgeTierForCredits(0));
   const [progress, setProgress] = useState(getProgressToNextTier(0));
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [submittedCredits, setSubmittedCredits] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [mode] = useState<'realistic' | 'medium' | 'gamified'>('realistic'); // wise method = realistic
+
+  const eps = 1e-12; // tiny epsilon for numeric checks
 
   useEffect(() => {
-    const calculateRealMetrics = async () => {
+    let cancelled = false;
+    async function loadMetrics() {
+      setLoading(true);
       try {
         const profile = authService.getCurrentUser();
         if (!profile) {
@@ -38,49 +52,142 @@ export default function CarbonBadges({
           return;
         }
 
-        // Get user's emails to calculate real metrics
-        const { data: emails } = await emailService.getEmails(profile.id);
-        
-        // Calculate storage saved (based on email count and average size)
-        const emailCount = emails?.length || 0;
-        const avgEmailSize = 0.05; // 50KB average per email
-        const realStorageSavedGB = (emailCount * avgEmailSize) / 1024;
+        // Prefer convenience endpoint
+        let resp: any = null;
+        if (typeof emailService.getCarbonMetricsMe === 'function') {
+          resp = await emailService.getCarbonMetricsMe(mode as any);
+          resp = resp?.data ?? resp;
+        } else if (typeof emailService.getCarbonMetrics === 'function') {
+          resp = await emailService.getCarbonMetrics(profile.id);
+          resp = resp?.data ?? resp;
+        }
 
-        // Calculate data transfer reduced (based on attachments)
-        const emailsWithAttachments = emails?.filter(e => e.has_attachments)?.length || 0;
-        const avgAttachmentSize = 2; // 2MB average
-        const realDataTransferReducedGB = (emailsWithAttachments * avgAttachmentSize) / 1024;
+        if (resp && resp.metrics) {
+          const m = resp.metrics;
 
-        // Calculate real carbon metrics
-        const realMetrics = calculateCarbonMetrics(realStorageSavedGB, realDataTransferReducedGB, networkType);
-        setMetrics(realMetrics);
-        setCurrentBadge(getBadgeTierForCredits(realMetrics.carbonCreditsEarned));
-        setProgress(getProgressToNextTier(realMetrics.carbonCreditsEarned));
-      } catch (error) {
-        console.error('Error calculating carbon metrics:', error);
-        // Fallback to provided props if available
+          // Determine gamified vs canonical credits
+          let creditsNumeric = 0;
+          let gamifiedPointsValue = Number(m.gamifiedPoints ?? 0);
+
+          if (mode === 'gamified' && gamifiedPointsValue > 0) {
+            // convert points -> credits
+            creditsNumeric = gamifiedPointsToCredits(gamifiedPointsValue);
+          } else {
+            // prefer canonical field
+            creditsNumeric = Number(m.carbonCreditsEarned ?? m.carbonCredits ?? 0);
+          }
+
+          if (!cancelled) {
+            setMetrics({
+              storageSavedGB: Number(m.storageSavedGB || 0),
+              dataTransferReducedGB: Number(m.dataTransferReducedGB || 0),
+              totalCO2eSavedKg: Number(m.totalCO2eSavedKg || 0),
+              carbonCreditsEarned: creditsNumeric,
+              gamifiedPoints: gamifiedPointsValue,
+            });
+
+            // choose badge: if gamified mode use gamified points → tier (optional)
+            if (mode === 'gamified' && gamifiedPointsValue > 0) {
+              setCurrentBadge(getBadgeForGamifiedPoints(gamifiedPointsValue));
+            } else {
+              setCurrentBadge(getBadgeTierForCredits(creditsNumeric));
+            }
+
+            setProgress(getProgressToNextTier(creditsNumeric));
+          }
+        } else if (storageSavedGB !== undefined && dataTransferReducedGB !== undefined) {
+          // fallback: local calculation (use calculateCarbonMetrics from lib)
+          const computed = calculateCarbonMetrics(storageSavedGB, dataTransferReducedGB, networkType as any, 'realistic');
+          if (!cancelled) {
+            setMetrics({
+              storageSavedGB: computed.storageSavedGB,
+              dataTransferReducedGB: computed.dataTransferReducedGB,
+              totalCO2eSavedKg: computed.totalCO2eSavedKg,
+              carbonCreditsEarned: computed.carbonCreditsEarned ?? computed.carbonCredits ?? 0,
+              gamifiedPoints: computed.gamifiedPoints ?? 0,
+            });
+            setCurrentBadge(getBadgeTierForCredits(computed.carbonCreditsEarned ?? computed.carbonCredits ?? 0));
+            setProgress(getProgressToNextTier(computed.carbonCreditsEarned ?? computed.carbonCredits ?? 0));
+          }
+        } else {
+          if (!cancelled) {
+            setMetrics({ storageSavedGB: 0, dataTransferReducedGB: 0, totalCO2eSavedKg: 0, carbonCreditsEarned: 0, gamifiedPoints: 0 });
+            setCurrentBadge(getBadgeTierForCredits(0));
+            setProgress(getProgressToNextTier(0));
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching carbon metrics:', err);
         if (storageSavedGB !== undefined && dataTransferReducedGB !== undefined) {
-          const fallbackMetrics = calculateCarbonMetrics(storageSavedGB, dataTransferReducedGB, networkType);
-          setMetrics(fallbackMetrics);
-          setCurrentBadge(getBadgeTierForCredits(fallbackMetrics.carbonCreditsEarned));
-          setProgress(getProgressToNextTier(fallbackMetrics.carbonCreditsEarned));
+          const computed = calculateCarbonMetrics(storageSavedGB, dataTransferReducedGB, networkType as any, 'realistic');
+          if (!cancelled) {
+            setMetrics({
+              storageSavedGB: computed.storageSavedGB,
+              dataTransferReducedGB: computed.dataTransferReducedGB,
+              totalCO2eSavedKg: computed.totalCO2eSavedKg,
+              carbonCreditsEarned: computed.carbonCreditsEarned ?? computed.carbonCredits ?? 0,
+              gamifiedPoints: computed.gamifiedPoints ?? 0,
+            });
+            setCurrentBadge(getBadgeTierForCredits(computed.carbonCreditsEarned ?? computed.carbonCredits ?? 0));
+            setProgress(getProgressToNextTier(computed.carbonCreditsEarned ?? computed.carbonCredits ?? 0));
+          }
         }
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
-    };
+    }
 
-    calculateRealMetrics();
-  }, [storageSavedGB, dataTransferReducedGB, networkType]);
+    loadMetrics();
+    return () => {
+      cancelled = true;
+    };
+  }, [storageSavedGB, dataTransferReducedGB, networkType, mode]);
 
   const handleSubmitToGovernment = () => {
     setShowSubmitModal(true);
   };
 
-  const confirmSubmission = () => {
-    setSubmittedCredits(metrics.carbonCreditsEarned);
-    setShowSubmitModal(false);
-    alert(`Successfully submitted ${formatCarbonCredits(metrics.carbonCreditsEarned)} carbon credits to government registry!`);
+  const confirmSubmission = async () => {
+    try {
+      const profile = authService.getCurrentUser();
+      if (!profile) throw new Error('Not authenticated');
+
+      const payload: any = {
+        userId: profile.id,
+        mode,
+      };
+
+      // If gamified mode, include the points; otherwise include canonical credits and co2e
+      if (mode === 'gamified') {
+        payload.gamifiedPoints = metrics.gamifiedPoints || Math.round(metrics.carbonCreditsEarned * 1000);
+      } else {
+        payload.credits = metrics.carbonCreditsEarned;
+        payload.co2eSaved = metrics.totalCO2eSavedKg;
+      }
+
+      // call backend submit helper if available
+      if (typeof emailService.submitCarbonCredits === 'function') {
+        const r = await emailService.submitCarbonCredits(payload);
+        // r may contain error via handleResp — handle generically
+        if ((r as any).error) {
+          throw new Error((r as any).error?.message || JSON.stringify((r as any).error));
+        }
+      } else {
+        const res = await fetch('/api/carbon/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(localStorage.getItem('token') ? { Authorization: `Bearer ${localStorage.getItem('token')}` } : {}) },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error(`Submit failed ${res.status}`);
+      }
+
+      setSubmittedCredits(metrics.carbonCreditsEarned);
+      setShowSubmitModal(false);
+      alert(`Successfully submitted ${formatCarbonCredits(metrics.carbonCreditsEarned)} to government registry!`);
+    } catch (err: any) {
+      console.error('Submission error', err);
+      alert('Submission failed: ' + (err?.message || 'unknown'));
+    }
   };
 
   if (loading) {
@@ -129,6 +236,7 @@ export default function CarbonBadges({
             <p className="text-2xl font-bold text-green-600 dark:text-green-400">
               {formatCarbonCredits(metrics.carbonCreditsEarned)}
             </p>
+            <p className="text-xs text-gray-500 dark:text-slate-400 mt-1">{formatCO2eSavings(metrics.totalCO2eSavedKg)}</p>
           </div>
           <div className="bg-white dark:bg-slate-800 rounded-lg p-4">
             <p className="text-xs text-gray-600 dark:text-slate-400 uppercase tracking-wider mb-1">CO₂e Saved</p>
@@ -139,7 +247,7 @@ export default function CarbonBadges({
           <div className="bg-white dark:bg-slate-800 rounded-lg p-4">
             <p className="text-xs text-gray-600 dark:text-slate-400 uppercase tracking-wider mb-1">Status</p>
             <p className="text-lg font-bold text-purple-600 dark:text-purple-400">
-              {Math.round(progress.percentage)}%
+              {Number(progress.percentage.toFixed(2))}%
             </p>
           </div>
         </div>
@@ -189,7 +297,7 @@ export default function CarbonBadges({
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm font-medium text-gray-700 dark:text-slate-300">Available to Submit</span>
             <span className="text-lg font-bold text-green-600 dark:text-green-400">
-              {formatCarbonCredits(metrics.carbonCreditsEarned - submittedCredits)}
+              {formatCarbonCredits(Math.max(0, metrics.carbonCreditsEarned - submittedCredits))}
             </span>
           </div>
           <div className="flex items-center justify-between text-xs text-gray-600 dark:text-slate-400">
@@ -201,7 +309,7 @@ export default function CarbonBadges({
         <div className="flex gap-2">
           <button
             onClick={handleSubmitToGovernment}
-            disabled={metrics.carbonCreditsEarned - submittedCredits <= 0}
+            disabled={metrics.carbonCreditsEarned - submittedCredits <= eps}
             className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg font-medium transition"
           >
             <Share2 className="w-4 h-4" />
@@ -276,7 +384,7 @@ export default function CarbonBadges({
             </h3>
             <p className="text-sm text-gray-600 dark:text-slate-400 mb-4">
               You are about to submit <span className="font-bold text-green-600 dark:text-green-400">
-                {formatCarbonCredits(metrics.carbonCreditsEarned - submittedCredits)}
+                {formatCarbonCredits(Math.max(0, metrics.carbonCreditsEarned - submittedCredits))}
               </span> carbon credits to the official government registry.
             </p>
             <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 mb-6 border border-blue-200 dark:border-blue-800">
