@@ -3,6 +3,7 @@
  * JeeMail Incoming Message Processor (FINAL FIXED VERSION)
  * - Fully aligned to emails table schema
  * - Stores size_kb and has_attachments for metrics
+ * - Handles attachments as base64 in database
  */
 
 const { simpleParser } = require("mailparser");
@@ -20,30 +21,54 @@ const db = mysql.createPool({
 });
 
 /* ------------------------------------------------------------
-   Extract ALL possible recipients
+   Extract ALL possible recipients - FIXED
 ------------------------------------------------------------ */
 function extractAllRecipients(parsed) {
   const recipients = [];
 
-  if (parsed.to?.value) parsed.to.value.forEach(r => recipients.push(r.address));
-  if (parsed.cc?.value) parsed.cc.value.forEach(r => recipients.push(r.address));
-  if (parsed.bcc?.value) parsed.bcc.value.forEach(r => recipients.push(r.address));
+  // Handle to/cc/bcc - check if they have addresses
+  if (parsed.to?.value) {
+    parsed.to.value.forEach(r => {
+      if (r && r.address) recipients.push(r.address);
+    });
+  }
+  
+  if (parsed.cc?.value) {
+    parsed.cc.value.forEach(r => {
+      if (r && r.address) recipients.push(r.address);
+    });
+  }
+  
+  if (parsed.bcc?.value) {
+    parsed.bcc.value.forEach(r => {
+      if (r && r.address) recipients.push(r.address);
+    });
+  }
 
+  // Check headers
   const delivered = parsed.headers.get("delivered-to");
   const original = parsed.headers.get("x-original-to");
 
-  if (delivered) recipients.push(delivered);
-  if (original) recipients.push(original);
+  if (delivered && typeof delivered === 'string') recipients.push(delivered);
+  if (original && typeof original === 'string') recipients.push(original);
 
-  return [...new Set(recipients.map(r => (r || "").toLowerCase().trim()))];
+  // Deduplicate and normalize - ensure all are strings
+  return [...new Set(recipients.map(r => {
+    if (typeof r === 'string') {
+      return r.toLowerCase().trim();
+    }
+    return null;
+  }).filter(Boolean))];
 }
 
 /* ------------------------------------------------------------
-   Save Email Into Database
+   Save Email Into Database with Attachments
 ------------------------------------------------------------ */
 async function saveEmail(parsed) {
+  console.log("📧 Processing incoming email...");
 
   const recipients = extractAllRecipients(parsed);
+  console.log("📬 Recipients:", recipients);
 
   if (!recipients.length) {
     console.log("❌ No recipients (dropping incoming message)");
@@ -57,9 +82,11 @@ async function saveEmail(parsed) {
   );
 
   if (!users.length) {
-    console.log("❌ No matching JeeMail users");
+    console.log("❌ No matching JeeMail users for:", recipients.join(", "));
     return;
   }
+
+  console.log("✅ Found users:", users.map(u => u.email).join(", "));
 
   const from = parsed.from?.value?.[0] || {};
   const subject = parsed.subject || "(No subject)";
@@ -79,6 +106,8 @@ async function saveEmail(parsed) {
 
   // compute attachments info from parsed.attachments
   const attachmentsList = Array.isArray(parsed.attachments) ? parsed.attachments : [];
+  console.log(`📎 Found ${attachmentsList.length} attachments`);
+  
   const attachmentsTotalBytes = attachmentsList.reduce((s, a) => s + (Number(a.size || 0)), 0);
   const bodyBytes = Buffer.byteLength(body || '', 'utf8');
   const totalBytes = (bodyBytes || 0) + attachmentsTotalBytes;
@@ -107,7 +136,7 @@ async function saveEmail(parsed) {
       has_attachments,
       size_kb,
       is_draft
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       null,           // user_id (will map to mailboxes below)
       null,           // thread_id
@@ -132,7 +161,7 @@ async function saveEmail(parsed) {
   );
 
   const emailId = insertEmail.insertId;
-  console.log("📩 Stored incoming email ID:", emailId);
+  console.log("✅ Stored incoming email ID:", emailId);
 
   const storeList = (list, type) =>
     Promise.all(
@@ -149,6 +178,30 @@ async function saveEmail(parsed) {
   await storeList(parsed.cc?.value?.map(x => x.address), "cc");
   await storeList(parsed.bcc?.value?.map(x => x.address), "bcc");
 
+  // Store attachments in database
+  if (attachmentsList.length > 0) {
+    console.log(`💾 Storing ${attachmentsList.length} attachments...`);
+    
+    for (const att of attachmentsList) {
+      const filename = att.filename || "attachment.bin";
+      const mime_type = att.contentType || "application/octet-stream";
+      const size_bytes = att.size || 0;
+      
+      // Convert buffer to base64
+      const content_base64 = att.content ? att.content.toString('base64') : null;
+      
+      await db.query(
+        `INSERT INTO email_attachments 
+         (email_id, filename, mime_type, size_bytes, content_base64, created_at)
+         VALUES (?, ?, ?, ?, ?, NOW())`,
+        [emailId, filename, mime_type, size_bytes, content_base64]
+      );
+      
+      console.log(`  ✅ Stored attachment: ${filename} (${size_bytes} bytes)`);
+    }
+  }
+
+  // Add to user inboxes
   for (const user of users) {
     const [[inbox]] = await db.query(
       `SELECT id FROM mailboxes 
@@ -157,7 +210,10 @@ async function saveEmail(parsed) {
       [user.id]
     );
 
-    if (!inbox) continue;
+    if (!inbox) {
+      console.log(`⚠️  No inbox found for user ${user.email}`);
+      continue;
+    }
 
     await db.query(
       `INSERT INTO email_mailbox 
@@ -165,7 +221,11 @@ async function saveEmail(parsed) {
        VALUES (?, ?, ?, 0)`,
       [user.id, emailId, inbox.id]
     );
+    
+    console.log(`✅ Delivered to ${user.email}'s inbox`);
   }
+
+  console.log("🎉 Email processing complete!");
 }
 
 /* ------------------------------------------------------------
@@ -180,8 +240,10 @@ async function main() {
     try {
       const parsed = await simpleParser(raw);
       await saveEmail(parsed);
+      console.log("✅ Email received and processed successfully");
     } catch (err) {
       console.error("❌ Incoming email processing error:", err);
+      console.error("Stack trace:", err.stack);
     }
     process.exit(0);
   });

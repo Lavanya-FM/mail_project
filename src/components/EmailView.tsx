@@ -38,6 +38,8 @@ interface ConfirmDialogState {
 }
 
 export default function EmailView({ email, onClose, onRefresh, onCompose, labels = [] }: EmailViewProps) {
+  console.log("EMAIL JSON >>>", email);
+
   const [starred, setStarred] = useState(false);
   const [showActions, setShowActions] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -639,7 +641,7 @@ const cleanedBody = normalizedBody
               </div>
             </div>
 
-            {/* Email Body */}
+{/* Email Body */}
             <div className="px-4 lg:px-6 pb-4 lg:pb-6 pt-3 lg:pt-4 border-t border-gray-100 dark:border-slate-800">
               <div className="prose dark:prose-invert max-w-none" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                 <div
@@ -648,22 +650,92 @@ const cleanedBody = normalizedBody
                 />
               </div>
 
-              {email.has_attachments && (
+              {email.has_attachments && email.attachments && email.attachments.length > 0 && (
                 <div className="mt-6 pt-6 border-t border-gray-200 dark:border-slate-800">
                   <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
                     <Paperclip className="w-4 h-4" />
-                    Attachments
+                    Attachments ({email.attachments.length})
                   </h4>
                   <div className="grid grid-cols-1 gap-2 lg:gap-3">
-                    <div className="bg-gray-50 dark:bg-slate-800/50 rounded-xl p-4 flex items-center gap-3 hover:bg-gray-100 dark:hover:bg-slate-800 transition cursor-pointer border border-gray-200 dark:border-slate-700">
-                      <div className="w-12 h-12 bg-blue-500/10 rounded-lg flex items-center justify-center">
-                        <Paperclip className="w-6 h-6 text-blue-500" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs lg:text-sm text-gray-900 dark:text-white font-medium truncate">document.pdf</p>
-                        <p className="text-xs text-gray-600 dark:text-slate-400">2.4 MB</p>
-                      </div>
-                    </div>
+                    {email.attachments.map((attachment: any, index: number) => {
+                      const isImage = /^image\//i.test(attachment.mime_type || '');
+                      const sizeKB = attachment.size_bytes 
+                        ? (attachment.size_bytes / 1024).toFixed(1) 
+                        : '0';
+                      const sizeMB = attachment.size_bytes && attachment.size_bytes > 1024 * 1024
+                        ? (attachment.size_bytes / 1024 / 1024).toFixed(1) + ' MB'
+                        : sizeKB + ' KB';
+
+                      return (
+                        <div 
+                          key={index}
+                          className="bg-gray-50 dark:bg-slate-800/50 rounded-xl p-4 flex items-center gap-3 hover:bg-gray-100 dark:hover:bg-slate-800 transition cursor-pointer border border-gray-200 dark:border-slate-700"
+                          onClick={async () => {
+                            // Download attachment
+                            try {
+                              const response = await fetch(
+                                `${import.meta.env.VITE_API_BASE || ''}/api/email/${email.id}/attachment/${attachment.id}`,
+                                {
+                                  headers: {
+                                    'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                                  },
+                                  credentials: 'include',
+                                }
+                              );
+                              
+                              if (!response.ok) throw new Error('Failed to fetch attachment');
+                              
+                              const data = await response.json();
+                              
+                              // Convert base64 to blob and download
+                              const byteCharacters = atob(data.content_base64);
+                              const byteNumbers = new Array(byteCharacters.length);
+                              for (let i = 0; i < byteCharacters.length; i++) {
+                                byteNumbers[i] = byteCharacters.charCodeAt(i);
+                              }
+                              const byteArray = new Uint8Array(byteNumbers);
+                              const blob = new Blob([byteArray], { type: attachment.mime_type || 'application/octet-stream' });
+                              
+                              // Create download link
+                              const url = window.URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url;
+                              a.download = attachment.filename || 'attachment';
+                              document.body.appendChild(a);
+                              a.click();
+                              document.body.removeChild(a);
+                              window.URL.revokeObjectURL(url);
+                            } catch (error) {
+                              console.error('Error downloading attachment:', error);
+                              alert('Failed to download attachment');
+                            }
+                          }}
+                        >
+                          {isImage && attachment.content_base64 ? (
+                            <div className="w-12 h-12 rounded-lg overflow-hidden flex-shrink-0">
+                              <img 
+                                src={`data:${attachment.mime_type};base64,${attachment.content_base64}`}
+                                alt={attachment.filename}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                          ) : (
+                            <div className="w-12 h-12 bg-blue-500/10 rounded-lg flex items-center justify-center flex-shrink-0">
+                              <Paperclip className="w-6 h-6 text-blue-500" />
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs lg:text-sm text-gray-900 dark:text-white font-medium truncate">
+                              {attachment.filename || 'attachment'}
+                            </p>
+                            <p className="text-xs text-gray-600 dark:text-slate-400">
+                              {sizeMB}
+                              {isImage && ' • Image'}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}

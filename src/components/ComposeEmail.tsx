@@ -64,6 +64,36 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
   const [p2pConnected, setP2pConnected] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showDriveModal, setShowDriveModal] = useState(false);
+// ===========================
+// ATTACHMENT HELPERS
+// ===========================
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
+const [uploadProgress, setUploadProgress] = useState<number>(0);
+
+const isImageFile = (file: File) => {
+  return /^image\/(png|jpe?g|gif|webp)$/i.test(file.type);
+};
+
+async function fileToBase64WithProgress(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onprogress = (evt) => {
+      if (evt.lengthComputable) {
+        setUploadProgress(Math.round((evt.loaded / evt.total) * 100));
+      }
+    };
+
+    reader.onloadend = () => {
+      setUploadProgress(0);
+      resolve(reader.result!.toString().replace(/^data:.+;base64,/, ""));
+    };
+
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
   const [threadId, setThreadId] = useState<string | undefined>(undefined);
   const textareaRef = useRef<HTMLDivElement>(null);
@@ -96,6 +126,53 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
     if (textareaRef.current) textareaRef.current.innerHTML = normalizedPrefillBody;
   }, [prefilledData]);
 
+async function prepareAttachments() {
+  const out: any[] = [];
+
+  console.log("📎 Preparing attachments. Total files:", attachments.length);
+
+  // Iterate over each file in the attachments array
+  for (const file of attachments) {
+    console.log("Processing file:", file.name, "Size:", file.size, "Type:", file.type);
+    
+    // If the file exceeds the max allowed size, alert the user and skip
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      alert(
+        `Attachment "${file.name}" is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Max allowed is 25MB.`
+      );
+      continue;
+    }
+
+    try {
+      // Convert the file to base64 format
+      const base64 = await fileToBase64WithProgress(file);
+
+      // Determine MIME type - important for images
+      const mimeType = file.type || "application/octet-stream";
+      const isImage = isImageFile(file);
+
+      // Add the processed file to the output array
+      const attachment = {
+        filename: file.name,
+        content: base64,
+        encoding: "base64",
+        size: file.size,
+        mime_type: mimeType,
+        is_image: isImage,
+      };
+
+      console.log("✓ Added attachment:", attachment.filename, "Is Image:", isImage, "MIME:", mimeType);
+      out.push(attachment);
+    } catch (error) {
+      console.error("Error processing file:", file.name, error);
+      alert(`Failed to process file: ${file.name}`);
+    }
+  }
+
+  console.log("📦 Final attachments array:", out.length, "files");
+  return out;
+}
+
   // -------------------- AUTO SAVE DRAFT --------------------
   useEffect(() => {
     if (!to && !subject && !body) return;
@@ -104,39 +181,45 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
     return () => clearTimeout(t);
   }, [to, cc, bcc, subject, body]);
 
-  const saveDraft = async () => {
-    if (!profile || (!to.trim() && !subject.trim() && !body.trim())) return;
+const saveDraft = async () => {
+  if (!profile) return;
+  if (!to.trim() && !subject.trim() && !body.trim()) return;
 
-    setDraftStatus("saving");
+  setDraftStatus("saving");
 
-    const draftsFolderId = getFolderIdByName("drafts");
+  const draftsFolderId = getFolderIdByName("drafts");
 
-    try {
-      await emailService.createEmail({
-        user_id: profile.id,
-        from_email: profile.email,
-        from_name: profile.full_name || profile.email,
+  try {
+    // Prepare attachments before saving the draft
+    const finalAttachments = await prepareAttachments(); // Ensure attachments are prepared here
 
-        to_emails: to.split(",").map(e => ({ email: e.trim(), name: e.trim() })).filter(e => e.email),
-        cc_emails: cc.split(",").map(e => ({ email: e.trim(), name: e.trim() })).filter(e => e.email),
-        bcc_emails: bcc.split(",").map(e => ({ email: e.trim(), name: e.trim() })).filter(e => e.email),
+    await emailService.createEmail({
+      user_id: profile.id,
+      from_email: profile.email,
+      from_name: profile.full_name || profile.email,
 
-        subject: subject || "(no subject)",
-        // normalize from editor OR state (ensures no numeric 0 or whitespace-only)
-        body: normalizeEmailBody(textareaRef.current?.textContent) || normalizeEmailBody(body) || "",
-        is_draft: true,
-        folder_id: draftsFolderId,
-        thread_id: threadId
-      });
+      to_emails: to.split(",").map(e => ({ email: e.trim() })).filter(e => e.email),
+      cc_emails: cc.split(",").map(e => ({ email: e.trim() })).filter(e => e.email),
+      bcc_emails: bcc.split(",").map(e => ({ email: e.trim() })).filter(e => e.email),
 
-      setDraftStatus("saved");
-      onDraftSaved();
-      setTimeout(() => setDraftStatus("idle"), 2000);
-    } catch (error) {
-      console.error('Error saving draft:', error);
-      setDraftStatus("idle");
-    }
-  };
+      subject: subject || "(no subject)",
+      body: normalizeEmailBody(textareaRef.current?.innerHTML || body) || "",
+
+      is_draft: true,
+      folder_id: draftsFolderId,
+      thread_id: threadId,
+
+      attachments: finalAttachments, // Include attachments here
+    });
+
+    setDraftStatus("saved");
+    onDraftSaved();
+    setTimeout(() => setDraftStatus("idle"), 2000);
+  } catch (error) {
+    console.error("Draft error:", error);
+    setDraftStatus("idle");
+  }
+};
 
   // -------------------- FORMATTING --------------------
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -323,10 +406,23 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
     setShowAttachMenu(false);
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    setAttachments(prev => [...prev, ...files]);
-  };
+const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const files = Array.from(e.target.files || []);
+  const validFiles = files.filter((f) => {
+    if (f.size > MAX_ATTACHMENT_BYTES) {
+      alert(
+        `File "${f.name}" is too large (${(f.size / 1024 / 1024).toFixed(
+          1
+        )} MB). Max allowed is 25MB.`
+      );
+      return false;
+    }
+    return true;
+  });
+
+  // Update the attachments state to include valid files
+  setAttachments((prev) => [...prev, ...validFiles]);
+};
 
   const removeAttachment = (index: number) => {
     setAttachments(prev => prev.filter((_, i) => i !== index));
@@ -343,38 +439,46 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
   };
 
   // -------------------- SEND EMAIL --------------------
-  const handleSend = async () => {
-    if (!profile || !to.trim()) return;
+const handleSend = async () => {
+  if (!profile || !to.trim()) return;
 
-    setSending(true);
+  setSending(true);
 
-    const sentFolderId = getFolderIdByName("sent");
+  const sentFolderId = getFolderIdByName("sent");
+  
+  try {
+    // Prepare attachments dynamically
+    const finalAttachments = await prepareAttachments();
+    
+    console.log("🚀 Sending email with attachments:", finalAttachments.length);
 
-    try {
-      await emailService.createEmail({
-        user_id: profile.id,
-        from_email: profile.email,
-        from_name: profile.full_name || profile.email,
+    const emailPayload = {
+      user_id: profile.id,
+      from_email: profile.email,
+      from_name: profile.full_name || profile.email,
+      to_emails: to.split(",").map(e => ({ email: e.trim() })).filter(e => e.email),
+      cc_emails: cc.split(",").map(e => ({ email: e.trim() })).filter(e => e.email),
+      bcc_emails: bcc.split(",").map(e => ({ email: e.trim() })).filter(e => e.email),
+      subject: subject || "(no subject)",
+      body: normalizeEmailBody(textareaRef.current?.innerHTML || body) || "",
+      is_draft: false,
+      folder_id: sentFolderId,
+      thread_id: threadId,
+      attachments: finalAttachments,
+    };
 
-        to_emails: to.split(",").map(e => ({ email: e.trim(), name: e.trim() })).filter(e => e.email),
-        cc_emails: cc.split(",").map(e => ({ email: e.trim(), name: e.trim() })).filter(e => e.email),
-        bcc_emails: bcc.split(",").map(e => ({ email: e.trim(), name: e.trim() })).filter(e => e.email),
+    console.log("📧 Email payload with", emailPayload.attachments.length, "attachments");
 
-        subject: subject || "(no subject)",
-        // normalize send body too
-        body: normalizeEmailBody(textareaRef.current?.textContent) || normalizeEmailBody(body) || "",
-        is_draft: false,
-        folder_id: sentFolderId,
-        thread_id: threadId
-      });
+    await emailService.createEmail(emailPayload);
 
-      onSent();
-    } catch (error) {
-      console.error('Error sending email:', error);
-    } finally {
-      setSending(false);
-    }
-  };
+    onSent();
+  } catch (err) {
+    console.error("SEND ERROR:", err);
+    alert("Failed to send email. Please try again.");
+  } finally {
+    setSending(false);
+  }
+};
 
   // -------------------- UI --------------------
   return (
@@ -493,36 +597,63 @@ export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledD
               minHeight: '192px'
             }}
           />
+{/* DRAG & DROP ATTACHMENTS */}
+<div
+  onDragOver={(e) => {
+    e.preventDefault();
+    e.currentTarget.classList.add("bg-blue-50", "dark:bg-blue-900/20");
+  }}
+  onDragLeave={(e) => {
+    e.preventDefault();
+    e.currentTarget.classList.remove("bg-blue-50", "dark:bg-blue-900/20");
+  }}
+  onDrop={(e) => {
+    e.preventDefault();
+    e.currentTarget.classList.remove("bg-blue-50", "dark:bg-blue-900/20");
+    const dropped = Array.from(e.dataTransfer.files || []);
+    setAttachments((prev) => [...prev, ...dropped]);
+  }}
+  className="border border-dashed border-gray-300 dark:border-slate-600 rounded-lg p-4 mb-3 text-center text-sm text-gray-600 dark:text-slate-400 cursor-pointer"
+>
+  Drag & Drop files here (up to 25MB each)
+</div>
+
         </div>
 
-        {/* ATTACHMENTS */}
-        {attachments.length > 0 && (
-          <div className="border-t border-gray-200 dark:border-slate-700 p-3 lg:p-4">
-            <h4 className="text-sm font-medium text-gray-700 dark:text-slate-300 mb-2">Attachments</h4>
-            <div className="space-y-2">
-              {attachments.map((file, index) => (
-                <div key={index} className="flex items-center justify-between bg-gray-100 dark:bg-slate-800 rounded-lg p-3">
-                  <div className="flex items-center gap-3">
-                    <Paperclip className="w-4 h-4 text-gray-500 dark:text-slate-400" />
-                    <span className="text-sm text-gray-900 dark:text-white">
-                      {file.name}
-                      <span className="text-xs text-gray-500 dark:text-slate-400 ml-2">
-                        {formatFileSize(file.size)}
-                      </span>
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => removeAttachment(index)}
-                    className="p-1 text-gray-500 dark:text-slate-400 hover:text-red-500 dark:hover:text-red-400 rounded transition"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
+</div>
+
+{/* ATTACHMENTS */}
+{attachments.length > 0 && (
+  <div className="border-t border-gray-200 dark:border-slate-700 p-3 lg:p-4">
+    <h4 className="text-sm font-medium text-gray-700 dark:text-slate-300 mb-2">
+      Attachments
+    </h4>
+
+    {attachments.map((file, index) => {
+      const isImg = isImageFile(file);  // Dynamically check for images
+
+      return (
+        <div key={index} className="flex items-start justify-between bg-gray-100 dark:bg-slate-800 rounded-lg p-3 border border-gray-200 dark:border-slate-700">
+          <div className="flex items-start gap-3 w-full">
+            {/* Show image preview if file is an image */}
+            {isImg ? (
+              <img
+                src={URL.createObjectURL(file)}  // Create a URL for image preview
+                className="w-20 h-20 object-cover rounded border border-gray-300 dark:border-slate-600"
+                alt={file.name}
+              />
+            ) : (
+              <span className="text-sm">{file.name}</span>
+            )}
           </div>
-        )}
-      </div>
+          <button onClick={() => removeAttachment(index)}>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      );
+    })}
+  </div>
+)}
 
       {/* FOOTER */}
       <div className="flex items-center justify-between p-3 lg:p-4 border-t border-gray-200 dark:border-slate-700 flex-wrap gap-2">

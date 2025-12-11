@@ -157,15 +157,18 @@ export const emailService = {
   },
 
   // -------------------------------------------------------------
-  // CREATE EMAIL (FULL PATCH WITH THREADING)
+  // CREATE EMAIL (FULL PATCH WITH ATTACHMENTS)
   // -------------------------------------------------------------
   async createEmail(payload: any): ApiResult<any> {
     const url = apiUrl("/api/email/create");
 
+    // DO NOT drop attachments.
+    // DO NOT normalize before sending.
     const bodyClean = {
       user_id: payload.user_id,
       from_email: payload.from_email,
       from_name: payload.from_name,
+
       subject: payload.subject || "(no subject)",
       body: payload.body || "",
       is_draft: !!payload.is_draft,
@@ -176,27 +179,30 @@ export const emailService = {
       in_reply_to: payload.in_reply_to || null,
       references: payload.references || null,
 
-      // Normalize recipient arrays
-      to_emails: normalizeRecipientList(payload.to_emails).map((e) => ({
-        email: e,
-      })),
-      cc_emails: normalizeRecipientList(payload.cc_emails).map((e) => ({
-        email: e,
-      })),
-      bcc_emails: normalizeRecipientList(payload.bcc_emails).map((e) => ({
-        email: e,
-      })),
+      // Recipients as-is (NOT normalized)
+      to_emails: payload.to_emails || [],
+      cc_emails: payload.cc_emails || [],
+      bcc_emails: payload.bcc_emails || [],
+
+      // Attachments: PASS THROUGH
+      attachments: payload.attachments || [],
     };
+
+    console.log("EMAIL SERVICE FINAL PAYLOAD:", bodyClean);
 
     const resp = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(),
+      },
       credentials: "include",
-      body: JSON.stringify(bodyClean),
+
+      // DO NOT use plain JSON.stringify: preserve base64
+      body: JSON.stringify(bodyClean, (_, v) => (v === undefined ? null : v)),
     });
 
     const result = await handleResp<any>(resp);
-
     if (result.error) console.error("Email send error:", result.error);
 
     return result;
