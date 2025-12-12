@@ -58,34 +58,85 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
   const [showLabelDropdown, setShowLabelDropdown] = useState(false);
   const labelDropdownRef = useRef<HTMLDivElement>(null);
 
-  // -----------------------
-  // Sanitizer: remove lines that are empty or only zeros
-  // -----------------------
-  const sanitizeBody = (text?: string) => {
-    if (!text) return "";
-    // normalize CRLF -> LF
-    const normalized = text.replace(/\r/g, "");
-    // Split into lines, trim, and remove lines that are empty or only zeros
-    const lines = normalized.split("\n").map(l => l.replace(/\u00A0/g, " ").trim());
-    const filtered = lines.filter(line => {
-      if (!line) return false;
-      // If line is only zeros like "0", "000", or whitespace+zeros -> remove
-      if (/^0+$/.test(line)) return false;
-      return true;
-    });
-    return filtered.join("\n");
-  };
+// -----------------------
+// Sanitizer: remove lines that are empty or only zeros
+// -----------------------
+const sanitizeBody = (text?: string) => {
+  if (!text) return "";
+  // normalize CRLF -> LF
+  const normalized = text.replace(/\r/g, "");
+  // Split into lines, replace non-breaking spaces, trim, and remove lines that are empty or only zeros
+  const lines = normalized.split("\n").map(l => l.replace(/\u00A0/g, " ").trim());
+  const filtered = lines.filter(line => {
+    if (!line) return false;
+    // If line is only zeros like "0", "000", or whitespace+zeros -> remove
+    if (/^0+$/.test(line)) return false;
+    return true;
+  });
+  return filtered.join("\n");
+};
 
-  // Helper to create safe HTML for display
-  const bodyToHtml = (text?: string) => {
-    const cleaned = sanitizeBody(text);
-    // convert newlines to <br> and escape HTML
-    const escaped = cleaned
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-    return escaped.replace(/\n/g, "<br>");
-  };
+// -----------------------
+// Strip HTML tags and render safe plain text
+// -----------------------
+// Convert HTML block tags to newline markers robustly
+const htmlToNewlines = (s: string) => {
+  if (!s) return s;
+
+  // Normalize CRLF -> LF
+  s = s.replace(/\r\n?/g, "\n");
+
+  // Convert <br> to newline
+  s = s.replace(/<br\s*\/?>/gi, "\n");
+
+  // Insert newline before/after block tags so adjacent text is separated.
+  const blockTags = ['div','p','li','blockquote','tr','table','thead','tbody','tfoot','section','article','header','footer','aside','figure','figcaption','h1','h2','h3','h4','h5','h6'];
+  for (const tag of blockTags) {
+    const openRegex = new RegExp(`<${tag}[^>]*>`, 'gi');
+    const closeRegex = new RegExp(`</${tag}>`, 'gi');
+    s = s.replace(openRegex, '\n');   // opening -> newline
+    s = s.replace(closeRegex, '\n');  // closing -> newline
+  }
+
+  return s;
+};
+
+const stripHtmlTags = (s: string) => {
+  if (!s) return s;
+  // remove comments and any remaining tags
+  s = s.replace(/<!--[\s\S]*?-->/g, '');
+  s = s.replace(/<\/?[^>]+(>|$)/g, '');
+  return s;
+};
+
+const bodyToHtml = (text?: string) => {
+  if (!text) return '';
+
+  // 1) Basic sanitizer — keep this but if you previously removed empty lines change that
+  let cleaned = sanitizeBody(text); // your function; consider not removing intentional blank lines
+
+  // 2) Convert HTML to newlines (opening & closing handled)
+  cleaned = htmlToNewlines(cleaned);
+
+  // 3) Strip tags
+  cleaned = stripHtmlTags(cleaned);
+
+  // 4) Collapse multiple newlines into a single newline
+  //    If you prefer to preserve paragraph spacing (i.e., turn 2+ newlines into exactly 2)
+  //    replace '\n' with '\n\n' in the replacement below.
+  cleaned = cleaned.replace(/\n{2,}/g, '\n');
+
+  // 5) Trim leading/trailing whitespace/newlines so no extra blank line at top/bottom
+  cleaned = cleaned.replace(/^\s+|\s+$/g, '');
+
+  // 6) Escape HTML entities and convert newline -> <br> for rendering
+  const escaped = cleaned
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  return escaped.replace(/\n/g, '<br>');
+};
 
   useEffect(() => {
     if (email) {
