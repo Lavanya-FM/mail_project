@@ -75,7 +75,7 @@ async function fetchEmailStatsForUser(userId) {
   const sql = `
     SELECT
       COUNT(*) AS email_count,
-      SUM(CASE WHEN has_attachments THEN 1 ELSE 0 END) AS attachments_count,
+(SELECT COUNT(*) FROM email_attachments ea WHERE ea.email_id = e.id) AS attachments_count
       SUM(COALESCE(size_kb, 0)) AS total_size_kb
     FROM emails
     WHERE user_id = ?

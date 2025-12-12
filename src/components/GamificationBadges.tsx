@@ -27,7 +27,7 @@ export default function GamificationBadges() {
         const storageSavedGB = (emailCount * avgEmailSize) / 1024;
 
         // Calculate data transfer reduced (based on attachments)
-        const emailsWithAttachments = emails?.filter(e => e.has_attachments)?.length || 0;
+        const emailsWithAttachments = emails?.filter(e => e.attachments && e.attachments.length > 0)?.length || 0;
         const avgAttachmentSize = 2; // 2MB average
         const dataTransferReducedGB = (emailsWithAttachments * avgAttachmentSize) / 1024;
 

@@ -379,12 +379,11 @@ if (attachmentsList.length > 0) {
     );
     const rawBytes = Buffer.byteLength(cleanBody || '', 'utf8') + attachmentsTotalBytes;
     const size_kb = Math.max(1, Math.round((rawBytes || 0) / 1024));
-    const has_attachments = attachmentsList.length ? 1 : 0;
 
-    await conn.query(
-      "UPDATE emails SET has_attachments = ?, size_kb = ? WHERE id = ?",
-      [has_attachments, size_kb, emailId]
-    );
+await conn.query(
+  "UPDATE emails SET size_kb = ? WHERE id = ?",
+  [size_kb, emailId]
+);
 
     // send SMTP if not draft
     if (!is_draft) {

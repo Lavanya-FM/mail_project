@@ -112,7 +112,6 @@ async function saveEmail(parsed) {
   const bodyBytes = Buffer.byteLength(body || '', 'utf8');
   const totalBytes = (bodyBytes || 0) + attachmentsTotalBytes;
   const size_kb = Math.max(1, Math.round((totalBytes || 0) / 1024));
-  const has_attachments = attachmentsList.length ? 1 : 0;
 
   const [insertEmail] = await db.query(
     `INSERT INTO emails (
@@ -133,7 +132,6 @@ async function saveEmail(parsed) {
       folder_id,
       is_read,
       is_starred,
-      has_attachments,
       size_kb,
       is_draft
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -154,7 +152,6 @@ async function saveEmail(parsed) {
       null,           // folder_id (per-user inbox will be used)
       0,              // is_read
       0,              // is_starred
-      has_attachments,
       size_kb,
       0               // is_draft
     ]

@@ -1,15 +1,45 @@
 // backend/authJwt.js
-const jwt = require('jsonwebtoken');
-module.exports = function(req, res, next) {
-  const auth = req.headers.authorization || '';
-  const m = auth.match(/^Bearer\s+(.+)$/);
-  if (!m) return next();
-  const token = m[1];
-  try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret');
-    req.user = payload.user || payload; // adapt to your token shape
-  } catch (e) {
-    console.warn('JWT verify failed', e.message);
+
+const jwt = require("jsonwebtoken");
+
+// Public routes that DO NOT require JWT
+const openRoutes = [
+  "/api/login",
+  "/api/register",
+  "/api/email/create",
+  "/api/emails",
+  "/api/carbon/metrics",
+  "/api/carbon/metrics/me"
+];
+
+module.exports = function (req, res, next) {
+  // Skip JWT for open routes
+  if (openRoutes.some((r) => req.path.startsWith(r))) {
+    return next();
   }
-  return next();
+
+  const authHeader = req.headers.authorization || "";
+
+  // Skip if no token at all
+  if (!authHeader.startsWith("Bearer ")) {
+    return next();
+  }
+
+  const token = authHeader.replace("Bearer ", "").trim();
+  if (!token) {
+    return next();
+  }
+
+  try {
+    const payload = jwt.verify(
+      token,
+      process.env.JWT_SECRET || "your_jwt_secret"
+    );
+    req.user = payload.user || payload;
+  } catch (err) {
+    console.warn("JWT verify failed:", err.message);
+    // DO NOT block the request, just log
+  }
+
+  next();
 };
