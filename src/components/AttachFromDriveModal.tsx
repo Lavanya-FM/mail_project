@@ -54,7 +54,7 @@ export default function AttachFromDriveModal({ isOpen, onClose, onAttach }: Atta
         const filesToAttach = files.filter(f => selectedFiles.has(f.id));
         onAttach(filesToAttach);
         setSelectedFiles(new Set());
-        onClose();
+        onClose?.();
     };
 
     if (!isOpen) return null;

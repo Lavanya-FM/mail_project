@@ -65,7 +65,7 @@ export default function LargeFilesModal({ isOpen, onClose, userId, onRefresh }: 
             }
             setSelectedFiles(new Set());
             loadLargeFiles();
-            onRefresh();
+            onRefresh?.();
         }
     };
 

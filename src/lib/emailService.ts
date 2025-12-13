@@ -40,9 +40,13 @@ async function handleResp<T>(resp: Response) {
 }
 
 function authHeaders() {
-  const token =
-    localStorage.getItem("token") || (window as any).__authToken || null;
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  const token = localStorage.getItem("token");
+
+  if (!token || token === "null" || token === "undefined") {
+    return {};
+  }
+
+  return { Authorization: `Bearer ${token}` };
 }
 
 // -------------------------------------------------------------
@@ -155,6 +159,36 @@ export const emailService = {
 
     return { data: raw, status: r.status };
   },
+
+async getThread(
+  threadId: number | string,
+  userId: number | string
+): ApiResult<any[]> {
+  const url = apiUrl(`/api/email/thread/${threadId}?user_id=${userId}`);
+
+  const resp = await fetch(url, {
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    credentials: "include",
+  });
+
+  const r = await handleResp<any[]>(resp);
+  const raw = r.data || [];
+
+  // Normalize recipients (CRITICAL)
+  raw.forEach((email: any) => {
+    email.to_emails = (email.to_emails || []).map((t: any) => ({
+      email: t.email || t,
+    }));
+    email.cc_emails = (email.cc_emails || []).map((t: any) => ({
+      email: t.email || t,
+    }));
+    email.bcc_emails = (email.bcc_emails || []).map((t: any) => ({
+      email: t.email || t,
+    }));
+  });
+
+  return { data: raw, status: r.status };
+},
 
   // -------------------------------------------------------------
   // CREATE EMAIL (FULL PATCH WITH ATTACHMENTS)

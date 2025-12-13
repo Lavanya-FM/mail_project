@@ -38,8 +38,8 @@ export default function NewFolderModal({ isOpen, onClose, onRefresh, currentFold
             
             if (result.success) {
                 setFolderName('');
-                onRefresh();
-                onClose();
+                onRefresh?.();
+                onClose?.();
             } else {
                 setError(result.error || 'Failed to create folder');
             }
@@ -55,14 +55,14 @@ export default function NewFolderModal({ isOpen, onClose, onRefresh, currentFold
         if (e.key === 'Enter') {
             handleCreate();
         } else if (e.key === 'Escape') {
-            onClose();
+            onClose?.();
         }
     };
 
     const handleClose = () => {
         setFolderName('');
         setError('');
-        onClose();
+        onClose?.();
     };
 
     if (!isOpen) return null;

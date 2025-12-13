@@ -153,6 +153,47 @@ router.get("/folders/:userId", async (req, res) => {
   res.json({ data: rows });
 });
 
+// -------------------- GET THREAD (Conversation View) --------------------
+router.get("/email/thread/:threadId", async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const userId = req.query.user_id;
+
+    if (!threadId || !userId) {
+      return res.status(400).json({ error: "Missing threadId or user_id" });
+    }
+
+    const [emails] = await db.query(
+      `
+      SELECT e.*, m.is_read, m.is_starred, m.mailbox_id
+      FROM emails e
+      JOIN email_mailbox m ON e.id = m.email_id
+      WHERE e.thread_id = ?
+        AND m.user_id = ?
+      ORDER BY e.created_at ASC
+      `,
+      [threadId, userId]
+    );
+
+    // Attach recipients
+    for (const email of emails) {
+      const [rcp] = await db.query(
+        "SELECT address, type FROM email_recipients WHERE email_id = ?",
+        [email.id]
+      );
+
+      email.to_emails = rcp.filter(r => r.type === "to").map(r => r.address);
+      email.cc_emails = rcp.filter(r => r.type === "cc").map(r => r.address);
+      email.bcc_emails = rcp.filter(r => r.type === "bcc").map(r => r.address);
+    }
+
+    return res.json({ data: emails });
+  } catch (err) {
+    console.error("THREAD FETCH ERROR:", err);
+    return res.status(500).json({ error: "Failed to fetch thread" });
+  }
+});
+
 // -------------------- FETCH EMAILS --------------------
 
 router.get("/emails/:userId/:folder", async (req, res) => {
@@ -244,8 +285,10 @@ router.get("/email/:emailId/attachment/:attachmentId", async (req, res) => {
 });
 
 // -------------------- CREATE / SEND EMAIL --------------------
-
 router.post("/email/create", async (req, res) => {
+  console.log("=== EMAIL CREATE DEBUG ===");
+  console.log("Request body keys:", Object.keys(req.body));
+
   const {
     user_id,
     to,
@@ -260,7 +303,7 @@ router.post("/email/create", async (req, res) => {
     in_reply_to,
     folder_id,
     attachments // array of { filename, content (base64), size, mime_type, encoding? }
-  } = req.body || {};
+  } = req.body;
 
   if (!user_id) return res.status(400).json({ error: "Missing user_id" });
 
@@ -299,6 +342,12 @@ if (attachmentsList.length > 0) {
   const conn = await db.getConnection();
   await conn.beginTransaction();
 
+  let resolvedThreadId;
+
+
+  resolvedThreadId = null;
+
+
   try {
     const [[sender]] = await conn.query(
       "SELECT name, email FROM users WHERE id = ? LIMIT 1",
@@ -316,29 +365,50 @@ if (attachmentsList.length > 0) {
       resolvedFolderId = row ? row.id : null;
     }
 
-    // insert email
-    const [insert] = await conn.query(
-      `INSERT INTO emails
-       (user_id, from_name, from_email, subject, body, is_html, in_reply_to,
-        to_header, cc_header, bcc_header, folder_id, is_draft, created_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, NOW())`,
-      [
-        user_id,
-        sender.name,
-        sender.email,
-        subject || "(No Subject)",
-        cleanBody,
-        in_reply_to || null,
-        toList.join(", "),
-        ccList.join(", "),
-        bccList.join(", "),
-        resolvedFolderId,
-        is_draft ? 1 : 0
-      ]
-    );
+    // -------------------- THREAD RESOLUTION --------------------
+resolvedThreadId = null;
 
-    const emailId = insert.insertId;
+if (in_reply_to) {
+  const [[parent]] = await conn.query(
+    "SELECT thread_id FROM emails WHERE id = ?",
+    [in_reply_to]
+  );
+  resolvedThreadId = parent?.thread_id || null;
+}
 
+
+// 2. INSERT email
+const [insert] = await conn.query(
+  `INSERT INTO emails
+   (user_id, thread_id, from_name, from_email, subject, body, is_html, in_reply_to,
+    to_header, cc_header, bcc_header, folder_id, is_draft, created_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+  [
+    user_id,
+    resolvedThreadId,
+    sender.name,
+    sender.email,
+    subject || "(No Subject)",
+    cleanBody,
+    1,
+    in_reply_to || null,
+    toList.join(", "),
+    ccList.join(", "),
+    bccList.join(", "),
+    resolvedFolderId,
+    is_draft ? 1 : 0
+  ]
+);
+
+const emailId = insert.insertId;
+
+// ✅ Only now emailId exists
+if (!resolvedThreadId) {
+  await conn.query(
+    "UPDATE emails SET thread_id = ? WHERE id = ?",
+    [emailId, emailId]
+  );
+}
     // recipients
     for (const addr of toList)
       await conn.query("INSERT INTO email_recipients (email_id, address, type) VALUES (?, ?, 'to')", [emailId, addr]);

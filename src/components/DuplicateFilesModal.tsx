@@ -57,7 +57,7 @@ export default function DuplicateFilesModal({ isOpen, onClose, userId, onRefresh
             }
             setSelectedFiles(new Set());
             loadDuplicates();
-            onRefresh();
+            onRefresh?.();
         }
     };
 

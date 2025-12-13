@@ -21,9 +21,9 @@ module.exports = function (req, res, next) {
   const authHeader = req.headers.authorization || "";
 
   // Skip if no token at all
-  if (!authHeader.startsWith("Bearer ")) {
-    return next();
-  }
+if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  return next(); // or return 401
+}
 
   const token = authHeader.replace("Bearer ", "").trim();
   if (!token) {

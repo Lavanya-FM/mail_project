@@ -36,7 +36,12 @@ const normalizeEmailField = (val: any): string => {
   return "";
 };
 
-export default function ComposeEmail({ onClose, onSent, onDraftSaved, prefilledData }: ComposeEmailProps) {
+export default function ComposeEmail({
+  onClose,
+  onSent,
+  onDraftSaved,
+  prefilledData
+}: ComposeEmailProps) {
 
   // -------------------- STATE --------------------
   const [to, setTo] = useState('');
@@ -95,7 +100,14 @@ async function fileToBase64WithProgress(file: File): Promise<string> {
   });
 }
 
-  const [threadId, setThreadId] = useState<string | undefined>(undefined);
+const [threadId, setThreadId] = useState<string | null>(null);
+// -------------------- THREAD HANDLING (Gmail rules) --------------------
+useEffect(() => {
+  if (prefilledData?.threadId) {
+    setThreadId(prefilledData.threadId);
+  }
+}, [prefilledData]);
+
   const textareaRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const savedSelectionRef = useRef<Range | null>(null);
@@ -120,7 +132,7 @@ async function fileToBase64WithProgress(file: File): Promise<string> {
     const normalizedPrefillBody = normalizeEmailBody(prefilledData.body) || "";
     setBody(normalizedPrefillBody);
 
-    if (prefilledData.threadId) setThreadId(prefilledData.threadId);
+    //if (prefilledData.threadId) setThreadId(prefilledData.threadId);
     if (prefilledData.cc) setShowCc(true);
 
     if (textareaRef.current) textareaRef.current.innerHTML = normalizedPrefillBody;
@@ -471,7 +483,7 @@ const handleSend = async () => {
 
     await emailService.createEmail(emailPayload);
 
-    onSent();
+    onSent?.();
   } catch (err) {
     console.error("SEND ERROR:", err);
     alert("Failed to send email. Please try again.");

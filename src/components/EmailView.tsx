@@ -5,6 +5,7 @@ import { emailService } from '../lib/emailService';
 import { authService } from '../lib/authService';
 import { Email } from '../types/email';
 import { normalizeEmailBody } from '../utils/email';
+import { collapseForwarded } from '../lib/collapseForwarded';
 
 type EmailViewProps = {
   email: Email | null;
@@ -43,7 +44,18 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
   const [starred, setStarred] = useState(false);
   const [showActions, setShowActions] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const [showQuoted, setShowQuoted] = useState(false);
   const currentUser = authService.getCurrentUser();
+  const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+const autoResizeReply = () => {
+  const el = replyTextareaRef.current;
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 240) + 'px';
+};
+
   const initialConfirmState: ConfirmDialogState = {
     open: false,
     title: '',
@@ -54,6 +66,12 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
     error: undefined,
     onConfirm: undefined,
   };
+const [inlineReplyMode, setInlineReplyMode] = useState<
+  null | "reply" | "replyAll" | "forward"
+>(null);
+
+const [replyBody, setReplyBody] = useState("");
+
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(initialConfirmState);
   const [showLabelDropdown, setShowLabelDropdown] = useState(false);
   const labelDropdownRef = useRef<HTMLDivElement>(null);
@@ -137,6 +155,13 @@ const bodyToHtml = (text?: string) => {
 
   return escaped.replace(/\n/g, '<br>');
 };
+useEffect(() => {
+  setShowQuoted(false);
+}, [email?.id]);
+
+useEffect(() => {
+  bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+}, [email?.id, inlineReplyMode]);
 
   useEffect(() => {
     if (email) {
@@ -215,8 +240,8 @@ const bodyToHtml = (text?: string) => {
 
           if (error) throw error;
 
-          onRefresh();
-          onClose();
+          onRefresh?.();
+          onClose?.();
         } catch (err) {
           console.error("Delete error:", err);
           alert("Failed to delete email.");
@@ -225,10 +250,27 @@ const bodyToHtml = (text?: string) => {
     });
   };
 
+const buildReferencesHeader = (email: any) => {
+  const refs: string[] = [];
+
+  if (email.references_header) {
+    refs.push(
+      ...email.references_header.split(/\s+/).filter(Boolean)
+    );
+  }
+
+  if (email.message_id && !refs.includes(email.message_id)) {
+    refs.push(email.message_id);
+  }
+
+  return refs.join(" ");
+};
+
+
   const markAsRead = async (emailId: string) => {
     try {
       await emailService.updateEmail(emailId, { user_id: currentUser.id, is_read: true });
-      onRefresh();
+      onRefresh?.();
     } catch (error) {
       console.error('Error marking email as read:', error);
     }
@@ -239,104 +281,17 @@ const bodyToHtml = (text?: string) => {
     try {
       await emailService.updateEmail(email.id, { user_id: currentUser.id, is_starred: !starred });
       setStarred(!starred);
-      onRefresh();
+      onRefresh?.();
     } catch (error) {
       console.error('Error toggling star:', error);
     }
   };
 
-  // ---------------------- REPLY ----------------------
-  const handleReply = () => {
-    if (!email || !currentUser || !onCompose) return;
-
-    const normalized = normalizeEmailBody(email.body ?? email.text_preview ?? "");
-    const quoted = bodyToHtml(normalized).replace(/<br>$/,"");
-
-    onCompose({
-      isReply: true,
-      threadId: email.thread_id || String(email.id),
-      originalSender: email.from_email,
-      body: `
-<br><br>
-<div style="border-left:2px solid #ccc; margin-left:8px; padding-left:8px;">
-  <b>On ${formatFullDate(email.sent_at || email.created_at || "")}, ${
-        email.from_name || email.from_email
-      } wrote:</b><br>
-  ${quoted}
-</div>
-`.trim(),
-      subject: email.subject?.startsWith("Re:")
-        ? email.subject
-        : `Re: ${email.subject || "(No subject)"}`,
-      to: email.from_email,
-      cc: "", // only reply to sender
-    });
-  };
-
-  // ---------------------- REPLY ALL ----------------------
-  const handleReplyAll = () => {
-    if (!email || !currentUser || !onCompose) return;
-
-    const allRecipients = [
-      email.from_email,
-      ...(email.to_emails?.map(t => (typeof t === 'string' ? t : (t?.email || ""))) || []),
-      ...(email.cc_emails?.map(t => (typeof t === 'string' ? t : (t?.email || ""))) || []),
-    ].filter(addr => addr && addr !== currentUser.email);
-
-    const uniqueRecipients = Array.from(new Set(allRecipients));
-
-    const quoted = bodyToHtml(normalizeEmailBody(email.body ?? email.text_preview ?? "")).replace(/<br>$/,"");
-
-    onCompose({
-      isReplyAll: true,
-      threadId: email.thread_id || String(email.id),
-      originalSender: email.from_email,
-      originalCc: email.cc_emails?.map((c: any) => (typeof c === 'string' ? c : c?.email)).join(", ") || "",
-      to: uniqueRecipients.join(", "),
-      cc: email.cc_emails?.map((cc: any) => (typeof cc === 'string' ? cc : cc?.email)).join(", ") || "",
-      bcc: "",
-      subject: email.subject?.startsWith("Re:")
-        ? email.subject
-        : `Re: ${email.subject || "(No subject)"}`,
-      body: `
-<br><br>
-<div style="border-left:2px solid #ccc; margin-left:8px; padding-left:8px;">
-<b>On ${formatFullDate(email.sent_at || email.created_at || "")}, ${
-        email.from_name || email.from_email
-      } wrote:</b><br>
-${quoted}
-</div>
-    `.trim(),
-    });
-  };
-
-  // ---------------------- FORWARD ----------------------
-  const handleForward = () => {
-    if (!email || !onCompose) return;
-
-    const quoted = bodyToHtml(normalizeEmailBody(email.body ?? email.text_preview ?? "")).replace(/<br>$/,"");
-
-    onCompose({
-      isForward: true,
-      threadId: email.thread_id || String(email.id),
-      to: "",
-      cc: "",
-      bcc: "",
-      subject: email.subject?.startsWith("Fwd:")
-        ? email.subject
-        : `Fwd: ${email.subject || "(No subject)"}`,
-      body: `
-<br><br>
----------- Forwarded message ---------<br>
-<b>From:</b> ${email.from_name || email.from_email} &lt;${email.from_email}&gt;<br>
-<b>To:</b> ${email.to_emails?.map(t => (typeof t === 'string' ? t : (t?.email || ""))).join(", ") || ""}<br>
-<b>Cc:</b> ${email.cc_emails?.map((cc: any) => (typeof cc === 'string' ? cc : (cc?.email || ""))).join(", ") || ""}<br>
-<b>Date:</b> ${formatFullDate(email.sent_at || email.created_at || "")}<br>
-<b>Subject:</b> ${email.subject || "(No subject)"}<br><br>
-${quoted}
-    `.trim(),
-    });
-  };
+const openInlineReply = (mode: "reply" | "replyAll" | "forward") => {
+  if (!email) return;
+  setInlineReplyMode(mode);
+  setReplyBody(""); // forward & reply start clean
+};
 
   const handleArchive = async () => {
     if (!email || !currentUser) return;
@@ -368,8 +323,8 @@ ${quoted}
         if (moveError) throw moveError;
       }
 
-      onRefresh();
-      onClose();
+      onRefresh?.();
+      onClose?.();
     } catch (error) {
       console.error('Error archiving email:', error);
       alert('Failed to archive email. Please try again.');
@@ -412,8 +367,8 @@ ${quoted}
             if (moveError) throw moveError;
           }
 
-          onRefresh();
-          onClose();
+          onRefresh?.();
+          onClose?.();
         } catch (error) {
           console.error('Error moving to spam:', error);
           alert('Failed to move email to Spam. Please try again.');
@@ -422,6 +377,76 @@ ${quoted}
     });
   };
 
+const buildQuotedHtml = (email: any) => `
+<br><br>
+<div style="border-left:2px solid #dadce0;padding-left:8px;color:#5f6368">
+On ${formatFullDate(email.sent_at || email.created_at)},
+<b>${email.from_name || email.from_email}</b> wrote:<br>
+${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
+</div>
+`.trim();
+
+const sendInlineReply = async () => {
+  if (!replyBody.trim() || !email) return;
+
+  const me = currentUser.email;
+  let toEmails: string[] = [];
+
+  // Gmail-style recipient logic
+  if (inlineReplyMode === "replyAll") {
+    toEmails = Array.from(
+      new Set([
+        email.from_email,
+        ...(email.to_emails || []),
+        ...(email.cc_emails || [])
+      ])
+    ).filter(e => e && e !== me);
+  } else {
+    if (email.from_email !== me) {
+      toEmails = [email.from_email];
+    } else {
+      toEmails = (email.to_emails || []).filter(e => e !== me);
+    }
+  }
+
+  // 🚨 THIS FIXES YOUR CRASH
+  if (toEmails.length === 0) {
+    alert("No valid recipient to reply to");
+    return;
+  }
+
+  const references = buildReferencesHeader(email);
+
+await emailService.createEmail({
+  user_id: currentUser.id,
+
+  from_email: currentUser.email,
+  from_name: currentUser.name || currentUser.email,
+
+  to_emails: toEmails
+    .map(e => typeof e === "string" ? e : e?.email)
+    .filter(Boolean),
+
+  cc_emails: [],
+
+  subject: email.subject?.startsWith("Re:")
+    ? email.subject
+    : `Re: ${email.subject || ""}`,
+
+  body: replyBody + buildQuotedHtml(email),
+
+  in_reply_to: email.message_id || email.id,
+  references: buildReferencesHeader(email),
+  thread_id: email.thread_id ?? email.id,
+
+  is_draft: false,
+});
+
+  setInlineReplyMode(null);
+  setReplyBody("");
+  onRefresh?.();
+};
+
   const handleEditDraft = async () => {
     if (!email || !onCompose || !currentUser) return;
     const toEmails = email.to_emails?.map((to: any) => (typeof to === 'string' ? to : (to?.email || ""))).join(', ') || '';
@@ -429,7 +454,7 @@ ${quoted}
     try {
       // delete the draft so compose opens a fresh draft (your previous logic did this)
       await emailService.deleteEmail(Number(email.id), currentUser.id);
-      onRefresh();
+      onRefresh?.();
     } catch (error) {
       console.error('Error deleting draft:', error);
     }
@@ -440,7 +465,7 @@ ${quoted}
       subject: email.subject || '',
       body: normalizeEmailBody(email.body ?? email.text_preview ?? '') || ''
     });
-    onClose();
+    onClose?.();
   };
 
   const handleToggleLabel = async (label: { id: number; name: string; color: string }) => {
@@ -458,7 +483,7 @@ ${quoted}
 
     try {
       await emailService.updateEmail(email.id, { user_id: currentUser.id, labels: newLabels });
-      onRefresh();
+      onRefresh?.();
     } catch (error) {
       console.error('Error updating labels:', error);
     }
@@ -510,6 +535,8 @@ ${quoted}
     );
   }
 
+const resolvedThreadId = email.thread_id ?? String(email.id);
+
   // prepare HTML safely
 const normalizedBody = normalizeEmailBody(email.body ?? email.text_preview ?? "");
 
@@ -520,17 +547,33 @@ const cleanedBody = normalizedBody
   .join("\n");
 
   const normalizedHtml = bodyToHtml(cleanedBody);
-  const displayHtml = normalizedHtml && normalizedHtml.trim() !== '' ? normalizedHtml : '<em>(No content)</em>';
+const collapsedHtml = collapseForwarded(normalizedHtml);
+const splitQuotedHtml = (html: string) => {
+  const match = html.match(
+    /(.*?)(<blockquote[\s\S]*$|<div class="gmail_quote"[\s\S]*$|On .* wrote:[\s\S]*$)/i
+  );
+
+  if (!match) {
+    return { main: html, quoted: '' };
+  }
+
+  return {
+    main: match[1],
+    quoted: match[2],
+  };
+};
+
+const { main: mainHtml, quoted: quotedHtml } = splitQuotedHtml(collapsedHtml);
 
   return (
-    <div className="flex-1 flex flex-col bg-gradient-to-br from-slate-50 via-white to-blue-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
+    <div className="flex-1 flex flex-col min-h-0 bg-gradient-to-br from-slate-50 via-white to-blue-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
       {/* Top toolbar */}
       <div className="h-14 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b border-gray-200/50 dark:border-slate-800/50 flex items-center px-4 gap-3">
         <button
           onClick={(e) => {
             e.stopPropagation();
             e.preventDefault();
-            onClose();
+            onClose?.();
           }}
           className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full transition"
           title="Back to inbox"
@@ -636,7 +679,7 @@ const cleanedBody = normalizedBody
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto overscroll-contain">
         <div className="max-w-none mx-auto p-4 lg:p-6 lg:p-8">
           {/* Subject Line - Gmail Style */}
           <div className="mb-6">
@@ -694,11 +737,31 @@ const cleanedBody = normalizedBody
 
 {/* Email Body */}
             <div className="px-4 lg:px-6 pb-4 lg:pb-6 pt-3 lg:pt-4 border-t border-gray-100 dark:border-slate-800">
-              <div className="prose dark:prose-invert max-w-none" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                <div
-                  className="text-xs lg:text-sm text-gray-800 dark:text-slate-200 leading-relaxed"
-                  dangerouslySetInnerHTML={{ __html: displayHtml }}
-                />
+              <div className="prose dark:prose-invert max-w-none" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowwrap: 'anywhere' }}>
+<div className="text-xs lg:text-sm text-gray-800 dark:text-slate-200 leading-relaxed">
+  <div dangerouslySetInnerHTML={{ __html: mainHtml }} />
+
+  {quotedHtml && !showQuoted && (
+    <button
+      onClick={() => setShowQuoted(true)}
+      className="mt-2 text-xs text-blue-600 hover:underline"
+    >
+      ⋯ Show quoted text
+    </button>
+  )}
+
+  {quotedHtml && showQuoted && (
+    <div className="mt-3 border-l-2 border-gray-300 dark:border-slate-600 pl-3">
+      <div dangerouslySetInnerHTML={{ __html: quotedHtml }} />
+      <button
+        onClick={() => setShowQuoted(false)}
+        className="mt-2 text-xs text-blue-600 hover:underline"
+      >
+        Hide quoted text
+      </button>
+    </div>
+  )}
+</div>
               </div>
 
               {email.attachments && email.attachments.length > 0 && (
@@ -795,30 +858,70 @@ const cleanedBody = normalizedBody
 
           {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row flex-wrap gap-2">
-            {!email.is_draft ? (
-              <>
-                <button onClick={handleReply} className="px-3 lg:px-4 py-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 border border-gray-300 dark:border-slate-700 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition flex items-center gap-2 text-sm lg:text-base">
-                  <Reply className="w-4 h-4" />
-                  Reply
-                </button>
-                <button onClick={handleReplyAll} className="px-3 lg:px-4 py-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 border border-gray-300 dark:border-slate-700 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition flex items-center gap-2 text-sm lg:text-base">
-                  <ReplyAll className="w-4 h-4" />
-                  Reply All
-                </button>
-                <button onClick={handleForward} className="px-3 lg:px-4 py-2 bg-white dark:bg-slate-800 text-gray-700 dark:text-slate-200 border border-gray-300 dark:border-slate-700 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-slate-700 transition flex items-center gap-2 text-sm lg:text-base">
-                  <Forward className="w-4 h-4" />
-                  Forward
-                </button>
-              </>
-            ) : (
-              <button onClick={handleEditDraft} className="px-3 lg:px-4 py-2 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600 transition flex items-center gap-2 text-sm lg:text-base">
-                <FileEdit className="w-4 h-4" />
-                Continue Editing
-              </button>
-            )}
+{!email.is_draft && (
+  <>
+    <button
+      onClick={() => openInlineReply("reply")}
+      className="px-3 py-2 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg flex items-center gap-2 text-sm hover:bg-gray-50 dark:hover:bg-slate-700"
+    >
+      <Reply className="w-4 h-4" /> Reply
+    </button>
+
+    <button
+      onClick={() => openInlineReply("replyAll")}
+      className="px-3 py-2 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg flex items-center gap-2 text-sm hover:bg-gray-50 dark:hover:bg-slate-700"
+    >
+      <ReplyAll className="w-4 h-4" /> Reply All
+    </button>
+
+    <button
+      onClick={() => openInlineReply("forward")}
+      className="px-3 py-2 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg flex items-center gap-2 text-sm hover:bg-gray-50 dark:hover:bg-slate-700"
+    >
+      <Forward className="w-4 h-4" /> Forward
+    </button>
+  </>
+)}
+</div> 
+
+ {/* INLINE REPLY EDITOR — Gmail style */}
+      {inlineReplyMode && (
+        <div className="border-t border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-4">
+<textarea
+  ref={replyTextareaRef}
+  className="w-full resize-none rounded-lg border border-gray-300 dark:border-slate-600 p-3 text-sm dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 overflow-hidden"
+  rows={2}
+  value={replyBody}
+  onChange={(e) => {
+    setReplyBody(e.target.value);
+    autoResizeReply();
+  }}
+  placeholder="Write your reply…"
+/>
+
+          <div className="flex justify-end gap-3 mt-3">
+            <button
+onClick={() => {
+  setInlineReplyMode(null);
+  setReplyBody('');
+  if (replyTextareaRef.current) {
+    replyTextareaRef.current.style.height = 'auto';
+  }
+}}
+              className="text-sm text-gray-500 hover:text-gray-700"
+            >
+              Discard
+            </button>
+
+            <button
+              onClick={sendInlineReply}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium"
+            >
+              Send
+            </button>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Confirm Dialog */}
       {confirmDialog.open && (
@@ -857,6 +960,8 @@ const cleanedBody = normalizedBody
           </div>
         </div>
       )}
-    </div>
-  );
+</div>
+</div>
+</div>
+);
 }

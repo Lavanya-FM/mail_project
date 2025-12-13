@@ -76,8 +76,8 @@ const handleUpload = async () => {
             alert("Upload failed: " + (data.error || "Unknown error"));
         } else {
             alert("Uploaded successfully!");
-            onRefresh();
-            onClose();
+            onRefresh?.();
+            onClose?.();
             setSelectedFiles(null); // Clear selection
         }
 

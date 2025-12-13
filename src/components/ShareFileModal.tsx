@@ -38,7 +38,7 @@ export default function ShareFileModal({ isOpen, onClose, file }: ShareFileModal
 
     const handleShare = () => {
         console.log('Sharing file:', file?.name || "Untitled", 'with:', shares);
-        onClose();
+        onClose?.();
     };
 
     return (

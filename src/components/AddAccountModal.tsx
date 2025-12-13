@@ -86,7 +86,7 @@ export default function AddAccountModal({ onClose, onSuccess }: AddAccountModalP
       };
 
       onSuccess(account);
-      onClose();
+      onClose?.();
     } catch (err) {
       console.error("Password check error:", err);
       setError('Failed to verify password. Please try again.');
@@ -115,7 +115,7 @@ export default function AddAccountModal({ onClose, onSuccess }: AddAccountModalP
           avatar: data.user?.avatar || null,
           token: data.token
         });
-        onClose();
+        onClose?.();
       } else {
         setError('Invalid verification code. Please try again.');
       }
