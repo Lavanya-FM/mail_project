@@ -6,6 +6,7 @@ import { authService } from '../lib/authService';
 import { Email } from '../types/email';
 import { normalizeEmailBody } from '../utils/email';
 import { collapseForwarded } from '../lib/collapseForwarded';
+import AttachmentPreview from './AttachmentPreview';
 
 type EmailViewProps = {
   email: Email | null;
@@ -163,6 +164,23 @@ useEffect(() => {
   bottomRef.current?.scrollIntoView({ behavior: "smooth" });
 }, [email?.id, inlineReplyMode]);
 
+useEffect(() => {
+  const handler = (e: any) => {
+    const { messageId } = e.detail;
+
+    setEmails(prev =>
+      prev.map(m =>
+        m.message_id === messageId
+          ? { ...m, p2pDelivered: true }
+          : m
+      )
+    );
+  };
+
+  window.addEventListener('p2p-delivered', handler);
+  return () => window.removeEventListener('p2p-delivered', handler);
+}, []);
+
   useEffect(() => {
     if (email) {
       setStarred(Boolean(email.is_starred));
@@ -286,6 +304,15 @@ const buildReferencesHeader = (email: any) => {
       console.error('Error toggling star:', error);
     }
   };
+
+const attachments = Array.isArray(email.attachments)
+  ? email.attachments.map(a => ({
+      id: a.id,                     
+      filename: a.filename,
+      mime_type: a.mime_type,
+      size: a.size_bytes ?? 0
+    }))
+  : [];
 
 const openInlineReply = (mode: "reply" | "replyAll" | "forward") => {
   if (!email) return;
@@ -686,6 +713,24 @@ const { main: mainHtml, quoted: quotedHtml } = splitQuotedHtml(collapsedHtml);
             <h1 className="text-xl lg:text-2xl font-normal text-gray-900 dark:text-white mb-3 lg:mb-4 leading-tight">
               {email.subject || '(No subject)'}
             </h1>
+           {/* Attachment chips (Gmail style) */}
+{attachments.length > 0 && (
+  <div className="flex flex-wrap gap-2 mt-2">
+    {attachments.map((a, idx) => (
+      <a
+        key={idx}
+        href={`/email/${email.id}/attachment/${a.id}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-gray-300 dark:border-slate-700 bg-gray-100 dark:bg-slate-800 text-xs hover:bg-gray-200 dark:hover:bg-slate-700"
+      >
+        <Paperclip className="w-3 h-3" />
+        <span className="max-w-[140px] truncate">{a.filename}</span>
+      </a>
+    ))}
+  </div>
+)}
+
             {email.labels && email.labels.length > 0 && (
               <div className="flex flex-wrap gap-2 mb-4">
                 {email.labels.map((label, idx) => (
@@ -740,6 +785,10 @@ const { main: mainHtml, quoted: quotedHtml } = splitQuotedHtml(collapsedHtml);
               <div className="prose dark:prose-invert max-w-none" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowwrap: 'anywhere' }}>
 <div className="text-xs lg:text-sm text-gray-800 dark:text-slate-200 leading-relaxed">
   <div dangerouslySetInnerHTML={{ __html: mainHtml }} />
+{/* ATTACHMENTS */}
+{attachments.length > 0 && (
+  <AttachmentPreview attachments={attachments} />
+)}
 
   {quotedHtml && !showQuoted && (
     <button
@@ -763,98 +812,30 @@ const { main: mainHtml, quoted: quotedHtml } = splitQuotedHtml(collapsedHtml);
   )}
 </div>
               </div>
+</div>
 
-              {email.attachments && email.attachments.length > 0 && (
-                <div className="mt-6 pt-6 border-t border-gray-200 dark:border-slate-800">
-                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                    <Paperclip className="w-4 h-4" />
-                    Attachments ({email.attachments.length})
-                  </h4>
-                  <div className="grid grid-cols-1 gap-2 lg:gap-3">
-                    {email.attachments.map((attachment: any, index: number) => {
-                      const isImage = /^image\//i.test(attachment.mime_type || '');
-                      const sizeKB = attachment.size_bytes 
-                        ? (attachment.size_bytes / 1024).toFixed(1) 
-                        : '0';
-                      const sizeMB = attachment.size_bytes && attachment.size_bytes > 1024 * 1024
-                        ? (attachment.size_bytes / 1024 / 1024).toFixed(1) + ' MB'
-                        : sizeKB + ' KB';
-
-                      return (
-                        <div 
-                          key={index}
-                          className="bg-gray-50 dark:bg-slate-800/50 rounded-xl p-4 flex items-center gap-3 hover:bg-gray-100 dark:hover:bg-slate-800 transition cursor-pointer border border-gray-200 dark:border-slate-700"
-                          onClick={async () => {
-                            // Download attachment
-                            try {
-                              const response = await fetch(
-                                `${import.meta.env.VITE_API_BASE || ''}/api/email/${email.id}/attachment/${attachment.id}`,
-                                {
-                                  headers: {
-                                    'Authorization': `Bearer ${localStorage.getItem('token')}`,
-                                  },
-                                  credentials: 'include',
-                                }
-                              );
-                              
-                              if (!response.ok) throw new Error('Failed to fetch attachment');
-                              
-                              const data = await response.json();
-                              
-                              // Convert base64 to blob and download
-                              const byteCharacters = atob(data.content_base64);
-                              const byteNumbers = new Array(byteCharacters.length);
-                              for (let i = 0; i < byteCharacters.length; i++) {
-                                byteNumbers[i] = byteCharacters.charCodeAt(i);
-                              }
-                              const byteArray = new Uint8Array(byteNumbers);
-                              const blob = new Blob([byteArray], { type: attachment.mime_type || 'application/octet-stream' });
-                              
-                              // Create download link
-                              const url = window.URL.createObjectURL(blob);
-                              const a = document.createElement('a');
-                              a.href = url;
-                              a.download = attachment.filename || 'attachment';
-                              document.body.appendChild(a);
-                              a.click();
-                              document.body.removeChild(a);
-                              window.URL.revokeObjectURL(url);
-                            } catch (error) {
-                              console.error('Error downloading attachment:', error);
-                              alert('Failed to download attachment');
-                            }
-                          }}
-                        >
-                          {isImage && attachment.content_base64 ? (
-                            <div className="w-12 h-12 rounded-lg overflow-hidden flex-shrink-0">
-                              <img 
-                                src={`data:${attachment.mime_type};base64,${attachment.content_base64}`}
-                                alt={attachment.filename}
-                                className="w-full h-full object-cover"
-                              />
-                            </div>
-                          ) : (
-                            <div className="w-12 h-12 bg-blue-500/10 rounded-lg flex items-center justify-center flex-shrink-0">
-                              <Paperclip className="w-6 h-6 text-blue-500" />
-                            </div>
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs lg:text-sm text-gray-900 dark:text-white font-medium truncate">
-                              {attachment.filename || 'attachment'}
-                            </p>
-                            <p className="text-xs text-gray-600 dark:text-slate-400">
-                              {sizeMB}
-                              {isImage && ' • Image'}
-                            </p>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
+{/* Inline image thumbnails (Gmail style) */}
+{attachments.filter(a => a.mime_type?.startsWith("image/")).length > 0 && (
+  <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-3">
+    {attachments
+      .filter(a => a.mime_type?.startsWith("image/"))
+      .map((img, idx) => (
+        <a
+          key={idx}
+          href={`/email/${email.id}/attachment/${img.id}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="group relative"
+        >
+          <img
+            src={`/email/${email.id}/attachment/${img.id}`}
+            className="w-full h-32 object-cover rounded-lg border border-gray-200 dark:border-slate-700 group-hover:opacity-90"
+            loading="lazy"
+          />
+        </a>
+      ))}
+  </div>
+)}
 
           {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row flex-wrap gap-2">
@@ -960,7 +941,8 @@ onClick={() => {
           </div>
         </div>
       )}
-</div>
+    </div>
+  </div>
 </div>
 </div>
 );

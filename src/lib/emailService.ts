@@ -90,6 +90,44 @@ export function getFolderIdByName(name: string): number | null {
   return folder ? Number(folder.id) : null;
 }
 
+export async function filesToBase64(files: File[]): Promise<Array<{
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  content: string;
+}>> {
+  const results = [];
+  
+  for (const file of files) {
+    const buffer = await file.arrayBuffer();
+    const base64 = btoa(
+      new Uint8Array(buffer).reduce(
+        (data, byte) => data + String.fromCharCode(byte),
+        ''
+      )
+    );
+    
+    results.push({
+      filename: file.name,
+      mime_type: file.type,
+      size_bytes: file.size,
+      content: base64
+    });
+  }
+  
+  return results;
+}
+
+export async function fileToBase64(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  return btoa(
+    new Uint8Array(buffer).reduce(
+      (data, byte) => data + String.fromCharCode(byte),
+      ''
+    )
+  );
+}
+
 // -------------------------------------------------------------
 // GET FOLDERS
 // -------------------------------------------------------------
@@ -192,55 +230,45 @@ async getThread(
 
   // -------------------------------------------------------------
   // CREATE EMAIL (FULL PATCH WITH ATTACHMENTS)
-  // -------------------------------------------------------------
-  async createEmail(payload: any): ApiResult<any> {
-    const url = apiUrl("/api/email/create");
+async createEmail(payload: any): ApiResult<any> {
+  const url = apiUrl("/api/email/create");
 
-    // DO NOT drop attachments.
-    // DO NOT normalize before sending.
-    const bodyClean = {
-      user_id: payload.user_id,
-      from_email: payload.from_email,
-      from_name: payload.from_name,
+  const bodyClean = {
+    user_id: payload.user_id,
+    from_email: payload.from_email,
+    from_name: payload.from_name,
 
-      subject: payload.subject || "(no subject)",
-      body: payload.body || "",
-      is_draft: !!payload.is_draft,
-      folder_id: payload.folder_id || null,
-      thread_id: payload.thread_id || null,
+    subject: payload.subject || "(no subject)",
+    body: payload.body || "",
+    is_draft: !!payload.is_draft,
+    folder_id: payload.folder_id || null,
 
-      // Gmail-style threading
-      in_reply_to: payload.in_reply_to || null,
-      references: payload.references || null,
+    in_reply_to: payload.in_reply_to || null,
 
-      // Recipients as-is (NOT normalized)
-      to_emails: payload.to_emails || [],
-      cc_emails: payload.cc_emails || [],
-      bcc_emails: payload.bcc_emails || [],
+    to_emails: payload.to_emails || [],
+    cc_emails: payload.cc_emails || [],
+    bcc_emails: payload.bcc_emails || [],
 
-      // Attachments: PASS THROUGH
-      attachments: payload.attachments || [],
-    };
+    // ✅ CRITICAL
+    attachments: payload.attachments || [],
+    p2p_enabled: false,
+    p2p_delivered: false,
+  };
 
-    console.log("EMAIL SERVICE FINAL PAYLOAD:", bodyClean);
+  console.log("EMAIL SERVICE FINAL PAYLOAD:", bodyClean);
 
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...authHeaders(),
-      },
-      credentials: "include",
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    },
+    credentials: "include",
+    body: JSON.stringify(bodyClean),
+  });
 
-      // DO NOT use plain JSON.stringify: preserve base64
-      body: JSON.stringify(bodyClean, (_, v) => (v === undefined ? null : v)),
-    });
-
-    const result = await handleResp<any>(resp);
-    if (result.error) console.error("Email send error:", result.error);
-
-    return result;
-  },
+  return handleResp<any>(resp);
+},
 
   // -------------------------------------------------------------
   // UPDATE EMAIL (read/star/folder)

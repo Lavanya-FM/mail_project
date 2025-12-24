@@ -1,58 +1,56 @@
-const express = require("express");
-const cors = require("cors");
-const path = require("path");
+/**
+ * backend/server.js
+ * HTTP + WebSocket bootstrap ONLY
+ */
 
-console.log("SERVER: Starting server.js");
+require('dotenv').config();
 
-// -------------------------
-// CREATE APP FIRST
-// -------------------------
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const http = require('http');
+
 const app = express();
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 
-console.log("SERVER: Express app initialized");
+// -------------------------
+// AUTH (HTTP ONLY)
+// -------------------------
+const authJwt = require('./authJwt');
+app.use((req, res, next) => {
+  if (req.path === '/api/p2p') return next();
+  authJwt(req, res, next);
+});
 
 // -------------------------
-// AUTH MIDDLEWARE (AFTER app exists)
+// ROUTES
 // -------------------------
-const authJwt = require("./authJwt");
-app.use(authJwt); 
-console.log("SERVER: authJwt middleware enabled");
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/api', require('./mail'));
+app.use('/api/drive', require('./drive'));
+app.use('/api/carbon', require('./carbonService'));
 
 // -------------------------
-// ROUTE IMPORTS
+// HTTP SERVER
 // -------------------------
-const mailRoutes = require("./mail");
-console.log("SERVER: Loaded mail.js");
-
-const driveRoutes = require("./drive");
-console.log("SERVER: Loaded drive.js");
-
-const carbonRoutes = require("./carbonService");
-console.log("SERVER: Loaded carbonService.js");
+const server = http.createServer(app);
 
 // -------------------------
-// STATIC FILES
+// P2P WEBSOCKET (DELEGATED)
 // -------------------------
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-console.log("SERVER: Static /uploads enabled");
+const { setupP2PWebSocket } = require('./p2pController');
+setupP2PWebSocket(server);
+
+process.on('unhandledRejection', err => {
+  console.error('🔥 UNHANDLED PROMISE:', err);
+  process.exit(1);
+});
 
 // -------------------------
-// ROUTE MOUNTS
+// START
 // -------------------------
-app.use("/api", mailRoutes);
-console.log("SERVER: mail routes mounted at /api");
-
-app.use("/api/drive", driveRoutes);
-console.log("SERVER: drive routes mounted at /api/drive");
-
-app.use("/api/carbon", carbonRoutes);
-console.log("SERVER: carbon routes mounted at /api/carbon");
-
-// -------------------------
-// START SERVER
-// -------------------------
-app.listen(3000, "0.0.0.0", () =>
-  console.log("🚀 Backend running on 0.0.0.0:3000")
-);
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 HTTP + WebSocket server running on ${PORT}`);
+});

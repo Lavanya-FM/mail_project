@@ -209,6 +209,9 @@ export default function EmailList({
               {threadList.map(
                 ({ threadId, latestEmail, unreadCount, allEmails }) => {
                   const isSelected = selectedEmail?.id === latestEmail.id;
+                  const hasAttachments = allEmails.some(
+                     e => e.has_attachments === true || (e.attachment_count ?? 0) > 0
+                  );
 
 const normalize = (value: any): string => {
   if (value === null || value === undefined) return "";
@@ -274,24 +277,29 @@ const cleanBody = stripHtmlTags(normalize(latestEmail.body));
                             </span>
                           </div>
 
-                          <div className="flex items-center gap-2 mb-1">
-                            <h3
-                              className={`text-sm truncate flex-1 ${
-                                unreadCount > 0
-                                  ? "font-semibold text-gray-900 dark:text-white"
-                                  : "font-normal text-gray-700 dark:text-gray-300"
-                              }`}
-                            >
-                              {latestEmail.subject || "(No subject)"}
-                            </h3>
-                            
-                            {/* Unread Count Badge */}
-                            {unreadCount > 0 && (
-                              <span className="text-xs bg-blue-600 dark:bg-blue-500 text-white px-1.5 py-0.5 rounded font-medium flex-shrink-0">
-                                {unreadCount}
-                              </span>
-                            )}
-                          </div>
+<div className="flex items-center gap-2 mb-1">
+  <h3
+    className={`text-sm truncate flex-1 ${
+      unreadCount > 0
+        ? "font-semibold text-gray-900 dark:text-white"
+        : "font-normal text-gray-700 dark:text-gray-300"
+    }`}
+  >
+    {latestEmail.subject || "(No subject)"}
+  </h3>
+
+  {/* 📎 Attachment Indicator — Gmail style */}
+  {hasAttachments && (
+    <Paperclip className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+  )}
+
+  {/* Unread Count Badge */}
+  {unreadCount > 0 && (
+    <span className="text-xs bg-blue-600 dark:bg-blue-500 text-white px-1.5 py-0.5 rounded font-medium flex-shrink-0">
+      {unreadCount}
+    </span>
+  )}
+</div>
 
                           {/* Preview */}
                           <p className="text-xs text-gray-600 dark:text-gray-400 line-clamp-1">

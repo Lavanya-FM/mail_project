@@ -3,6 +3,8 @@ import { Mail, Lock, User, Calendar, Users, Eye, EyeOff, Sparkles } from 'lucide
 import { authService } from '../lib/authService';
 import ThemeToggle from './ThemeToggle';
 import { animations } from '../utils/animations';
+import { emailService } from '../lib/emailService';
+import { superadminLogin } from '../lib/superadminService';
 
 export default function Auth() {
   const [isSignUp, setIsSignUp] = useState(false);
@@ -59,7 +61,6 @@ export default function Auth() {
     setCheckingUsername(true);
     try {
       const emailToCheck = `${username}@jeemail.in`;
-      const { emailService } = await import('../lib/emailService');
       const result = await emailService.checkEmailExists(emailToCheck);
 
       if (result.data && result.data.exists) {
@@ -135,7 +136,6 @@ export default function Auth() {
       } else {
         // Check for superadmin login
         if (email === 'superadmin@jeemail.com') {
-          const { superadminLogin } = await import('../lib/superadminService');
           const result = await superadminLogin(email, password);
           if (!result.success) {
             setError(result.error || 'Login failed');

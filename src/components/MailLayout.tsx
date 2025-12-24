@@ -10,7 +10,7 @@ import { authService } from '../lib/authService';
 import EmailList from './EmailList';
 import EmailView from './EmailView';
 import ThreadView from './ThreadView';
-import ComposeEmail from './ComposeEmail';
+import ComposeEmail from './compose/ComposeEmail';
 import ThemeToggle from './ThemeToggle';
 import GamificationBadges from './GamificationBadges';
 import UserProfile from './UserProfile';
@@ -21,6 +21,7 @@ import TermsOfServiceModal from './TermsOfServiceModal';
 import { animations } from '../utils/animations';
 import { Email, Folder } from '../types/email';
 import { normalizeEmailBody } from '../utils/email'; // <-- import added
+import { p2pService } from '../lib/p2pService';
 
 const iconMap: Record<string, typeof Inbox> = {
   inbox: Inbox,
@@ -51,6 +52,16 @@ const folderColors: Record<string, string> = {
 
 export default function MailLayout() {
   const profile = authService.getCurrentUser();
+useEffect(() => {
+  if (!profile?.id || !profile?.email) return;
+
+  p2pService.connect(profile.id, profile.email);
+
+  return () => {
+    p2pService.disconnect?.();
+  };
+}, [profile?.id]);
+
   const signOut = () => {
     authService.logout();
     window.location.reload();

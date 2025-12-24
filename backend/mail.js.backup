@@ -138,78 +138,6 @@ router.post("/login", async (req, res) => {
   }
 });
 
-
-// -------------------- CHUNKED STREAMING --------------------
-router.get("/email/:emailId/attachment/:attachmentId", async (req, res) => {
-  try {
-    const { emailId, attachmentId } = req.params;
-    const userId = req.query.user_id;
-
-    const [[row]] = await db.query(
-      `
-      SELECT filename, mime_type, content_base64
-      FROM email_attachments
-      WHERE id = ?
-        AND email_id = ?
-        AND email_id IN (
-          SELECT email_id
-          FROM email_mailbox
-          WHERE user_id = ?
-        )
-      LIMIT 1
-      `,
-      [attachmentId, emailId, userId]
-    );
-
-    if (!row || !row.content_base64) {
-      return res.status(404).json({ error: "Attachment not found" });
-    }
-
-    const buffer = Buffer.from(row.content_base64, "base64");
-    const fileSize = buffer.length;
-    const range = req.headers.range;
-
-    const inlinePreviewable =
-      row.mime_type?.startsWith("image/") ||
-      row.mime_type === "application/pdf" ||
-      row.mime_type === "image/svg+xml" ||
-      row.mime_type?.startsWith("video/");
-
-    const disposition = inlinePreviewable
-      ? `inline; filename="${row.filename}"`
-      : `attachment; filename="${row.filename}"`;
-
-    res.setHeader("Content-Type", row.mime_type || "application/octet-stream");
-    res.setHeader("Accept-Ranges", "bytes");
-    res.setHeader("Content-Disposition", disposition);
-
-    // ---- CHUNKED STREAMING ----
-    if (range) {
-      const [startStr, endStr] = range.replace(/bytes=/, "").split("-");
-      const start = parseInt(startStr, 10);
-      const end = endStr ? parseInt(endStr, 10) : fileSize - 1;
-
-      if (start >= fileSize || end >= fileSize) {
-        res.status(416).setHeader("Content-Range", `bytes */${fileSize}`);
-        return res.end();
-      }
-
-      res.status(206);
-      res.setHeader("Content-Range", `bytes ${start}-${end}/${fileSize}`);
-      res.setHeader("Content-Length", end - start + 1);
-
-      return res.end(buffer.slice(start, end + 1));
-    }
-
-    // ---- FULL FILE ----
-    res.setHeader("Content-Length", fileSize);
-    res.end(buffer);
-  } catch (err) {
-    console.error("ATTACHMENT STREAM ERROR:", err);
-    res.status(500).json({ error: "Failed to stream attachment" });
-  }
-});
-
 // -------------------- FOLDER ROUTES --------------------
 
 router.get("/folders/:userId", async (req, res) => {
@@ -247,8 +175,8 @@ router.get("/email/thread/:threadId", async (req, res) => {
       [threadId, userId]
     );
 
+    // Attach recipients
     for (const email of emails) {
-      // recipients
       const [rcp] = await db.query(
         "SELECT address, type FROM email_recipients WHERE email_id = ?",
         [email.id]
@@ -257,22 +185,6 @@ router.get("/email/thread/:threadId", async (req, res) => {
       email.to_emails = rcp.filter(r => r.type === "to").map(r => r.address);
       email.cc_emails = rcp.filter(r => r.type === "cc").map(r => r.address);
       email.bcc_emails = rcp.filter(r => r.type === "bcc").map(r => r.address);
-
-      // ✅ attachment metadata
-      const [atts] = await db.query(
-        `
-        SELECT id, filename, mime_type, size_bytes
-        FROM email_attachments
-        WHERE email_id = ?
-        `,
-        [email.id]
-      );
-
-      email.attachments = atts;
-      email.has_attachments = atts.length > 0;
-      email.attachment_count = atts.length;
-
-      email.body = sanitizeBody(email.body);
     }
 
     return res.json({ data: emails });
@@ -313,24 +225,6 @@ router.get("/emails/:userId/:folder", async (req, res) => {
 
     // fetch recipients + attachments for each email
     for (const email of emails) {
-// fetch attachment metadata (NO base64)
-const [atts] = await db.query(
-  `
-  SELECT
-    id,
-    filename,
-    mime_type,
-    size_bytes
-  FROM email_attachments
-  WHERE email_id = ?
-  `,
-  [email.id]
-);
-
-email.attachments = atts;
-email.has_attachments = atts.length > 0;
-email.attachment_count = atts.length;
-
       const [rcp] = await db.query(
         "SELECT address, type FROM email_recipients WHERE email_id = ?",
         [email.id]
@@ -340,6 +234,14 @@ email.attachment_count = atts.length;
       email.cc_emails = rcp.filter((x) => x.type === "cc").map((x) => x.address);
       email.bcc_emails = rcp.filter((x) => x.type === "bcc").map((x) => x.address);
 
+      // attachments metadata (do NOT include content_base64 by default)
+      const [atts] = await db.query(
+        `SELECT id, filename, mime_type, size_bytes, content_base64, inline_cid, created_at
+         FROM email_attachments
+         WHERE email_id = ? ORDER BY id ASC`,
+        [email.id]
+      );
+      email.attachments = atts || [];
       console.log(`Email ${email.id} has ${email.attachments.length} attachments:`, 
         email.attachments.map(a => ({ filename: a.filename, mime: a.mime_type }))
       );
@@ -351,6 +253,34 @@ email.attachment_count = atts.length;
   } catch (err) {
     console.error("FETCH EMAILS ERROR:", err);
     res.status(500).json({ error: "Failed to fetch emails" });
+  }
+});
+
+// -------------------- GET SINGLE ATTACHMENT (returns base64) --------------------
+router.get("/email/:emailId/attachment/:attachmentId", async (req, res) => {
+  try {
+    const { emailId, attachmentId } = req.params;
+    const [[row]] = await db.query(
+      `SELECT id, email_id, filename, mime_type, size_bytes, content_base64, created_at
+       FROM email_attachments WHERE id = ? AND email_id = ? LIMIT 1`,
+      [attachmentId, emailId]
+    );
+
+    if (!row) return res.status(404).json({ error: "Attachment not found" });
+
+    // Return base64 payload (client can render or download)
+    res.json({
+      id: row.id,
+      email_id: row.email_id,
+      filename: row.filename,
+      mime_type: row.mime_type,
+      size_bytes: row.size_bytes,
+      created_at: row.created_at,
+      content_base64: row.content_base64
+    });
+  } catch (err) {
+    console.error("GET ATTACHMENT ERROR:", err);
+    res.status(500).json({ error: "Failed to fetch attachment" });
   }
 });
 
@@ -398,8 +328,10 @@ router.post("/email/create", async (req, res) => {
 
   // normalize attachments array - check for P2P mode
   // If P2P is enabled and delivered, don't store attachments in DB (they were sent via P2P)
-  const attachmentsList = Array.isArray(attachments) ? attachments : [];
-
+  const attachmentsList = p2p_enabled && p2p_delivered 
+    ? [] 
+    : (Array.isArray(attachments) ? attachments : []);
+    
   console.log("=== EMAIL CREATE DEBUG ===");
   console.log("P2P Enabled:", p2p_enabled);
   console.log("P2P Delivered:", p2p_delivered);
@@ -429,19 +361,15 @@ router.post("/email/create", async (req, res) => {
     );
 
     // resolve folder
-const box = is_draft ? "drafts" : "sent";
-
-const [[mailbox]] = await conn.query(
-  "SELECT id FROM mailboxes WHERE user_id = ? AND system_box = ? LIMIT 1",
-  [user_id, box]
-);
-
-if (!mailbox) {
-  throw new Error(`Mailbox '${box}' not found for user ${user_id}`);
-}
-
-const resolvedFolderId = mailbox.id;
-
+    let resolvedFolderId = folder_id;
+    if (!resolvedFolderId) {
+      const box = is_draft ? "drafts" : "sent";
+      const [[row]] = await conn.query(
+        "SELECT id FROM mailboxes WHERE user_id = ? AND system_box = ? LIMIT 1",
+        [user_id, box]
+      );
+      resolvedFolderId = row ? row.id : null;
+    }
 
     // -------------------- THREAD RESOLUTION --------------------
     resolvedThreadId = null;
@@ -479,7 +407,7 @@ const resolvedFolderId = mailbox.id;
 
     const emailId = insert.insertId;
 
-    // ✅ Only now emailId exists - update thread_id if needed
+    // ✅ Only now emailId exists
     if (!resolvedThreadId) {
       await conn.query(
         "UPDATE emails SET thread_id = ? WHERE id = ?",
@@ -496,17 +424,11 @@ const resolvedFolderId = mailbox.id;
       await conn.query("INSERT INTO email_recipients (email_id, address, type) VALUES (?, ?, 'bcc')", [emailId, addr]);
 
     // add to sender's mailbox
-await conn.query(
-  `
-  INSERT INTO email_mailbox
-    (user_id, email_id, mailbox_id, is_read)
-  VALUES (?, ?, ?, ?)
-  ON DUPLICATE KEY UPDATE
-    mailbox_id = VALUES(mailbox_id),
-    is_read = VALUES(is_read)
-  `,
-  [user_id, emailId, resolvedFolderId, 1]
-);
+    await conn.query(
+      `INSERT INTO email_mailbox (user_id, email_id, mailbox_id, is_read)
+       VALUES (?, ?, ?, 1)`,
+      [user_id, emailId, resolvedFolderId]
+    );
 
     // store attachments into DB (base64) - only if not sent via P2P
     if (attachmentsList.length) {
@@ -514,33 +436,16 @@ await conn.query(
         const filename = a.filename || "attachment.bin";
         const mime_type = a.mime_type || a.contentType || null;
         const size_bytes = Number(a.size || a.size_bytes || 0);
-const content_base64 =
-  typeof a.content_base64 === 'string'
-    ? a.content_base64
-    : typeof a.content === 'string'
-      ? a.content
-      : null;
+        const content_base64 = a.content || null;
 
-        const isP2P = p2p_enabled === true;
-
-    await conn.query(
-      `INSERT INTO email_attachments
-       (email_id, filename, mime_type, size_bytes,
-        content_base64, delivery_mode, delivered, p2p_message_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-       [
-       emailId,
-       filename,
-       mime_type,
-       size_bytes,
-       isP2P ? null : content_base64,
-       isP2P ? 'P2P' : 'EMAIL',
-       isP2P ? 0 : 1,
-       a.p2p_message_id || null
-       ]
-      );
-   }
-}
+        await conn.query(
+          `INSERT INTO email_attachments
+           (email_id, filename, mime_type, size_bytes, content_base64, created_at)
+           VALUES (?, ?, ?, ?, ?, NOW())`,
+          [emailId, filename, mime_type, size_bytes, content_base64]
+        );
+      }
+    }
 
     // compute size_kb and has_attachments
     const attachmentsTotalBytes = attachmentsList.reduce(
@@ -550,23 +455,13 @@ const content_base64 =
     const rawBytes = Buffer.byteLength(cleanBody || '', 'utf8') + attachmentsTotalBytes;
     const size_kb = Math.max(1, Math.round((rawBytes || 0) / 1024));
 
-await conn.query(
-  `
-  UPDATE emails
-  SET
-    has_attachments = ?,
-    attachment_count = ?
-  WHERE id = ?
-  `,
-  [
-    attachmentsList.length > 0 ? 1 : 0,
-    attachmentsList.length,
-    emailId
-  ]
-);
+    await conn.query(
+      "UPDATE emails SET size_kb = ? WHERE id = ?",
+      [size_kb, emailId]
+    );
 
     // send SMTP if not draft and not P2P delivered
-    if (!is_draft && !p2p_enabled) {
+    if (!is_draft && !p2p_delivered) {
       const transporter = nodemailer.createTransport({
         host: "127.0.0.1",
         port: 25,
@@ -590,9 +485,8 @@ await conn.query(
             if (!a.filename) return null;
             return {
               filename: a.filename,
-              content: a.content_base64 || a.content,
-              encoding: "base64",
-
+              content: a.content,
+              encoding: a.encoding || "base64",
               contentType: a.mime_type || "application/octet-stream"
             };
           })
@@ -607,7 +501,7 @@ await conn.query(
     }
 
     // deliver to recipients inbox (for local users) - only if not P2P delivered
-    {
+    if (!p2p_delivered) {
       const all = [...new Set([...toList, ...ccList, ...bccList])];
       if (all.length) {
         const placeholders = all.map(() => "?").join(",");

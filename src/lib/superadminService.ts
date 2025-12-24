@@ -2,6 +2,7 @@
  * Superadmin Service
  * Backend implementation required for data fetching.
  */
+import { authService } from './authService';
 
 export interface User {
     id: number;
@@ -41,7 +42,6 @@ const MOCK_P2P_TRANSFERS: P2PTransfer[] = [];
  * Superadmin login (real)
  */
 export async function superadminLogin(email: string, password: string) {
-    const { authService } = await import('./authService');
     const result = await authService.login(email, password);
 
     if (result.success && result.user) {

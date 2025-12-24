@@ -191,6 +191,19 @@ export async function emptyTrash(userId: number) {
     return res.json();
 }
 
+// Fetch trashed files
+export async function getTrashFiles() {
+  const res = await fetch('/api/drive/trash', {
+    credentials: 'include',
+  });
+
+  if (!res.ok) {
+    throw new Error('Failed to fetch trash files');
+  }
+
+  return res.json();
+}
+
 /* ===============================
    GET STARRED FILES
 ================================ */

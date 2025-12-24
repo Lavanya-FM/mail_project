@@ -3,6 +3,7 @@ import { Trash2, RotateCcw, X, AlertTriangle, Clock, File, Image, FileText, Musi
 import { useTheme } from '../contexts/ThemeContext';
 import * as driveService from "../lib/driveService";
 import { authService } from '../lib/authService';
+import { getTrashFiles } from '../lib/driveService';
 
 interface TrashItem extends DriveFile {
     deleted_at: string;
