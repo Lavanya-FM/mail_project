@@ -10,10 +10,66 @@ import {
   HardDrive,
   Zap,
   Trash2,
+  FileText,
+  Image as ImageIcon,
 } from 'lucide-react';
 
 import AttachFromDriveModal from '../AttachFromDriveModal';
 import P2PTransferProgress from '../P2PTransferProgress';
+
+const AttachmentPreview = ({ file, onRemove, formatSize }: { file: File, onRemove: () => void, formatSize: (n: number) => string }) => {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (file.type.startsWith('image/')) {
+      const url = URL.createObjectURL(file);
+      setPreviewUrl(url);
+      return () => URL.revokeObjectURL(url);
+    }
+  }, [file]);
+
+  const handlePreview = () => {
+    const url = URL.createObjectURL(file);
+    window.open(url, '_blank');
+    // Note: We're not revoking this immediately so the new tab can load it. 
+    // Browsers usually handle blob cleanup when the document is unloaded, but for a long-lived app we might want a cleanup strategy if this is frequent.
+    // For a simple preview, this is acceptable.
+  };
+
+  return (
+    <div className="group flex items-center gap-3 bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded px-3 py-2 w-full max-w-sm transition-colors hover:border-blue-400 dark:hover:border-blue-500">
+      <div
+        onClick={handlePreview}
+        className="flex-1 flex items-center gap-3 cursor-pointer min-w-0"
+        title="Click to preview file"
+      >
+        {previewUrl ? (
+          <div className="w-10 h-10 flex-shrink-0 rounded overflow-hidden bg-gray-200 border border-gray-300">
+            <img src={previewUrl} alt={file.name} className="w-full h-full object-cover" />
+          </div>
+        ) : (
+          <div className="w-10 h-10 flex-shrink-0 flex items-center justify-center bg-gray-200 dark:bg-slate-700 rounded text-gray-500">
+            <FileText className="w-5 h-5" />
+          </div>
+        )}
+        <div className="flex-1 min-w-0">
+          <p className="truncate text-sm text-gray-700 dark:text-gray-300 font-medium group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">{file.name}</p>
+          <p className="text-xs text-gray-400">{formatSize(file.size)}</p>
+        </div>
+      </div>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove();
+        }}
+        className="text-gray-400 hover:text-red-500 dark:hover:text-red-400 ml-2 p-1 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
+        title="Remove attachment"
+      >
+        <X className="w-4 h-4" />
+      </button>
+    </div>
+  );
+};
 
 /* ------------------------------------------------------------------ */
 /* PROPS                                                              */
@@ -273,13 +329,12 @@ export default function ComposeUI(props: ComposeUIProps) {
         {attachments.length > 0 && (
           <div className="px-4 pb-4 pt-2 space-y-2 flex-shrink-0">
             {attachments.map((f, i) => (
-              <div key={i} className="flex items-center gap-3 bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded px-3 py-2 w-max max-w-full">
-                <span className="truncate text-sm text-gray-700 dark:text-gray-300 max-w-[200px]">{f.name}</span>
-                <span className="text-xs text-gray-400">({formatFileSize(f.size)})</span>
-                <button onClick={() => removeAttachment(i)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 ml-1">
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
+              <AttachmentPreview
+                key={i}
+                file={f}
+                onRemove={() => removeAttachment(i)}
+                formatSize={formatFileSize}
+              />
             ))}
           </div>
         )}
