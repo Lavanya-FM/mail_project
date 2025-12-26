@@ -1,5 +1,5 @@
 // src/components/EmailView.tsx
-import { Star, Reply, ReplyAll, Forward, Trash2, Archive, MoreVertical, Paperclip, X, Flag, FileEdit, Tag, Check } from 'lucide-react';
+import { Star, Reply, ReplyAll, Forward, Trash2, Archive, MoreVertical, Paperclip, X, Flag, FileEdit, Tag, Check, FileText } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { emailService } from '../lib/emailService';
 import { authService } from '../lib/authService';
