@@ -7,6 +7,7 @@ import { Email } from '../types/email';
 import { normalizeEmailBody } from '../utils/email';
 import { collapseForwarded } from '../lib/collapseForwarded';
 import AttachmentPreview from './AttachmentPreview';
+import AttachmentViewer from "./AttachmentViewer";
 
 type EmailViewProps = {
   email: Email | null;
@@ -49,6 +50,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
   const currentUser = authService.getCurrentUser();
   const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<any>(null);
 
 const autoResizeReply = () => {
   const el = replyTextareaRef.current;
@@ -163,6 +165,14 @@ useEffect(() => {
 useEffect(() => {
   bottomRef.current?.scrollIntoView({ behavior: "smooth" });
 }, [email?.id, inlineReplyMode]);
+
+useEffect(() => {
+  const handler = (e: any) => {
+    setPreviewAttachment(e.detail);
+  };
+  window.addEventListener("open-attachment", handler);
+  return () => window.removeEventListener("open-attachment", handler);
+}, []);
 
 useEffect(() => {
   const handler = (e: any) => {
@@ -708,39 +718,52 @@ const { main: mainHtml, quoted: quotedHtml } = splitQuotedHtml(collapsedHtml);
 
       <div className="flex-1 overflow-y-auto overscroll-contain">
         <div className="max-w-none mx-auto p-4 lg:p-6 lg:p-8">
-          {/* Subject Line - Gmail Style */}
-          <div className="mb-6">
-            <h1 className="text-xl lg:text-2xl font-normal text-gray-900 dark:text-white mb-3 lg:mb-4 leading-tight">
-              {email.subject || '(No subject)'}
-            </h1>
-           {/* Attachment chips (Gmail style) */}
-{attachments.length > 0 && (
-  <div className="flex flex-wrap gap-2 mt-2">
-    {attachments.map((a, idx) => (
-      <a
-        key={idx}
-        href={`/email/${email.id}/attachment/${a.id}`}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-gray-300 dark:border-slate-700 bg-gray-100 dark:bg-slate-800 text-xs hover:bg-gray-200 dark:hover:bg-slate-700"
-      >
-        <Paperclip className="w-3 h-3" />
-        <span className="max-w-[140px] truncate">{a.filename}</span>
-      </a>
-    ))}
-  </div>
-)}
 
-            {email.labels && email.labels.length > 0 && (
-              <div className="flex flex-wrap gap-2 mb-4">
-                {email.labels.map((label, idx) => (
-                  <span key={idx} className="text-xs px-3 py-1 rounded-full font-medium" style={{ backgroundColor: label.color + '20', color: label.color }}>
-                    {label.name}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
+{/* Subject Line - Gmail Style */}
+<div className="mb-6">
+  <h1 className="text-xl lg:text-2xl font-normal text-gray-900 dark:text-white mb-3 lg:mb-4 leading-tight">
+    {email.subject || "(No subject)"}
+  </h1>
+
+  {/* Attachment chips (Gmail style) */}
+  {attachments.length > 0 && (
+    <div className="flex flex-wrap gap-2 mt-2">
+      {attachments.map((a, idx) => (
+        <button
+          key={idx}
+          onClick={() =>
+            setPreviewAttachment({
+              emailId: email.id,
+              attachment: a,
+            })
+          }
+          className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-gray-300 dark:border-slate-700 bg-gray-100 dark:bg-slate-800 text-xs hover:bg-gray-200 dark:hover:bg-slate-700"
+        >
+          <Paperclip className="w-3 h-3" />
+          <span className="max-w-[140px] truncate">{a.filename}</span>
+        </button>
+      ))}
+    </div>
+  )}
+
+  {email.labels && email.labels.length > 0 && (
+    <div className="flex flex-wrap gap-2 mb-4 mt-3">
+      {email.labels.map((label, idx) => (
+        <span
+          key={idx}
+          className="text-xs px-3 py-1 rounded-full font-medium"
+          style={{
+            backgroundColor: label.color + "20",
+            color: label.color,
+          }}
+        >
+          {label.name}
+        </span>
+      ))}
+    </div>
+  )}
+</div>
+
 
           {/* Email Card - Gmail Style */}
           <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-gray-200 dark:border-slate-800 overflow-hidden mb-6">
@@ -814,28 +837,23 @@ const { main: mainHtml, quoted: quotedHtml } = splitQuotedHtml(collapsedHtml);
               </div>
 </div>
 
-{/* Inline image thumbnails (Gmail style) */}
-{attachments.filter(a => a.mime_type?.startsWith("image/")).length > 0 && (
-  <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-3">
-    {attachments
-      .filter(a => a.mime_type?.startsWith("image/"))
-      .map((img, idx) => (
-        <a
-          key={idx}
-          href={`/email/${email.id}/attachment/${img.id}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="group relative"
-        >
-          <img
-            src={`/email/${email.id}/attachment/${img.id}`}
-            className="w-full h-32 object-cover rounded-lg border border-gray-200 dark:border-slate-700 group-hover:opacity-90"
-            loading="lazy"
-          />
-        </a>
-      ))}
-  </div>
-)}
+{attachments
+  .filter(a => a.mime_type?.startsWith("image/"))
+  .map((img, idx) => (
+    <button
+      key={idx}
+      onClick={() =>
+        setPreviewAttachment({ emailId: email.id, attachment: img })
+      }
+      className="group relative"
+    >
+      <img
+        src={`/email/${email.id}/attachment/${img.id}`}
+        className="w-full h-32 object-cover rounded-lg border border-gray-200 dark:border-slate-700 group-hover:opacity-90"
+        loading="lazy"
+      />
+    </button>
+))}
 
           {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row flex-wrap gap-2">
@@ -879,6 +897,14 @@ const { main: mainHtml, quoted: quotedHtml } = splitQuotedHtml(collapsedHtml);
   }}
   placeholder="Write your reply…"
 />
+
+{previewAttachment && (
+  <AttachmentViewer
+    emailId={previewAttachment.emailId}
+    attachment={previewAttachment.attachment}
+    onClose={() => setPreviewAttachment(null)}
+  />
+)}
 
           <div className="flex justify-end gap-3 mt-3">
             <button

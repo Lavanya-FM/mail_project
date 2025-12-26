@@ -63,15 +63,17 @@ export default function AttachmentPreview({ attachments, emailId }: Props) {
 
             {/* Actions */}
             {downloadUrl && (
-              <a
-                href={downloadUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700"
-                title={previewable ? "Preview / Download" : "Download"}
-              >
-                <Download className="w-4 h-4" />
-              </a>
+<button
+  onClick={() => emailId && a.id && window.dispatchEvent(
+    new CustomEvent("open-attachment", {
+      detail: { emailId, attachment: a }
+    })
+  )}
+  className="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700"
+>
+  <Download className="w-4 h-4" />
+</button>
+
             )}
           </div>
         );
