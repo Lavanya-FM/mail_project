@@ -6,8 +6,6 @@ import { authService } from '../lib/authService';
 import { Email } from '../types/email';
 import { normalizeEmailBody } from '../utils/email';
 import { collapseForwarded } from '../lib/collapseForwarded';
-import AttachmentPreview from './AttachmentPreview';
-import AttachmentViewer from "./AttachmentViewer";
 
 type EmailViewProps = {
   email: Email | null;
@@ -50,7 +48,6 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
   const currentUser = authService.getCurrentUser();
   const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const [previewAttachment, setPreviewAttachment] = useState<any>(null);
 
 const autoResizeReply = () => {
   const el = replyTextareaRef.current;
@@ -165,14 +162,6 @@ useEffect(() => {
 useEffect(() => {
   bottomRef.current?.scrollIntoView({ behavior: "smooth" });
 }, [email?.id, inlineReplyMode]);
-
-useEffect(() => {
-  const handler = (e: any) => {
-    setPreviewAttachment(e.detail);
-  };
-  window.addEventListener("open-attachment", handler);
-  return () => window.removeEventListener("open-attachment", handler);
-}, []);
 
 useEffect(() => {
   const handler = (e: any) => {
@@ -725,26 +714,63 @@ const { main: mainHtml, quoted: quotedHtml } = splitQuotedHtml(collapsedHtml);
     {email.subject || "(No subject)"}
   </h1>
 
-  {/* Attachment chips (Gmail style) */}
-  {attachments.length > 0 && (
-    <div className="flex flex-wrap gap-2 mt-2">
-      {attachments.map((a, idx) => (
-        <button
-          key={idx}
-          onClick={() =>
-            setPreviewAttachment({
-              emailId: email.id,
-              attachment: a,
-            })
-          }
-          className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-gray-300 dark:border-slate-700 bg-gray-100 dark:bg-slate-800 text-xs hover:bg-gray-200 dark:hover:bg-slate-700"
+{/* ATTACHMENTS (Gmail-style, no extra component) */}
+{attachments.length > 0 && (
+  <div className="mt-4 space-y-2">
+    {attachments.map((a) => {
+      const previewUrl = `/email/${email.id}/attachment/${a.id}?inline=1`;
+      const downloadUrl = `/email/${email.id}/attachment/${a.id}?download=1`;
+
+      const isImage = a.mime_type?.startsWith("image/");
+
+      return (
+        <div
+          key={a.id}
+          className="group flex items-center gap-3 bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded px-3 py-2 max-w-md"
         >
-          <Paperclip className="w-3 h-3" />
-          <span className="max-w-[140px] truncate">{a.filename}</span>
-        </button>
-      ))}
-    </div>
-  )}
+          {/* Preview / Icon */}
+          <div
+            className="w-10 h-10 flex-shrink-0 rounded overflow-hidden bg-gray-200 dark:bg-slate-700 flex items-center justify-center cursor-pointer"
+            onClick={() => window.open(previewUrl, "_blank")}
+            title="Preview"
+          >
+            {isImage ? (
+              <img
+                src={previewUrl}
+                className="w-full h-full object-cover"
+                loading="lazy"
+              />
+            ) : (
+              <FileText className="w-5 h-5 text-gray-500" />
+            )}
+          </div>
+
+          {/* Name + size */}
+          <div
+            className="flex-1 min-w-0 cursor-pointer"
+            onClick={() => window.open(previewUrl, "_blank")}
+          >
+            <p className="truncate text-sm text-gray-700 dark:text-gray-300 font-medium group-hover:text-blue-600">
+              {a.filename}
+            </p>
+            <p className="text-xs text-gray-400">
+              {(a.size / 1024).toFixed(1)} KB
+            </p>
+          </div>
+
+          {/* Download */}
+          <a
+            href={downloadUrl}
+            className="text-xs text-blue-600 hover:underline"
+            title="Download"
+          >
+            Download
+          </a>
+        </div>
+      );
+    })}
+  </div>
+)}
 
   {email.labels && email.labels.length > 0 && (
     <div className="flex flex-wrap gap-2 mb-4 mt-3">
@@ -897,14 +923,6 @@ const { main: mainHtml, quoted: quotedHtml } = splitQuotedHtml(collapsedHtml);
   }}
   placeholder="Write your reply…"
 />
-
-{previewAttachment && (
-  <AttachmentViewer
-    emailId={previewAttachment.emailId}
-    attachment={previewAttachment.attachment}
-    onClose={() => setPreviewAttachment(null)}
-  />
-)}
 
           <div className="flex justify-end gap-3 mt-3">
             <button

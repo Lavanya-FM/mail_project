@@ -11,62 +11,103 @@ import {
   Zap,
   Trash2,
   FileText,
+  ArrowDown,
   Image as ImageIcon,
 } from 'lucide-react';
 
 import AttachFromDriveModal from '../AttachFromDriveModal';
 import P2PTransferProgress from '../P2PTransferProgress';
 
-const AttachmentPreview = ({ file, onRemove, formatSize }: { file: File, onRemove: () => void, formatSize: (n: number) => string }) => {
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+const AttachmentPreview = ({
+  file,
+  onRemove,
+  formatSize
+}: {
+  file: File;
+  onRemove: () => void;
+  formatSize: (n: number) => string;
+}) => {
+
+  const isImage = file.type.startsWith('image/');
+  const [blobUrl, setBlobUrl] = useState<string>("");
 
   useEffect(() => {
-    if (file.type.startsWith('image/')) {
-      const url = URL.createObjectURL(file);
-      setPreviewUrl(url);
-      return () => URL.revokeObjectURL(url);
-    }
+    const url = URL.createObjectURL(file);
+    setBlobUrl(url);
+
+    return () => {
+      URL.revokeObjectURL(url);
+    };
   }, [file]);
 
   const handlePreview = () => {
-    const url = URL.createObjectURL(file);
-    window.open(url, '_blank');
-    // Note: We're not revoking this immediately so the new tab can load it. 
-    // Browsers usually handle blob cleanup when the document is unloaded, but for a long-lived app we might want a cleanup strategy if this is frequent.
-    // For a simple preview, this is acceptable.
+    window.open(blobUrl, "_blank", "noopener,noreferrer");
+  };
+
+  const handleDownload = () => {
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   };
 
   return (
-    <div className="group flex items-center gap-3 bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded px-3 py-2 w-full max-w-sm transition-colors hover:border-blue-400 dark:hover:border-blue-500">
-      <div
-        onClick={handlePreview}
-        className="flex-1 flex items-center gap-3 cursor-pointer min-w-0"
-        title="Click to preview file"
-      >
-        {previewUrl ? (
-          <div className="w-10 h-10 flex-shrink-0 rounded overflow-hidden bg-gray-200 border border-gray-300">
-            <img src={previewUrl} alt={file.name} className="w-full h-full object-cover" />
-          </div>
+    <div className="flex items-center justify-between gap-3 bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded px-3 py-2 w-full max-w-md">
+
+      {/* LEFT: Icon + file info */}
+      <div className="flex items-center gap-3 min-w-0">
+        {isImage ? (
+          <img
+            src={blobUrl}
+            alt={file.name}
+            className="w-10 h-10 rounded object-cover border"
+          />
         ) : (
-          <div className="w-10 h-10 flex-shrink-0 flex items-center justify-center bg-gray-200 dark:bg-slate-700 rounded text-gray-500">
-            <FileText className="w-5 h-5" />
+          <div className="w-10 h-10 flex items-center justify-center bg-gray-200 dark:bg-slate-700 rounded">
+            <FileText className="w-5 h-5 text-gray-500" />
           </div>
         )}
-        <div className="flex-1 min-w-0">
-          <p className="truncate text-sm text-gray-700 dark:text-gray-300 font-medium group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">{file.name}</p>
-          <p className="text-xs text-gray-400">{formatSize(file.size)}</p>
+
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-gray-800 dark:text-gray-200">
+            {file.name}
+          </p>
+          <p className="text-xs text-gray-400">
+            {formatSize(file.size)}
+          </p>
         </div>
       </div>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onRemove();
-        }}
-        className="text-gray-400 hover:text-red-500 dark:hover:text-red-400 ml-2 p-1 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors"
-        title="Remove attachment"
-      >
-        <X className="w-4 h-4" />
-      </button>
+
+      {/* RIGHT: Gmail-style actions */}
+      <div className="flex items-center gap-1">
+
+        <button
+          onClick={handlePreview}
+          title="Preview"
+          className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-slate-700"
+        >
+          <ImageIcon className="w-4 h-4" />
+        </button>
+
+        <button
+          onClick={handleDownload}
+          title="Download"
+          className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-slate-700"
+        >
+          <ArrowDown className="w-4 h-4" />
+        </button>
+
+        <button
+          onClick={onRemove}
+          title="Remove"
+          className="p-1.5 rounded text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30"
+        >
+          <X className="w-4 h-4" />
+        </button>
+
+      </div>
     </div>
   );
 };
