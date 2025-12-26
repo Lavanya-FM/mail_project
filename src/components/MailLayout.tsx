@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import {
   Inbox, Send, FileEdit, Trash2, Plus, Star, Archive,
   Search, LogOut, Sparkles, Circle, X, ChevronDown, User,
-  Clock, AlertTriangle, Tag, Mail, Minimize2, Maximize2, Menu
+  Clock, AlertTriangle, Tag, Mail, Menu
 } from 'lucide-react';
 import { emailService, getFolderIdByName } from '../lib/emailService';
 import { authService } from '../lib/authService';
@@ -52,15 +52,15 @@ const folderColors: Record<string, string> = {
 
 export default function MailLayout() {
   const profile = authService.getCurrentUser();
-useEffect(() => {
-  if (!profile?.id || !profile?.email) return;
+  useEffect(() => {
+    if (!profile?.id || !profile?.email) return;
 
-  p2pService.connect(profile.id, profile.email);
+    p2pService.connect(profile.id, profile.email);
 
-  return () => {
-    p2pService.disconnect?.();
-  };
-}, [profile?.id]);
+    return () => {
+      p2pService.disconnect?.();
+    };
+  }, [profile?.id]);
 
   const signOut = () => {
     authService.logout();
@@ -94,7 +94,6 @@ useEffect(() => {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [composeWindows, setComposeWindows] = useState<string[]>([]);
   const [nextComposeId, setNextComposeId] = useState(1);
-  const [windowStates, setWindowStates] = useState<Record<string, { minimized: boolean; maximized: boolean }>>({});
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   // normalize different possible shapes to array
@@ -280,24 +279,6 @@ useEffect(() => {
 
   const handleCloseComposeWindow = (composeId: string) => {
     setComposeWindows(composeWindows.filter(id => id !== composeId));
-    // Clean up window state when window is closed
-    const newWindowStates = { ...windowStates };
-    delete newWindowStates[composeId];
-    setWindowStates(newWindowStates);
-  };
-
-  const handleMinimizeWindow = (composeId: string) => {
-    setWindowStates(prev => ({
-      ...prev,
-      [composeId]: { ...prev[composeId], minimized: true, maximized: false }
-    }));
-  };
-
-  const handleMaximizeWindow = (composeId: string) => {
-    setWindowStates(prev => ({
-      ...prev,
-      [composeId]: { ...prev[composeId], minimized: false, maximized: !prev[composeId]?.maximized }
-    }));
   };
 
   const handleFolderClick = (folderType: string, folder: Folder) => {
@@ -576,7 +557,7 @@ useEffect(() => {
                 {/* Show badge only when count > 0 to avoid rendering `0` */}
                 {folderCount > 0 && (
                   <span
-                    className={`text-xs text-white px-2 py-0.5 rounded-full min-w-[20px] text-center flex-shrink-0 ${folderType === 'drafts' ? 'bg-gray-500' : 'bg-blue-600' } ${animations.pulseGlow}`}
+                    className={`text-xs text-white px-2 py-0.5 rounded-full min-w-[20px] text-center flex-shrink-0 ${folderType === 'drafts' ? 'bg-gray-500' : 'bg-blue-600'} ${animations.pulseGlow}`}
                   >
                     {folderCount}
                   </span>
@@ -802,80 +783,16 @@ useEffect(() => {
         </div>
       </div>
 
-      {/* Multiple Compose Windows */}
-      {composeWindows.map((composeId, index) => {
-        const windowState = windowStates[composeId] || { minimized: false, maximized: false };
-
-        if (windowState.minimized) {
-          return (
-            <div
-              key={composeId}
-              className="fixed bottom-4 bg-white dark:bg-slate-900 rounded-lg shadow-lg border border-gray-200 dark:border-slate-700 z-40 flex items-center px-3 py-2 cursor-pointer"
-              style={{ left: `${20 + index * 200}px` }}
-              onClick={() => handleMaximizeWindow(composeId)}
-            >
-              <Mail className="w-4 h-4 text-gray-500 dark:text-slate-400 mr-2" />
-              <span className="text-sm text-gray-700 dark:text-slate-300">New Message</span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleCloseComposeWindow(composeId);
-                }}
-                className="ml-2 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          );
-        }
-
-        return (
-          <div
-            key={composeId}
-            className={`fixed bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-slate-700 z-40 flex flex-col ${windowState.maximized ? 'inset-4 rounded-2xl' : 'w-96 h-[500px]'
-              }`}
-            style={!windowState.maximized ? {
-              right: `${20 + index * 420}px`,
-              bottom: `${20}px`
-            } : {}}
-          >
-            <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-800 rounded-t-2xl">
-              <h3 className="font-semibold text-gray-900 dark:text-white">New Message</h3>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => handleMinimizeWindow(composeId)}
-                  className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
-                  title="Minimize"
-                >
-                  <Minimize2 className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => handleMaximizeWindow(composeId)}
-                  className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
-                  title={windowState.maximized ? "Restore" : "Maximize"}
-                >
-                  <Maximize2 className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => handleCloseComposeWindow(composeId)}
-                  className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
-                  title="Close"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 overflow-hidden">
-              <ComposeEmail
-                onClose={() => handleCloseComposeWindow(composeId)}
-                onSent={() => { handleCloseComposeWindow(composeId); refreshEmails(); }}
-                onDraftSaved={refreshEmails}
-                prefilledData={undefined}
-              />
-            </div>
-          </div>
-        );
-      })}
+      {/* Compose Windows */}
+      {composeWindows.map((composeId) => (
+        <ComposeEmail
+          key={composeId}
+          onClose={() => handleCloseComposeWindow(composeId)}
+          onSent={() => { handleCloseComposeWindow(composeId); refreshEmails(); }}
+          onDraftSaved={refreshEmails}
+          prefilledData={undefined}
+        />
+      ))}
 
       {/* User Profile Modal */}
       {showUserProfile && (
