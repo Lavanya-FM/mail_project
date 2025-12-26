@@ -208,6 +208,17 @@ export default function ComposeUI(props: ComposeUIProps) {
               value={to}
               onChange={(e) => setTo(e.target.value)}
             />
+            {/* Recipient Status Badge */}
+            {to.trim() && liveRecipientStatus !== 'unknown' && (
+              <div className={`
+                flex items-center px-2 py-0.5 rounded-full text-xs font-medium mr-2
+                ${liveRecipientStatus === 'online'
+                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                  : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}
+              `}>
+                {liveRecipientStatus === 'online' ? 'Online' : 'Offline'}
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3 ml-2">
             <button onClick={() => setShowCc(!showCc)} className="text-xs text-gray-500 hover:text-gray-800 dark:hover:text-gray-300 hover:underline transition-colors">Cc</button>
@@ -233,7 +244,7 @@ export default function ComposeUI(props: ComposeUIProps) {
         <div className="flex items-center px-4 py-1 border-b border-gray-100 dark:border-slate-800 min-h-[40px] flex-shrink-0">
           <input
             className="w-full bg-transparent outline-none text-gray-900 dark:text-gray-100 text-sm py-1 placeholder-gray-500"
-            placeholder="Subject:"
+            placeholder="Sub:"
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
           />
@@ -389,13 +400,21 @@ export default function ComposeUI(props: ComposeUIProps) {
             <Trash2 className="w-5 h-5" />
           </button>
 
+          {canUseP2P && (
+            <button
+              disabled={sending}
+              onClick={onP2PSend}
+              className="px-4 py-2 rounded-md shadow-sm text-white text-md font-medium bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
+            >
+              <span>Via P2P</span>
+              {!sending && <Share2 className="w-3.5 h-3.5 ml-1" />}
+            </button>
+          )}
+
           <button
             disabled={sending || !to.trim()}
-            onClick={deliveryMode === 'P2P' ? onP2PSend : onRegularSend}
-            className={`px-6 py-2 rounded-md shadow-sm text-white text-md font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors ${deliveryMode === 'P2P'
-              ? 'bg-green-600 hover:bg-green-700'
-              : 'bg-[#1a73e8] hover:bg-[#1557b0]'
-              }`}
+            onClick={onRegularSend}
+            className="px-6 py-2 rounded-md shadow-sm text-white text-md font-medium bg-[#1a73e8] hover:bg-[#1557b0] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
           >
             <span>{sending ? 'Sending...' : 'Send'}</span>
             {!sending && <Send className="w-3.5 h-3.5 ml-1" />}
