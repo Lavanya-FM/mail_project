@@ -8,6 +8,7 @@ import toast from 'react-hot-toast';
 import ComposeUI from './ComposeUI';
 import { presenceService } from '../../lib/presenceService';
 import { filesToBase64 } from '../../lib/fileUtils';
+import { MAX_EMAIL_ATTACHMENT_BYTES } from '../../constants/attachmentLimits';
 
 const getFolderIdByName = (name: string) => {
   const folders = JSON.parse(localStorage.getItem("folders") || "[]");
@@ -49,7 +50,6 @@ export default function ComposeEmail(props: ComposeEmailProps) {
 
   // Attachments
   const [attachments, setAttachments] = useState<File[]>([]);
-  const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
   const LARGE_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
   // P2P State
@@ -89,7 +89,12 @@ export default function ComposeEmail(props: ComposeEmailProps) {
         bcc_emails: [],
         subject,
         body,
-        attachments: await filesToBase64(attachments),
+attachments: attachments.map(f => ({
+  filename: f.name,
+  mime_type: f.type,
+  size_bytes: f.size,
+  content_base64: null
+})),
         is_draft: true,
         folder_id: getFolderIdByName('draft'),
       });
@@ -275,17 +280,10 @@ export default function ComposeEmail(props: ComposeEmailProps) {
     return `${(mb / 1024).toFixed(1)} GB`;
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    const validFiles = files.filter(f => {
-      if (f.size > MAX_ATTACHMENT_BYTES) {
-        toast.error(`File "${f.name}" is too large. Max 25MB.`);
-        return false;
-      }
-      return true;
-    });
-    setAttachments(prev => [...prev, ...validFiles]);
-  };
+const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const files = Array.from(e.target.files || []);
+  setAttachments(prev => [...prev, ...files]);
+};
 
   const removeAttachment = (index: number) => {
     setAttachments(prev => prev.filter((_, i) => i !== index));
@@ -342,6 +340,12 @@ export default function ComposeEmail(props: ComposeEmailProps) {
         p2p_enabled: false,
         p2p_delivered: false,
       };
+
+if (attachments.some(f => f.size > MAX_EMAIL_ATTACHMENT_BYTES)) {
+  toast.error('Email attachments must be under 25MB. Use P2P.');
+  setSending(false);
+  return;
+}
 
       // Always send full attachments for regular email
       if (attachments.length > 0) {

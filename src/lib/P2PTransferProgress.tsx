@@ -9,6 +9,10 @@ interface P2PFile {
   progress: number;
   status: 'pending' | 'sending' | 'transferring' | 'receiving' | 'paused' | 'delivered' | 'completed' | 'failed';
   messageId?: string;
+  verified?: number;
+  failed?: number;
+  totalChunks?: number;
+  reason?: string;
 }
 
 interface P2PTransferProgressProps {
@@ -27,6 +31,73 @@ const P2PTransferProgress: React.FC<P2PTransferProgressProps> = ({
   recipientEmail
 }) => {
   if (!isOpen) return null;
+
+useEffect(() => {
+  if (mode !== 'receiver') return;
+
+  const handler = (e: any) => {
+    const { messageId, percent, status } = e.detail;
+
+    setFiles(prev =>
+      prev.map(f =>
+        f.messageId === messageId
+          ? { ...f, progress: percent, status: status ?? 'receiving' }
+          : f
+      )
+    );
+  };
+
+  window.addEventListener('p2p-receiver-progress', handler);
+  return () => window.removeEventListener('p2p-receiver-progress', handler);
+}, [mode]);
+
+useEffect(() => {
+  const handler = (e: any) => {
+    const { messageId, verified, failed, total } = e.detail;
+    setFiles(prev =>
+      prev.map(f =>
+        f.messageId === messageId
+          ? { ...f, verified, failed, totalChunks: total }
+          : f
+      )
+    );
+  };
+
+  window.addEventListener('p2p-receiver-integrity', handler);
+  return () =>
+    window.removeEventListener('p2p-receiver-integrity', handler);
+}, []);
+
+<div className="flex gap-3 text-xs mt-2">
+  <span className="text-green-600">✔ {file.verified || 0}</span>
+  <span className="text-red-600">✖ {file.failed || 0}</span>
+</div>
+
+{file.reason && (
+  <span
+    title={file.reason}
+    className="text-xs text-yellow-600 cursor-help"
+  >
+    ⓘ {file.reason.replace('_', ' ')}
+  </span>
+)}
+
+useEffect(() => {
+  const handler = (e: any) => {
+    const { messageId, reason } = e.detail;
+
+    setFiles(prev =>
+      prev.map(f =>
+        f.messageId === messageId
+          ? { ...f, status: 'paused', reason }
+          : f
+      )
+    );
+  };
+
+  window.addEventListener('p2p-receiver-paused', handler);
+  return () => window.removeEventListener('p2p-receiver-paused', handler);
+}, []);
 
   const getStatusColor = (status: string) => {
     switch (status) {

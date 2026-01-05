@@ -175,9 +175,14 @@ router.get("/email/:emailId/attachment/:attachmentId", async (req, res) => {
       row.mime_type === "image/svg+xml" ||
       row.mime_type?.startsWith("video/");
 
-    const disposition = inlinePreviewable
-      ? `inline; filename="${row.filename}"`
-      : `attachment; filename="${row.filename}"`;
+const forceDownload = req.query.download === "1";
+const forceInline = req.query.inline === "1";
+
+let disposition = `attachment; filename="${row.filename}"`;
+
+if (!forceDownload && (forceInline || inlinePreviewable)) {
+  disposition = `inline; filename="${row.filename}"`;
+}
 
     res.setHeader("Content-Type", row.mime_type || "application/octet-stream");
     res.setHeader("Accept-Ranges", "bytes");

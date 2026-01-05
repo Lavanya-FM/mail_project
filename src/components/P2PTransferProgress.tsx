@@ -57,9 +57,12 @@ export default function P2PTransferProgress({
       console.log(`[P2P] Securely downloading: ${file.name}`);
       setDownloadedFiles(prev => new Set([...prev, file.name]));
       
-      window.dispatchEvent(new CustomEvent('p2p-download-file', {
-        detail: { fileName: file.name }
-      }));
+window.dispatchEvent(new CustomEvent('p2p-download-file', {
+  detail: {
+    messageId: file.messageId,
+    fileName: file.name
+  }
+}));
     } catch (error) {
       console.error('[P2P] Download failed:', error);
     }

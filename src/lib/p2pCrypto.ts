@@ -12,6 +12,42 @@ export async function exportKeyPair(pair: CryptoKeyPair): Promise<string> {
   return JSON.stringify({ pub, priv });
 }
 
+export async function sha256(buffer: ArrayBuffer): Promise<string> {
+  const hash = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(hash))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+export async function encryptChunkAES(
+  key: CryptoKey,
+  data: ArrayBuffer
+) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    data
+  );
+
+  return {
+    iv: Array.from(iv),
+    data: encrypted
+  };
+}
+
+export async function decryptChunkAES(
+  key: CryptoKey,
+  iv: number[],
+  encrypted: ArrayBuffer
+) {
+  return crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: new Uint8Array(iv) },
+    key,
+    encrypted
+  );
+}
+
 export async function importStoredKeyPair(raw: string): Promise<CryptoKeyPair> {
   const { pub, priv } = JSON.parse(raw);
 
