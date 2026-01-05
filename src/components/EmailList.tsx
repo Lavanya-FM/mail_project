@@ -1,5 +1,5 @@
 // src/components/EmailList.tsx
-import { Star, Paperclip, Circle, Inbox, Tag, Users, Check, CheckCheck } from 'lucide-react';
+import { Star, Paperclip, Circle, Inbox, Tag, Users, Check, CheckCheck, Share2 } from 'lucide-react';
 import { Email } from '../types/email';
 import { useState, useEffect } from 'react';
 
@@ -212,6 +212,16 @@ export default function EmailList({
                   const hasAttachments = allEmails.some(
                      e => e.has_attachments === true || (e.attachment_count ?? 0) > 0
                   );
+                  
+                  // Check for P2P emails - both email-level and attachment-level
+                  const isP2PEmail = allEmails.some(e => (e as any).p2p_enabled || (e as any).p2p_delivered);
+                  const p2pAttachments = allEmails.reduce((count, e) => {
+                    if (e.attachments && Array.isArray(e.attachments)) {
+                      return count + e.attachments.filter((a: any) => a.delivery_mode === 'P2P' || a.is_p2p || a.p2p_message_id).length;
+                    }
+                    return count;
+                  }, 0);
+                  const hasP2P = isP2PEmail || p2pAttachments > 0;
 
 const normalize = (value: any): string => {
   if (value === null || value === undefined) return "";
@@ -291,6 +301,17 @@ const cleanBody = stripHtmlTags(normalize(latestEmail.body));
   {/* 📎 Attachment Indicator — Gmail style */}
   {hasAttachments && (
     <Paperclip className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+  )}
+
+  {/* P2P Secure Badge - Clear differentiation from regular mail */}
+  {hasP2P && (
+    <div className="flex items-center gap-1 px-2 py-0.5 bg-emerald-500 text-white rounded-full text-[10px] font-bold flex-shrink-0 shadow-sm">
+      <Share2 className="w-3 h-3" />
+      <span>P2P</span>
+      {p2pAttachments > 1 && (
+        <span className="ml-0.5 bg-white/20 px-1 rounded">{p2pAttachments}</span>
+      )}
+    </div>
   )}
 
   {/* Unread Count Badge */}

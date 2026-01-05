@@ -1,5 +1,5 @@
 // src/components/EmailView.tsx
-import { Star, Reply, ReplyAll, Forward, Trash2, Archive, MoreVertical, Paperclip, X, Flag, FileEdit, Tag, Check, FileText, Download, Eye, Lock, Share2, CheckCircle, AlertCircle, Shield, Smile, HardDrive, Image as ImageIcon } from 'lucide-react';
+import { Star, Reply, ReplyAll, Forward, Trash2, Archive, MoreVertical, Paperclip, X, Flag, FileEdit, Tag, Check, FileText, Download, Eye, Lock, Share2, CheckCircle, AlertCircle, Shield } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { emailService } from '../lib/emailService';
 import { authService } from '../lib/authService';
@@ -76,46 +76,12 @@ const autoResizeReply = () => {
 
   const [replyBody, setReplyBody] = useState("");
   const [p2pProgressMap, setP2pProgressMap] = useState<
-    Record<string, { 
-      percentage: number; 
-      etaSeconds?: number | null;
-      received?: number;
-      total?: number;
-      speedBps?: number;
-    }>
+    Record<string, { percentage: number; etaSeconds?: number | null }>
   >({});
 
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(initialConfirmState);
   const [showLabelDropdown, setShowLabelDropdown] = useState(false);
   const labelDropdownRef = useRef<HTMLDivElement>(null);
-
-  // Reply editor state
-  const replyFileInputRef = useRef<HTMLInputElement>(null);
-  const [replyAttachments, setReplyAttachments] = useState<File[]>([]);
-  const [showReplyEmojiPicker, setShowReplyEmojiPicker] = useState(false);
-  
-  const emojis = ['😀', '😂', '😊', '❤️', '👍', '👎', '🎉', '🔥', '✨', '💯', '🙏', '👏'];
-
-  const handleReplyAttach = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      setReplyAttachments(prev => [...prev, ...Array.from(e.target.files!)]);
-    }
-    e.target.value = '';
-  };
-
-  const insertReplyEmoji = (emoji: string) => {
-    setReplyBody(prev => prev + emoji);
-    setShowReplyEmojiPicker(false);
-    replyTextareaRef.current?.focus();
-  };
-
-  const insertReplyLink = () => {
-    const url = prompt('Enter URL:');
-    if (url) {
-      setReplyBody(prev => prev + ` ${url} `);
-      replyTextareaRef.current?.focus();
-    }
-  };
 
 // -----------------------
 // Sanitizer: remove lines that are empty or only zeros
@@ -237,31 +203,17 @@ useEffect(() => {
 
 useEffect(() => {
   const handler = (e: any) => {
-    const { messageId, percentage, etaSeconds, received, total, speedBps } = e.detail;
+    const { messageId, percentage, etaSeconds } = e.detail;
 
     setP2pProgressMap(prev => ({
       ...prev,
-      [messageId]: { percentage, etaSeconds, received, total, speedBps }
+      [messageId]: { percentage, etaSeconds }
     }));
   };
 
-  // Listen for receiver progress
   window.addEventListener('p2p-receiver-progress', handler);
-  
-  // Also listen for file ready (complete) events
-  const completeHandler = (e: any) => {
-    const { messageId } = e.detail;
-    setP2pProgressMap(prev => ({
-      ...prev,
-      [messageId]: { ...prev[messageId], percentage: 100 }
-    }));
-  };
-  window.addEventListener('p2p-file-ready', completeHandler);
-  
-  return () => {
+  return () =>
     window.removeEventListener('p2p-receiver-progress', handler);
-    window.removeEventListener('p2p-file-ready', completeHandler);
-  };
 }, []);
 
 useEffect(() => {
@@ -323,86 +275,45 @@ useEffect(() => {
     }
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (!email || !currentUser) return;
 
-    try {
-      const { data: folders } = await emailService.getFolders(currentUser.id);
+    openConfirmDialog({
+      title: "Delete this email?",
+      message: "This email will be moved to Trash.",
+      confirmLabel: "Delete",
+      cancelLabel: "Cancel",
 
-      // Find Trash folder
-      const trashFolder = folders?.find(
-        (f: any) => (f.name || '').toString().toLowerCase() === "trash" || f.system_box === "trash"
-      );
+      onConfirm: async () => {
+        try {
+          const { data: folders } = await emailService.getFolders(currentUser.id);
 
-      // Check if email is already in Trash
-      const isInTrash = trashFolder && (
-        email.folder_id === trashFolder.id || 
-        String(email.folder_id) === String(trashFolder.id)
-      );
+          // Find Trash folder
+          const trashFolder = folders?.find(
+            (f: any) => (f.name || '').toString().toLowerCase() === "trash" || f.system_box === "trash"
+          );
 
-      if (isInTrash) {
-        // Email is in Trash - ask for permanent deletion
-        openConfirmDialog({
-          title: "Permanently delete this email?",
-          message: "This email will be permanently deleted and cannot be recovered.",
-          confirmLabel: "Delete Forever",
-          cancelLabel: "Cancel",
-
-          onConfirm: async () => {
-            try {
-              const { error } = await emailService.deleteEmail(
-                Number(email.id),
-                currentUser.id
-              );
-
-              if (error) throw error;
-
-              toast.success("Email permanently deleted");
-              onClose?.(); // Close the tab
-              onRefresh?.();
-            } catch (err) {
-              console.error("Permanent delete error:", err);
-              toast.error("Failed to delete email permanently.");
-            }
+          if (!trashFolder) {
+            alert("Trash folder not found. Please create a Trash folder.");
+            return;
           }
-        });
-      } else {
-        // Email is not in Trash - move to Trash
-        if (!trashFolder) {
-          toast.error("Trash folder not found. Please create a Trash folder.");
-          return;
+
+          const { error } = await emailService.moveEmail(
+            Number(email.id),
+            currentUser.id,
+            Number(trashFolder.id)
+          );
+
+          if (error) throw error;
+
+          onRefresh?.();
+          onClose?.();
+        } catch (err) {
+          console.error("Delete error:", err);
+          alert("Failed to delete email.");
         }
-
-        openConfirmDialog({
-          title: "Delete this email?",
-          message: "This email will be moved to Trash.",
-          confirmLabel: "Move to Trash",
-          cancelLabel: "Cancel",
-
-          onConfirm: async () => {
-            try {
-              const { error } = await emailService.moveEmail(
-                Number(email.id),
-                currentUser.id,
-                Number(trashFolder.id)
-              );
-
-              if (error) throw error;
-
-              toast.success("Email moved to Trash");
-              onClose?.(); // Close the tab
-              onRefresh?.();
-            } catch (err) {
-              console.error("Delete error:", err);
-              toast.error("Failed to move email to Trash.");
-            }
-          }
-        });
       }
-    } catch (err) {
-      console.error("Delete error:", err);
-      toast.error("Failed to delete email.");
-    }
+    });
   };
 
 const buildReferencesHeader = (email: any) => {
@@ -457,40 +368,8 @@ const attachments = Array.isArray(email.attachments)
 const openInlineReply = (mode: "reply" | "replyAll" | "forward") => {
   if (!email) return;
   setInlineReplyMode(mode);
-  setReplyAttachments([]);
-  setShowReplyEmojiPicker(false);
-  
-  if (mode === 'forward') {
-    // For forward, include original message content
-    const originalContent = `
-
----------- Forwarded message ---------
-From: ${email.from_name || email.from_email} <${email.from_email}>
-Date: ${email.created_at ? new Date(email.created_at).toLocaleString() : ''}
-Subject: ${email.subject || '(No subject)'}
-To: ${email.to_emails?.join(', ') || ''}
-
-${sanitizeBody(email.body) || ''}
-`;
-    setReplyBody(originalContent);
-    setForwardTo(''); // Reset forward recipient
-  } else {
-    setReplyBody(""); // reply starts clean
-  }
+  setReplyBody(""); // forward & reply start clean
 };
-
-// State for forward recipient
-const [forwardTo, setForwardTo] = useState('');
-
-// Check if there are multiple recipients (for Reply All)
-const hasMultipleRecipients = (() => {
-  if (!email) return false;
-  const allRecipients = [
-    ...(email.to_emails || []),
-    ...(email.cc_emails || [])
-  ].filter(e => e && e !== currentUser?.email);
-  return allRecipients.length > 0;
-})();
 
   const handleArchive = async () => {
     if (!email || !currentUser) return;
@@ -586,27 +465,13 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
 `.trim();
 
 const sendInlineReply = async () => {
-  if (!email) return;
+  if (!replyBody.trim() || !email) return;
 
   const me = currentUser.email;
   let toEmails: string[] = [];
-  let emailSubject = '';
-  let emailBody = '';
 
-  // Handle different modes
-  if (inlineReplyMode === 'forward') {
-    // Forward mode - use forwardTo email
-    if (!forwardTo.trim()) {
-      toast.error('Please enter a recipient email address');
-      return;
-    }
-    toEmails = [forwardTo.trim()];
-    emailSubject = email.subject?.startsWith("Fwd:") 
-      ? email.subject 
-      : `Fwd: ${email.subject || ""}`;
-    emailBody = replyBody;
-  } else if (inlineReplyMode === "replyAll") {
-    // Reply All - include all recipients
+  // Gmail-style recipient logic
+  if (inlineReplyMode === "replyAll") {
     toEmails = Array.from(
       new Set([
         email.from_email,
@@ -614,30 +479,17 @@ const sendInlineReply = async () => {
         ...(email.cc_emails || [])
       ])
     ).filter(e => e && e !== me);
-    emailSubject = email.subject?.startsWith("Re:")
-      ? email.subject
-      : `Re: ${email.subject || ""}`;
-    emailBody = replyBody + buildQuotedHtml(email);
   } else {
-    // Regular reply
-    if (!replyBody.trim()) {
-      toast.error('Please enter a message');
-      return;
-    }
     if (email.from_email !== me) {
       toEmails = [email.from_email];
     } else {
       toEmails = (email.to_emails || []).filter(e => e !== me);
     }
-    emailSubject = email.subject?.startsWith("Re:")
-      ? email.subject
-      : `Re: ${email.subject || ""}`;
-    emailBody = replyBody + buildQuotedHtml(email);
   }
 
-  // Validate recipients
+  // 🚨 THIS FIXES YOUR CRASH
   if (toEmails.length === 0) {
-    toast.error("No valid recipient");
+    alert("No valid recipient to reply to");
     return;
   }
 
@@ -655,30 +507,21 @@ await emailService.createEmail({
 
   cc_emails: [],
 
-  subject: emailSubject,
+  subject: email.subject?.startsWith("Re:")
+    ? email.subject
+    : `Re: ${email.subject || ""}`,
 
-  body: emailBody,
+  body: replyBody + buildQuotedHtml(email),
 
-  in_reply_to: inlineReplyMode === 'forward' ? undefined : (email.message_id || email.id),
-  references: inlineReplyMode === 'forward' ? undefined : buildReferencesHeader(email),
-  thread_id: inlineReplyMode === 'forward' ? undefined : (email.thread_id ?? email.id),
+  in_reply_to: email.message_id || email.id,
+  references: buildReferencesHeader(email),
+  thread_id: email.thread_id ?? email.id,
 
   is_draft: false,
 });
 
-  // Show success message
-  if (inlineReplyMode === 'forward') {
-    toast.success(`Email forwarded to ${forwardTo}`);
-  } else {
-    toast.success('Reply sent');
-  }
-
-  // Reset all states
   setInlineReplyMode(null);
   setReplyBody("");
-  setForwardTo("");
-  setReplyAttachments([]);
-  setShowReplyEmojiPicker(false);
   onRefresh?.();
 };
 
@@ -806,7 +649,7 @@ const googleDocPreview = (url: string) =>
   )}`;
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-gradient-to-br from-slate-50 via-white to-blue-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950" style={{ minHeight: 0 }}>
+    <div className="flex-1 flex flex-col min-h-0 bg-gradient-to-br from-slate-50 via-white to-blue-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
       {/* Top toolbar */}
       <div className="h-14 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b border-gray-200/50 dark:border-slate-800/50 flex items-center px-4 gap-3">
         <button
@@ -919,8 +762,8 @@ const googleDocPreview = (url: string) =>
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto" style={{ minHeight: 0 }}>
-        <div className="max-w-none mx-auto p-4 lg:p-6">
+      <div className="flex-1 overflow-y-auto overscroll-contain">
+        <div className="max-w-none mx-auto p-4 lg:p-6 lg:p-8">
 
 {/* Subject Line - Gmail Style */}
 <div className="mb-6">
@@ -933,11 +776,7 @@ const googleDocPreview = (url: string) =>
   // Determine if this is a P2P email
   const isP2PEmail = !!(email.p2p_enabled || (email as any).p2p_delivered || 
     attachments.some((a: any) => a.delivery_mode === 'P2P' || a.is_p2p || a.p2p_message_id));
-  
-  // Check if current user is the sender (case-insensitive comparison)
-  const senderEmail = (email.from_email || '').toLowerCase().trim();
-  const myEmail = (currentUser?.email || '').toLowerCase().trim();
-  const isSender = senderEmail === myEmail;
+  const isSender = email.from_email === currentUser?.email;
 
   const formatSize = (bytes: number) => {
     if (!bytes) return '';
@@ -948,212 +787,246 @@ const googleDocPreview = (url: string) =>
   };
 
   return (
-    <div className="mt-4 pt-4 border-t border-gray-200 dark:border-slate-700">
-      {/* Header - Clean Gmail Style */}
-      <div className="flex items-center gap-2 mb-3">
-        <Paperclip className="w-4 h-4 text-gray-400" />
-        <span className="text-sm text-gray-600 dark:text-gray-400">
-          {attachments.length} attachment{attachments.length > 1 ? 's' : ''}
-        </span>
-        {isP2PEmail && (
-          <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
-            <Lock className="w-3 h-3" /> Secure
+    <div className={`mt-5 pt-4 border-t ${isP2PEmail ? 'border-emerald-200 dark:border-emerald-800' : 'border-gray-200 dark:border-slate-700'}`}>
+      {/* Header with delivery type indicator */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Paperclip className={`w-4 h-4 ${isP2PEmail ? 'text-emerald-500' : 'text-gray-400'}`} />
+          <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            {attachments.length} Attachment{attachments.length > 1 ? 's' : ''}
           </span>
+        </div>
+        
+        {/* Delivery Type Badge */}
+        {isP2PEmail ? (
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-100 dark:bg-emerald-900/30 rounded-full">
+            <Share2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+              P2P Secure Transfer
+            </span>
+            <Lock className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 dark:bg-blue-900/20 rounded-full">
+            <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
+              📧 Regular Email
+            </span>
+          </div>
         )}
       </div>
 
-      {/* Attachment Cards - Clean Gmail-like Design */}
+      {/* Attachment Cards */}
       <div className="space-y-2">
         {attachments.map((a: any) => {
+          // Detect P2P attachment from multiple indicators
           const isP2PAttachment = !!(a.delivery_mode === 'P2P' || a.is_p2p || a.p2p_message_id || isP2PEmail);
           const hasP2PId = !!a.p2p_message_id;
+          // For SENDER: never show as pending - they sent it
+          // For RECEIVER: show pending only if not delivered yet
+          const isPendingForReceiver = !isSender && isP2PAttachment && !a.delivered;
           const hasBeenDownloaded = hasP2PId ? enhancedP2PService.hasBeenDownloaded(a.p2p_message_id) : false;
           const downloadUrl = `/api/email/${email.id}/attachment/${a.id}?download=1&user_id=${currentUser.id}`;
-          
-          // Get P2P transfer progress for receiver
-          const p2pProgress = hasP2PId ? p2pProgressMap[a.p2p_message_id] : null;
-          const isTransferComplete = a.p2p_completed || (p2pProgress?.percentage === 100);
-          const isTransferInProgress = hasP2PId && p2pProgress && p2pProgress.percentage > 0 && p2pProgress.percentage < 100;
-          const transferPercentage = p2pProgress?.percentage || 0;
-          const etaSeconds = p2pProgress?.etaSeconds;
 
           return (
             <div
               key={a.id || a.p2p_message_id || a.filename}
-              className={`p-3 bg-gray-50 dark:bg-slate-800 border rounded-lg transition-colors ${
-                isTransferInProgress 
-                  ? 'border-blue-300 dark:border-blue-700' 
-                  : 'border-gray-200 dark:border-slate-700 hover:bg-gray-100 dark:hover:bg-slate-700'
+              className={`flex items-center gap-4 p-4 rounded-xl border transition-all hover:shadow-md ${
+                isP2PAttachment
+                  ? isPendingForReceiver 
+                    ? 'bg-gradient-to-r from-amber-50 via-yellow-50 to-orange-50 dark:from-amber-900/10 dark:via-yellow-900/10 dark:to-orange-900/10 border-amber-300 dark:border-amber-700'
+                    : 'bg-gradient-to-r from-emerald-50 via-green-50 to-teal-50 dark:from-emerald-900/10 dark:via-green-900/10 dark:to-teal-900/10 border-emerald-200 dark:border-emerald-800'
+                  : 'bg-white dark:bg-slate-800 border-gray-200 dark:border-slate-700'
               }`}
             >
-              <div className="flex items-center gap-3">
-                {/* File Icon */}
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                  isTransferComplete 
-                    ? 'bg-green-100 dark:bg-green-900/30' 
-                    : isTransferInProgress 
-                      ? 'bg-blue-100 dark:bg-blue-900/30'
-                      : isP2PAttachment 
-                        ? 'bg-yellow-100 dark:bg-yellow-900/30' 
-                        : 'bg-blue-100 dark:bg-blue-900/30'
-                }`}>
-                  {isTransferInProgress ? (
-                    <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <FileText className={`w-5 h-5 ${
-                      isTransferComplete 
-                        ? 'text-green-600 dark:text-green-400' 
-                        : isP2PAttachment 
-                          ? 'text-yellow-600 dark:text-yellow-400' 
-                          : 'text-blue-600 dark:text-blue-400'
-                    }`} />
+              {/* File Icon */}
+              <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
+                isP2PAttachment 
+                  ? isPendingForReceiver
+                    ? 'bg-amber-100 dark:bg-amber-800/40'
+                    : 'bg-emerald-100 dark:bg-emerald-800/40' 
+                  : 'bg-blue-50 dark:bg-blue-900/30'
+              }`}>
+                <FileText className={`w-6 h-6 ${
+                  isP2PAttachment 
+                    ? isPendingForReceiver
+                      ? 'text-amber-600 dark:text-amber-400'
+                      : 'text-emerald-600 dark:text-emerald-400' 
+                    : 'text-blue-600 dark:text-blue-400'
+                }`} />
+              </div>
+
+              {/* File Details */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                    {a.filename}
+                  </h4>
+                  {isP2PAttachment && (
+                    <span className={`flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 text-white text-[10px] font-bold rounded-full uppercase tracking-wide ${
+                      isPendingForReceiver ? 'bg-amber-500' : 'bg-emerald-500'
+                    }`}>
+                      <Share2 className="w-2.5 h-2.5" />
+                      {isPendingForReceiver ? 'Awaiting Transfer' : 'P2P'}
+                    </span>
                   )}
                 </div>
-
-                {/* File Details */}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                    {a.filename}
-                  </p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
-                    {formatSize(a.size || a.size_bytes || 0)}
-                    {isP2PAttachment && !isSender && (
-                      <span className={`ml-2 ${
-                        isTransferComplete 
-                          ? 'text-green-600 dark:text-green-400' 
-                          : isTransferInProgress 
-                            ? 'text-blue-600 dark:text-blue-400'
-                            : 'text-yellow-600 dark:text-yellow-400'
-                      }`}>
-                        • {isTransferComplete ? '✓ Received' : isTransferInProgress ? 'Receiving...' : 'Awaiting transfer'}
-                      </span>
-                    )}
-                    {isP2PAttachment && isSender && (
-                      <span className="ml-2 text-green-600 dark:text-green-400">• Secure</span>
-                    )}
-                  </p>
-                </div>
-
-                {/* Action Buttons / Status */}
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  {isSender ? (
-                    // SENDER view - just show checkmark
-                    <span className="text-green-600 dark:text-green-400">
-                      <CheckCircle className="w-5 h-5" />
-                    </span>
-                  ) : isTransferComplete ? (
-                    // RECEIVER - Transfer complete, show download buttons
+                <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+                  <span>{formatSize(a.size || a.size_bytes || 0)}</span>
+                  {isP2PAttachment && (
                     <>
-                      <a
-                        href={downloadUrl}
-                        download={a.filename}
-                        onClick={() => {
-                          if (hasP2PId) {
-                            enhancedP2PService.recordDownload(a.p2p_message_id, a.filename, currentUser?.id || 'unknown');
-                          }
-                          toast.success(`Downloading: ${a.filename}`);
-                        }}
-                        className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-200 dark:text-gray-400 dark:hover:text-white dark:hover:bg-slate-600 rounded-lg transition-colors"
-                        title="Download"
-                      >
-                        <Download className="w-5 h-5" />
-                      </a>
-                      <a
-                        href={`/api/email/${email.id}/attachment/${a.id}?user_id=${currentUser.id}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-200 dark:text-gray-400 dark:hover:text-white dark:hover:bg-slate-600 rounded-lg transition-colors"
-                        title="Preview"
-                      >
-                        <Eye className="w-5 h-5" />
-                      </a>
+                      <span>•</span>
+                      {isSender ? (
+                        // Sender always sees "Sent via P2P"
+                        <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                          <Lock className="w-3 h-3" />
+                          Sent via P2P
+                        </span>
+                      ) : isPendingForReceiver ? (
+                        // Receiver waiting for transfer
+                        <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                          ⏳ Waiting for P2P transfer
+                        </span>
+                      ) : (
+                        // Receiver has the file
+                        <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                          <Lock className="w-3 h-3" />
+                          Received securely
+                        </span>
+                      )}
+                      {hasBeenDownloaded && (
+                        <>
+                          <span>•</span>
+                          <span className="text-amber-600 dark:text-amber-400">Downloaded</span>
+                        </>
+                      )}
                     </>
-                  ) : isTransferInProgress ? (
-                    // RECEIVER - Transfer in progress, show percentage
-                    <span className="text-sm font-semibold text-blue-600 dark:text-blue-400 min-w-[50px] text-right">
-                      {transferPercentage}%
-                    </span>
-                  ) : (
-                    // RECEIVER - Awaiting transfer
-                    <span className="text-xs text-yellow-600 dark:text-yellow-400 px-2 py-1 bg-yellow-100 dark:bg-yellow-900/30 rounded-full">
-                      Waiting
-                    </span>
                   )}
                 </div>
               </div>
 
-              {/* Progress Bar for P2P transfers (receiver view) */}
-              {!isSender && isP2PAttachment && !isTransferComplete && (
-                <div className="mt-3">
-                  <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
-                    <span>
-                      {isTransferInProgress 
-                        ? (
-                          <>
-                            Receiving: <span className="font-semibold text-blue-600 dark:text-blue-400">{transferPercentage}%</span>
-                            {p2pProgress?.received !== undefined && p2pProgress?.total !== undefined && (
-                              <span className="ml-2 text-gray-400">
-                                ({p2pProgress.received}/{p2pProgress.total} chunks)
-                              </span>
-                            )}
-                          </>
-                        )
-                        : 'Waiting for sender to be online...'}
-                    </span>
-                    <span className="flex items-center gap-2">
-                      {p2pProgress?.speedBps && p2pProgress.speedBps > 0 && (
-                        <span className="text-green-600 dark:text-green-400">
-                          {(p2pProgress.speedBps / 1024).toFixed(0)} KB/s
-                        </span>
-                      )}
-                      {etaSeconds && etaSeconds > 0 && (
-                        <span>
-                          ETA: {etaSeconds < 60 
-                            ? `${etaSeconds}s` 
-                            : `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s`}
-                        </span>
-                      )}
-                    </span>
-                  </div>
-                  <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-2.5 overflow-hidden">
-                    <div 
-                      className={`h-2.5 rounded-full transition-all duration-300 ${
-                        isTransferInProgress 
-                          ? 'bg-gradient-to-r from-blue-500 to-cyan-500' 
-                          : 'bg-yellow-400 dark:bg-yellow-600 animate-pulse'
-                      }`}
-                      style={{ width: `${isTransferInProgress ? transferPercentage : 5}%` }}
-                    />
-                  </div>
-                  {/* Additional info row */}
-                  {isTransferInProgress && p2pProgress?.received !== undefined && (
-                    <div className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                      {p2pProgress.total && p2pProgress.total - p2pProgress.received > 0 
-                        ? `${p2pProgress.total - p2pProgress.received} chunks remaining`
-                        : 'Finalizing...'}
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2">
+                {isP2PAttachment ? (
+                  // P2P Actions
+                  isSender ? (
+                    // SENDER: Always show "Sent" - they initiated the P2P transfer
+                    <div className="flex items-center gap-2 px-3 py-2 bg-emerald-100 dark:bg-emerald-800/30 rounded-lg">
+                      <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                      <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400">Sent</span>
                     </div>
-                  )}
-                </div>
-              )}
-
-              {/* Completion indicator for receiver */}
-              {!isSender && isP2PAttachment && isTransferComplete && (
-                <div className="mt-2 flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
-                  <CheckCircle className="w-3 h-3" />
-                  <span>File received completely - Ready to download</span>
-                </div>
-              )}
+                  ) : isPendingForReceiver ? (
+                    // RECEIVER: Waiting for P2P transfer to complete
+                    <div className="flex items-center gap-2 px-3 py-2 bg-amber-100 dark:bg-amber-800/30 rounded-lg">
+                      <span className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                        ⏳ Transfer in progress...
+                      </span>
+                    </div>
+                  ) : hasBeenDownloaded ? (
+                    // Already downloaded
+                    <div className="flex items-center gap-2 px-3 py-2 bg-gray-100 dark:bg-slate-700 rounded-lg">
+                      <Check className="w-4 h-4 text-gray-500" />
+                      <span className="text-xs font-medium text-gray-500">Downloaded</span>
+                    </div>
+                  ) : (
+                    // Receiver - can download
+                    <>
+                      <button
+                        onClick={async () => {
+                          // Use p2pService's download method
+                          if (hasP2PId) {
+                            try {
+                              // Check if file exists in p2pService
+                              const hasFile = await p2pService.hasReceivedFile(a.p2p_message_id);
+                              if (hasFile) {
+                                // Use the service's download method
+                                await p2pService.downloadReceivedFile(a.p2p_message_id, a.filename);
+                                // Record download for single-download policy
+                                enhancedP2PService.recordDownload(a.p2p_message_id, a.filename, currentUser?.id || 'unknown');
+                                toast.success(`Downloaded: ${a.filename}`);
+                                return;
+                              }
+                            } catch (err) {
+                              console.error('P2P download error:', err);
+                            }
+                          }
+                          toast.error('File not available. P2P transfer may not be complete.');
+                        }}
+                        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
+                      >
+                        <Download className="w-4 h-4" />
+                        Download
+                      </button>
+                      <button
+                        onClick={async () => {
+                          // Preview P2P file
+                          if (hasP2PId) {
+                            try {
+                              const hasFile = await p2pService.hasReceivedFile(a.p2p_message_id);
+                              if (hasFile) {
+                                // Get blob from service
+                                const db = await (p2pService as any).openDB();
+                                const tx = db.transaction('files', 'readonly');
+                                const store = tx.objectStore('files');
+                                const record = await new Promise<any>((resolve, reject) => {
+                                  const req = store.get(a.p2p_message_id);
+                                  req.onsuccess = () => resolve(req.result);
+                                  req.onerror = () => reject(req.error);
+                                });
+                                if (record?.blob) {
+                                  const url = URL.createObjectURL(record.blob);
+                                  window.open(url, '_blank');
+                                  return;
+                                }
+                              }
+                            } catch (err) {
+                              console.error('Preview error:', err);
+                            }
+                          }
+                          toast.error('Preview not available. File may not be fully transferred.');
+                        }}
+                        className="flex items-center gap-2 px-3 py-2 border border-gray-200 dark:border-slate-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg text-sm font-medium transition-colors"
+                      >
+                        <Eye className="w-4 h-4" />
+                        Preview
+                      </button>
+                    </>
+                  )
+                ) : (
+                  // Regular email - download from server
+                  <a
+                    href={downloadUrl}
+                    download={a.filename}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download
+                  </a>
+                )}
+              </div>
             </div>
           );
         })}
       </div>
 
-      {/* P2P indicator - simple text */}
+      {/* P2P Security Notice */}
       {isP2PEmail && (
-        <p className="mt-3 text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
-          <Lock className="w-3 h-3" />
-          Sent securely via P2P encryption
-        </p>
+        <div className="mt-4 p-3 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded-lg">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 bg-emerald-100 dark:bg-emerald-800/40 rounded-full flex items-center justify-center flex-shrink-0">
+              <Shield className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <div>
+              <h5 className="text-sm font-semibold text-emerald-800 dark:text-emerald-300 mb-1">
+                Sent via P2P Secure Transfer
+              </h5>
+              <p className="text-xs text-emerald-700 dark:text-emerald-400 leading-relaxed">
+                {isSender 
+                  ? 'This file was transferred directly to the recipient using end-to-end encryption. No copies were stored on our servers.'
+                  : 'This file was transferred directly from the sender using end-to-end encryption (AES-256). Download is limited to one time for security.'}
+              </p>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1228,233 +1101,74 @@ const googleDocPreview = (url: string) =>
     </div>
   </div>
 
-  {/* Action Buttons - Gmail Style */}
-  {!email.is_draft && !inlineReplyMode && (
-    <div className="px-4 lg:px-6 pb-6">
-      <div className="flex items-center gap-3">
-        {/* Reply Button - Gmail Style */}
-        <button
-          onClick={() => openInlineReply("reply")}
-          className="group inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-2xl hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:border-blue-200 dark:hover:border-blue-700 hover:text-blue-700 dark:hover:text-blue-400 shadow-sm hover:shadow transition-all duration-200"
-        >
-          <Reply className="w-4 h-4 group-hover:text-blue-600 dark:group-hover:text-blue-400" />
-          <span>Reply</span>
-        </button>
+  {/* Action Buttons */}
+  <div className="px-4 lg:px-6 pb-4 lg:pb-6">
+    <div className="flex flex-col sm:flex-row flex-wrap gap-2">
+      {!email.is_draft && (
+        <>
+          <button
+            onClick={() => openInlineReply("reply")}
+            className="px-3 py-2 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg flex items-center gap-2 text-sm hover:bg-gray-50 dark:hover:bg-slate-700"
+          >
+            <Reply className="w-4 h-4" /> Reply
+          </button>
 
-        {/* Reply All Button - Only show when multiple recipients */}
-        {hasMultipleRecipients && (
           <button
             onClick={() => openInlineReply("replyAll")}
-            className="group inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-2xl hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:border-blue-200 dark:hover:border-blue-700 hover:text-blue-700 dark:hover:text-blue-400 shadow-sm hover:shadow transition-all duration-200"
+            className="px-3 py-2 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg flex items-center gap-2 text-sm hover:bg-gray-50 dark:hover:bg-slate-700"
           >
-            <ReplyAll className="w-4 h-4 group-hover:text-blue-600 dark:group-hover:text-blue-400" />
-            <span>Reply all</span>
-          </button>
-        )}
-
-        {/* Forward Button - Gmail Style */}
-        <button
-          onClick={() => openInlineReply("forward")}
-          className="group inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-2xl hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:border-blue-200 dark:hover:border-blue-700 hover:text-blue-700 dark:hover:text-blue-400 shadow-sm hover:shadow transition-all duration-200"
-        >
-          <Forward className="w-4 h-4 group-hover:text-blue-600 dark:group-hover:text-blue-400" />
-          <span>Forward</span>
-        </button>
-      </div>
-    </div>
-  )}
-
-  {/* INLINE REPLY EDITOR — Matches Compose Box Style */}
-  {inlineReplyMode && (
-    <div className="mx-4 mb-4 border border-gray-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 shadow-lg overflow-hidden">
-      {/* Header - To field for forward, recipient for reply */}
-      <div className="flex items-center px-4 py-2 border-b border-gray-100 dark:border-slate-800">
-        {inlineReplyMode === 'forward' ? (
-          <>
-            <Forward className="w-4 h-4 text-gray-400 mr-2" />
-            <span className="text-sm text-gray-500 mr-2">To:</span>
-            <input
-              type="email"
-              value={forwardTo}
-              onChange={(e) => setForwardTo(e.target.value)}
-              placeholder="Enter recipient email"
-              className="flex-1 bg-transparent text-sm text-gray-800 dark:text-gray-200 focus:outline-none placeholder-gray-400"
-            />
-          </>
-        ) : (
-          <>
-            <Reply className="w-4 h-4 text-gray-400 mr-2" />
-            <span className="text-sm text-gray-500 mr-2">To:</span>
-            <span className="text-sm font-medium text-gray-700 dark:text-slate-300">
-              {email?.from_name || email?.from_email}
-            </span>
-          </>
-        )}
-      </div>
-
-      {/* Text area - matches compose body */}
-      <div className="min-h-[120px] max-h-[300px] overflow-y-auto">
-        <textarea
-          ref={replyTextareaRef}
-          className="w-full h-full resize-none bg-transparent text-sm text-gray-800 dark:text-gray-200 focus:outline-none placeholder-gray-400 dark:placeholder-slate-500 p-4"
-          rows={4}
-          value={replyBody}
-          onChange={(e) => {
-            setReplyBody(e.target.value);
-            autoResizeReply();
-          }}
-          placeholder={inlineReplyMode === 'forward' ? 'Add a message above the forwarded content...' : 'Write your reply...'}
-        />
-      </div>
-
-      {/* Reply attachments preview - more visible */}
-      {replyAttachments.length > 0 && (
-        <div className="px-4 py-3 bg-gray-50 dark:bg-slate-800/50 border-t border-gray-100 dark:border-slate-800">
-          <div className="text-xs text-gray-500 mb-2 flex items-center gap-1">
-            <Paperclip className="w-3 h-3" />
-            {replyAttachments.length} attachment{replyAttachments.length > 1 ? 's' : ''}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {replyAttachments.map((file, idx) => (
-              <div key={idx} className="flex items-center gap-2 bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 px-3 py-2 rounded-lg text-sm shadow-sm">
-                <div className="w-8 h-8 bg-blue-100 dark:bg-blue-900/30 rounded flex items-center justify-center">
-                  <FileText className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                </div>
-                <div className="flex flex-col">
-                  <span className="truncate max-w-[150px] font-medium text-gray-700 dark:text-gray-300">{file.name}</span>
-                  <span className="text-xs text-gray-400">{(file.size / 1024).toFixed(1)} KB</span>
-                </div>
-                <button 
-                  onClick={() => setReplyAttachments(prev => prev.filter((_, i) => i !== idx))}
-                  className="ml-2 p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Quoted text toggle */}
-      <div className="px-4 pb-2">
-        <button className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-slate-800 text-gray-400">
-          <MoreVertical className="w-4 h-4 rotate-90" />
-        </button>
-      </div>
-
-      {/* Footer toolbar - Exactly like Compose Box */}
-      <div className="flex items-center justify-between px-4 py-3 bg-white dark:bg-slate-900 border-t border-gray-100 dark:border-slate-800 relative">
-        {/* LEFT: Tool icons */}
-        <div className="flex items-center gap-0">
-          {/* Attach files */}
-          <button 
-            onClick={() => replyFileInputRef.current?.click()}
-            className="p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-slate-800 rounded transition-colors" 
-            title="Attach files"
-          >
-            <Paperclip className="w-5 h-5" />
-          </button>
-          
-          {/* Insert link */}
-          <button 
-            onClick={insertReplyLink}
-            className="p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-slate-800 rounded transition-colors" 
-            title="Insert link"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-            </svg>
-          </button>
-          
-          {/* Emoji picker */}
-          <div className="relative">
-            <button 
-              onClick={() => setShowReplyEmojiPicker(!showReplyEmojiPicker)}
-              className={`p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-slate-800 rounded transition-colors ${showReplyEmojiPicker ? 'bg-gray-100 dark:bg-slate-800' : ''}`}
-              title="Insert emoji"
-            >
-              <Smile className="w-5 h-5" />
-            </button>
-            {showReplyEmojiPicker && (
-              <div className="absolute bottom-12 left-0 w-64 bg-white dark:bg-slate-800 shadow-xl rounded-lg border border-gray-200 dark:border-slate-700 p-2 grid grid-cols-6 gap-1 z-50">
-                {emojis.map(e => (
-                  <button
-                    key={e}
-                    onClick={() => insertReplyEmoji(e)}
-                    className="text-xl p-1 hover:bg-gray-100 dark:hover:bg-slate-700 rounded transition-colors"
-                  >
-                    {e}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          
-          {/* Drive - placeholder */}
-          <button 
-            onClick={() => toast('Drive integration coming soon')}
-            className="p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-slate-800 rounded transition-colors" 
-            title="Insert from Drive"
-          >
-            <HardDrive className="w-5 h-5" />
-          </button>
-          
-          {/* Image - uses same file picker */}
-          <button 
-            onClick={() => replyFileInputRef.current?.click()}
-            className="p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-slate-800 rounded transition-colors" 
-            title="Insert photo"
-          >
-            <ImageIcon className="w-5 h-5" />
+            <ReplyAll className="w-4 h-4" /> Reply All
           </button>
 
-          {/* Separator */}
-          <div className="h-6 w-px bg-gray-300 dark:bg-slate-700 mx-2"></div>
-
-          {/* Discard */}
           <button
-            onClick={() => {
-              setInlineReplyMode(null);
-              setReplyBody('');
-              setReplyAttachments([]);
-              setShowReplyEmojiPicker(false);
-              if (replyTextareaRef.current) {
-                replyTextareaRef.current.style.height = 'auto';
-              }
-            }}
-            className="p-2 text-gray-500 hover:text-gray-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-800 rounded transition-colors"
-            title="Discard draft"
+            onClick={() => openInlineReply("forward")}
+            className="px-3 py-2 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg flex items-center gap-2 text-sm hover:bg-gray-50 dark:hover:bg-slate-700"
           >
-            <Trash2 className="w-5 h-5" />
+            <Forward className="w-4 h-4" /> Forward
           </button>
-        </div>
+        </>
+      )}
+    </div>
+  </div>
 
-        {/* RIGHT: Send button */}
+  {/* INLINE REPLY EDITOR — Gmail style */}
+  {inlineReplyMode && (
+    <div className="border-t border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-4">
+      <textarea
+        ref={replyTextareaRef}
+        className="w-full resize-none rounded-lg border border-gray-300 dark:border-slate-600 p-3 text-sm dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 overflow-hidden"
+        rows={2}
+        value={replyBody}
+        onChange={(e) => {
+          setReplyBody(e.target.value);
+          autoResizeReply();
+        }}
+        placeholder="Write your reply…"
+      />
+
+      <div className="flex justify-end gap-3 mt-3">
+        <button
+          onClick={() => {
+            setInlineReplyMode(null);
+            setReplyBody('');
+            if (replyTextareaRef.current) {
+              replyTextareaRef.current.style.height = 'auto';
+            }
+          }}
+          className="text-sm text-gray-500 hover:text-gray-700"
+        >
+          Discard
+        </button>
+
         <button
           onClick={sendInlineReply}
-          className="px-6 py-2 rounded-md shadow-sm text-white text-sm font-medium bg-[#1a73e8] hover:bg-[#1557b0] flex items-center gap-2 transition-colors"
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium"
         >
-          <span>Send</span>
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-          </svg>
+          Send
         </button>
       </div>
-
-      {/* Hidden file input */}
-      <input
-        ref={replyFileInputRef}
-        type="file"
-        multiple
-        hidden
-        onChange={handleReplyAttach}
-      />
     </div>
   )}
-
-  {/* Extra padding at bottom for scroll space */}
-  <div className="h-16" />
 </div>
 
 {/* Confirm Dialog */}

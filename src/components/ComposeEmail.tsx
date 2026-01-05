@@ -402,32 +402,17 @@ if (attachments.some(f => f.size > MAX_EMAIL_ATTACHMENT_BYTES)) {
     try {
       console.log('[P2P SEND] Starting P2P transfer to:', recipientEmail);
 
-      // STEP 1: Convert files to base64 for server fallback storage
-      const fileToBase64 = (file: File): Promise<string> => {
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => {
-            const base64 = (reader.result as string).split(',')[1];
-            resolve(base64);
-          };
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-      };
-
-      // STEP 2: Generate P2P IDs and convert files to base64
-      const p2pAttachments = await Promise.all(attachments.map(async (file) => ({
+      // STEP 1: generate stable P2P IDs with P2P flags
+      const p2pAttachments = attachments.map(file => ({
         filename: file.name,
         mime_type: file.type,
         size_bytes: file.size,
         p2p_message_id: uuid(),
         delivery_mode: 'P2P',
         is_p2p: true,
-        // Store content on server as fallback (like torrent seeders)
-        content_base64: await fileToBase64(file),
-      })));
+      }));
 
-      // STEP 3: Create email with BOTH P2P metadata AND file content as fallback
+      // STEP 2: create email + attachment metadata ONCE
       await emailService.createEmail({
         user_id: profile.id,
         from_email: profile.email,
@@ -442,10 +427,11 @@ if (attachments.some(f => f.size > MAX_EMAIL_ATTACHMENT_BYTES)) {
         p2p_enabled: true,
         p2p_delivered: false,
 
-        // Include content_base64 as server fallback
         attachments: p2pAttachments.map(a => ({
           ...a,
-          content: a.content_base64, // Server stores this as fallback
+          content_base64: null,
+          delivery_mode: 'P2P',
+          is_p2p: true
         }))
       });
 

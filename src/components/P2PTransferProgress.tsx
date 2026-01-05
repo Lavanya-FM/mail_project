@@ -1,5 +1,7 @@
-import { useState } from 'react';
-import { X, Download, CheckCircle, AlertCircle, File, Image } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { X, Download, CheckCircle, AlertCircle, File, Image, Pause, Play, Wifi, WifiOff, XCircle } from 'lucide-react';
+import { p2pService } from '../lib/p2pService';
+import { p2pToast } from '../utils/p2pToasts';
 
 interface P2PTransferProgressProps {
   isOpen: boolean;
@@ -8,11 +10,16 @@ interface P2PTransferProgressProps {
     name: string;
     size: number;
     progress: number;
-    status: 'pending' | 'sending' | 'delivered' | 'failed';
+    status: 'pending' | 'sending' | 'delivered' | 'failed' | 'paused';
+    messageId?: string;
+    etaSeconds?: number | null;
+    speedBps?: number;
+    isPaused?: boolean;
   }>;
   mode: 'sender' | 'receiver';
   senderEmail?: string;
   recipientEmail?: string;
+  recipients?: string[]; // For multi-recipient support
 }
 
 export default function P2PTransferProgress({
@@ -21,9 +28,76 @@ export default function P2PTransferProgress({
   files,
   mode,
   senderEmail,
-  recipientEmail
+  recipientEmail,
+  recipients = []
 }: P2PTransferProgressProps) {
   const [downloadedFiles, setDownloadedFiles] = useState<Set<string>>(new Set());
+  const [fileStates, setFileStates] = useState<Map<string, {
+    progress: number;
+    status: 'pending' | 'sending' | 'delivered' | 'failed' | 'paused';
+    etaSeconds?: number | null;
+    speedBps?: number;
+    isPaused?: boolean;
+  }>>(new Map());
+
+  // Update file states from props
+  useEffect(() => {
+    const newStates = new Map();
+    files.forEach(file => {
+      if (file.messageId) {
+        newStates.set(file.messageId, {
+          progress: file.progress,
+          status: file.status,
+          etaSeconds: file.etaSeconds,
+          speedBps: file.speedBps,
+          isPaused: file.isPaused || false
+        });
+      }
+    });
+    setFileStates(newStates);
+  }, [files]);
+
+  // Listen for progress updates
+  useEffect(() => {
+    const progressHandler = (e: CustomEvent) => {
+      const { messageId, progress, etaSeconds, speedBps } = e.detail;
+      setFileStates(prev => {
+        const updated = new Map(prev);
+        const current = updated.get(messageId) || { progress: 0, status: 'pending' as const };
+        updated.set(messageId, {
+          ...current,
+          progress,
+          etaSeconds,
+          speedBps,
+          status: progress >= 100 ? 'delivered' : 'sending'
+        });
+        return updated;
+      });
+    };
+
+    const receiverProgressHandler = (e: CustomEvent) => {
+      const { messageId, percentage, etaSeconds } = e.detail;
+      setFileStates(prev => {
+        const updated = new Map(prev);
+        const current = updated.get(messageId) || { progress: 0, status: 'pending' as const };
+        updated.set(messageId, {
+          ...current,
+          progress: percentage,
+          etaSeconds,
+          status: percentage >= 100 ? 'delivered' : 'sending'
+        });
+        return updated;
+      });
+    };
+
+    window.addEventListener('p2p-progress', progressHandler as EventListener);
+    window.addEventListener('p2p-receiver-progress', receiverProgressHandler as EventListener);
+
+    return () => {
+      window.removeEventListener('p2p-progress', progressHandler as EventListener);
+      window.removeEventListener('p2p-receiver-progress', receiverProgressHandler as EventListener);
+    };
+  }, []);
 
   if (!isOpen) return null;
 
@@ -33,6 +107,96 @@ export default function P2PTransferProgress({
     if (kb < 1024) return `${kb.toFixed(1)} KB`;
     const mb = kb / 1024;
     return `${mb.toFixed(1)} MB`;
+  };
+
+  const formatSpeed = (bytesPerSecond: number | undefined): string => {
+    if (!bytesPerSecond || bytesPerSecond === 0) return '0 KB/s';
+    const kb = bytesPerSecond / 1024;
+    if (kb < 1024) return `${kb.toFixed(1)} KB/s`;
+    const mb = kb / 1024;
+    return `${mb.toFixed(2)} MB/s`;
+  };
+
+  const formatETA = (etaSeconds: number | null | undefined): string => {
+    if (etaSeconds === null || etaSeconds === undefined || etaSeconds <= 0) return 'Calculating...';
+    if (etaSeconds < 60) return `${Math.ceil(etaSeconds)}s`;
+    const minutes = Math.floor(etaSeconds / 60);
+    const hours = Math.floor(minutes / 60);
+    if (hours > 0) return `${hours}h ${minutes % 60}m`;
+    return `${minutes}m`;
+  };
+
+  const handlePause = (messageId: string) => {
+    if (mode === 'sender') {
+      p2pService.pauseTransfer(messageId);
+    } else {
+      // Receiver pause logic
+      const rt = (p2pService as any).receiverTransfers.get(messageId);
+      if (rt) {
+        rt.status = 'paused';
+        (p2pService as any).markReceiverPaused(messageId, 'USER_PAUSED');
+      }
+    }
+    
+    setFileStates(prev => {
+      const updated = new Map(prev);
+      const current = updated.get(messageId);
+      if (current) {
+        updated.set(messageId, { ...current, isPaused: true, status: 'paused' });
+      }
+      return updated;
+    });
+
+    const fileName = files.find(f => f.messageId === messageId)?.name || 'file';
+    p2pToast.paused(fileName);
+  };
+
+  const handleResume = (messageId: string) => {
+    if (mode === 'sender') {
+      p2pService.resumeTransfer(messageId);
+    } else {
+      // Receiver resume logic
+      p2pService.resumeReceive(messageId);
+    }
+    
+    setFileStates(prev => {
+      const updated = new Map(prev);
+      const current = updated.get(messageId);
+      if (current) {
+        updated.set(messageId, { ...current, isPaused: false, status: 'sending' });
+      }
+      return updated;
+    });
+
+    const fileName = files.find(f => f.messageId === messageId)?.name || 'file';
+    p2pToast.resumed(fileName);
+  };
+
+  const handleCancel = (messageId: string) => {
+    // Cancel transfer logic
+    if (mode === 'sender') {
+      const transfer = (p2pService as any).activeTransfers.get(messageId);
+      if (transfer) {
+        (p2pService as any).activeTransfers.delete(messageId);
+      }
+    } else {
+      const rt = (p2pService as any).receiverTransfers.get(messageId);
+      if (rt) {
+        rt.status = 'failed';
+      }
+    }
+
+    setFileStates(prev => {
+      const updated = new Map(prev);
+      const current = updated.get(messageId);
+      if (current) {
+        updated.set(messageId, { ...current, status: 'failed' });
+      }
+      return updated;
+    });
+
+    const fileName = files.find(f => f.messageId === messageId)?.name || 'file';
+    p2pToast.cancelled(fileName);
   };
 
   const getFileIcon = (filename: string) => {
@@ -88,7 +252,9 @@ window.dispatchEvent(new CustomEvent('p2p-download-file', {
             </h3>
             <p className="text-sm text-gray-600 dark:text-slate-400 mt-1">
               {mode === 'sender' 
-                ? `To: ${recipientEmail}`
+                ? recipients.length > 0 
+                  ? `To: ${recipients.join(', ')}`
+                  : `To: ${recipientEmail}`
                 : `From: ${senderEmail}`}
             </p>
           </div>
@@ -211,40 +377,94 @@ window.dispatchEvent(new CustomEvent('p2p-download-file', {
                       </div>
                     </div>
 
-                    {/* Progress Bar */}
-                    {(file.status === 'sending' || file.status === 'pending') && (
-                      <div className="relative w-full h-2 bg-gray-200 dark:bg-slate-700 rounded-full overflow-hidden">
-                        <div
-                          className="absolute inset-y-0 left-0 bg-blue-500 transition-all duration-300"
-                          style={{ width: `${file.progress}%` }}
-                        />
+                    {/* Progress Bar with ETA and Speed */}
+                    {(file.status === 'sending' || file.status === 'pending' || file.status === 'paused') && (
+                      <div className="space-y-2">
+                        <div className="relative w-full h-2.5 bg-gray-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                          <div
+                            className={`absolute inset-y-0 left-0 transition-all duration-300 ${
+                              file.status === 'paused' ? 'bg-yellow-500' : 'bg-gradient-to-r from-blue-500 to-purple-500'
+                            }`}
+                            style={{ width: `${file.progress}%` }}
+                          />
+                        </div>
+                        
+                        {/* ETA and Speed Info */}
+                        <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
+                          <div className="flex items-center gap-3">
+                            {file.etaSeconds !== null && file.etaSeconds !== undefined && (
+                              <span>ETA: {formatETA(file.etaSeconds)}</span>
+                            )}
+                            {file.speedBps !== undefined && file.speedBps > 0 && (
+                              <div className="flex items-center gap-1">
+                                <Wifi className="w-3 h-3" />
+                                <span>{formatSpeed(file.speedBps)}</span>
+                              </div>
+                            )}
+                          </div>
+                          <span className="font-medium">{file.progress}%</span>
+                        </div>
                       </div>
                     )}
 
-                    {/* Download Button (Receiver Only) */}
-                    {mode === 'receiver' && file.status === 'delivered' && (
-                      <button
-                        onClick={() => handleDownloadFile(file)}
-                        disabled={isDownloaded}
-                        className={`mt-2 flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                          isDownloaded
-                            ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 cursor-not-allowed'
-                            : 'bg-blue-500 text-white hover:bg-blue-600'
-                        }`}
-                      >
-                        {isDownloaded ? (
-                          <>
-                            <CheckCircle className="w-4 h-4" />
-                            Downloaded
-                          </>
-                        ) : (
-                          <>
-                            <Download className="w-4 h-4" />
-                            Download Securely
-                          </>
-                        )}
-                      </button>
-                    )}
+                    {/* Control Buttons */}
+                    <div className="flex items-center gap-2 mt-2">
+                      {/* Pause/Resume Button */}
+                      {(file.status === 'sending' || file.status === 'paused') && (
+                        <button
+                          onClick={() => file.isPaused ? handleResume(file.messageId || '') : handlePause(file.messageId || '')}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-slate-600"
+                        >
+                          {file.isPaused ? (
+                            <>
+                              <Play className="w-3.5 h-3.5" />
+                              Resume
+                            </>
+                          ) : (
+                            <>
+                              <Pause className="w-3.5 h-3.5" />
+                              Pause
+                            </>
+                          )}
+                        </button>
+                      )}
+
+                      {/* Cancel Button */}
+                      {(file.status === 'sending' || file.status === 'pending' || file.status === 'paused') && (
+                        <button
+                          onClick={() => handleCancel(file.messageId || '')}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50"
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                          Cancel
+                        </button>
+                      )}
+
+                      {/* Download Button (Receiver Only) */}
+                      {mode === 'receiver' && file.status === 'delivered' && (
+                        <button
+                          onClick={() => handleDownloadFile(file)}
+                          disabled={isDownloaded}
+                          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                            isDownloaded
+                              ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 cursor-not-allowed'
+                              : 'bg-blue-500 text-white hover:bg-blue-600'
+                          }`}
+                        >
+                          {isDownloaded ? (
+                            <>
+                              <CheckCircle className="w-4 h-4" />
+                              Downloaded
+                            </>
+                          ) : (
+                            <>
+                              <Download className="w-4 h-4" />
+                              Download Securely
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>

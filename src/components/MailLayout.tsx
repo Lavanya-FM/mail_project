@@ -740,9 +740,9 @@ export default function MailLayout() {
               onViewTerms={() => setShowTermsOfService(true)}
             />
           </div>
-          <div className="flex-1 flex flex-col min-w-0">
+          <div className="flex-1 flex flex-col min-w-0 min-h-0">
             {activeTabId ? (
-              <div className="flex-1 bg-white dark:bg-slate-900">
+              <div className="flex-1 flex flex-col min-h-0 bg-white dark:bg-slate-900">
                 {(() => {
                   const activeEmail = openedMailTabs.find(tab => String(tab.id) === activeTabId);
                   if (!activeEmail) return null;

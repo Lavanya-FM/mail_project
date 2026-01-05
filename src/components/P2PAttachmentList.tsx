@@ -1,8 +1,10 @@
 // P2PAttachmentList.tsx - Display and download P2P attachments
 import { useState, useEffect } from 'react';
-import { Download, FileIcon, CheckCircle, XCircle, Loader, AlertCircle } from 'lucide-react';
+import { Download, FileIcon, CheckCircle, XCircle, Loader, AlertCircle, Eye } from 'lucide-react';
 import { p2pService } from '../lib/p2pService';
+import { enhancedP2PService } from '../lib/enhancedP2PService';
 import toast from 'react-hot-toast';
+import InlinePreviewModal from './compose/InlinePreviewModal';
 
 interface P2PAttachment {
   filename: string;
@@ -30,6 +32,8 @@ export default function P2PAttachmentList({
   
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
   const [downloadStatus, setDownloadStatus] = useState<Record<string, 'idle' | 'downloading' | 'complete' | 'failed'>>({});
+  const [previewFile, setPreviewFile] = useState<{ blob: Blob; name: string; mimeType: string } | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
   
   // Track P2P delivery status for each file
   useEffect(() => {
@@ -69,6 +73,14 @@ export default function P2PAttachmentList({
   };
 
   const handleDownload = async (attachment: P2PAttachment) => {
+    // Check if already downloaded (single-download policy)
+    if (attachment.is_p2p && attachment.p2p_message_id) {
+      if (enhancedP2PService.hasBeenDownloaded(attachment.p2p_message_id)) {
+        toast.error('This file can only be downloaded once for security reasons.');
+        return;
+      }
+    }
+
     // If already has content (regular attachment), download immediately
     if (attachment.content_base64) {
       downloadFile(attachment.filename, attachment.content_base64, attachment.mime_type);
@@ -82,32 +94,72 @@ export default function P2PAttachmentList({
       setDownloadStatus(prev => ({ ...prev, [attachment.p2p_message_id]: 'downloading' }));
       setDownloadProgress(prev => ({ ...prev, [attachment.p2p_message_id]: 0 }));
 
-      // Request file via P2P
-      const fileBlob = await p2pService.requestFile(
-        senderEmail,
-        attachment.p2p_message_id,
-        (progress) => {
-          setDownloadProgress(prev => ({ ...prev, [attachment.p2p_message_id]: progress }));
-        }
-      );
-
-      // Convert blob to download
-      const url = URL.createObjectURL(fileBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = attachment.filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      setDownloadStatus(prev => ({ ...prev, [attachment.p2p_message_id]: 'complete' }));
-      toast.success(`Downloaded ${attachment.filename}`);
+      // Check if file is already received
+      const hasFile = await p2pService.hasReceivedFile(attachment.p2p_message_id);
+      
+      if (hasFile) {
+        // File is ready, download it
+        await p2pService.downloadReceivedFile(attachment.p2p_message_id, attachment.filename);
+        
+        // Record the download
+        const userId = localStorage.getItem('userId') || 'unknown';
+        enhancedP2PService.recordDownload(attachment.p2p_message_id, attachment.filename, userId);
+        
+        setDownloadStatus(prev => ({ ...prev, [attachment.p2p_message_id]: 'complete' }));
+        toast.success(`✓ Downloaded: ${attachment.filename}`);
+      } else {
+        toast.error('File not ready. Please wait for transfer to complete.');
+        setDownloadStatus(prev => ({ ...prev, [attachment.p2p_message_id]: 'failed' }));
+      }
 
     } catch (err) {
       console.error('P2P download failed:', err);
       setDownloadStatus(prev => ({ ...prev, [attachment.p2p_message_id]: 'failed' }));
       toast.error('Download failed. Sender may be offline.');
+    }
+  };
+
+  const handlePreview = async (attachment: P2PAttachment) => {
+    // Check if file is already received
+    const hasFile = await p2pService.hasReceivedFile(attachment.p2p_message_id);
+    
+    if (!hasFile) {
+      toast.error('File not ready. Please wait for transfer to complete.');
+      return;
+    }
+
+    try {
+      // Get file blob
+      let blob: Blob | null = null;
+      
+      // Try to get from memory first
+      const db = await (p2pService as any).openDB();
+      const tx = db.transaction('files', 'readonly');
+      const store = tx.objectStore('files');
+      const record = await new Promise<any>((resolve, reject) => {
+        const req = store.get(attachment.p2p_message_id);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+
+      if (record?.blob) {
+        blob = record.blob;
+      }
+
+      if (!blob) {
+        toast.error('File not found.');
+        return;
+      }
+
+      setPreviewFile({
+        blob,
+        name: attachment.filename,
+        mimeType: attachment.mime_type
+      });
+      setShowPreview(true);
+    } catch (error) {
+      console.error('Preview failed:', error);
+      toast.error('Failed to preview file.');
     }
   };
 
@@ -232,16 +284,43 @@ export default function P2PAttachmentList({
                 {getStatusIcon(attachment)}
               </div>
 
-              {/* Download button */}
-              {mode === 'receiver' && canDownload && (
-                <button
-                  onClick={() => handleDownload(attachment)}
-                  disabled={status === 'downloading'}
-                  className="flex-shrink-0 p-2 hover:bg-gray-200 dark:hover:bg-slate-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  title={isP2P ? "Request file from sender" : "Download attachment"}
-                >
-                  <Download className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-                </button>
+              {/* Preview and Download buttons */}
+              {mode === 'receiver' && (
+                <div className="flex items-center gap-2">
+                  {/* Preview button */}
+                  {attachment.is_p2p && (
+                    <button
+                      onClick={() => handlePreview(attachment)}
+                      className="flex-shrink-0 p-2 hover:bg-gray-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                      title="Preview file"
+                    >
+                      <Eye className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                    </button>
+                  )}
+                  
+                  {/* Download button */}
+                  {canDownload && (
+                    <button
+                      onClick={() => handleDownload(attachment)}
+                      disabled={status === 'downloading' || (attachment.is_p2p && attachment.p2p_message_id && enhancedP2PService.hasBeenDownloaded(attachment.p2p_message_id))}
+                      className="flex-shrink-0 p-2 hover:bg-gray-200 dark:hover:bg-slate-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      title={
+                        attachment.is_p2p && attachment.p2p_message_id && enhancedP2PService.hasBeenDownloaded(attachment.p2p_message_id)
+                          ? "Already downloaded (single-download policy)"
+                          : isP2P ? "Request file from sender" : "Download attachment"
+                      }
+                    >
+                      <Download className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                    </button>
+                  )}
+                  
+                  {/* Single-download indicator */}
+                  {attachment.is_p2p && attachment.p2p_message_id && enhancedP2PService.hasBeenDownloaded(attachment.p2p_message_id) && (
+                    <span className="text-xs text-gray-500 dark:text-gray-400 px-2 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded">
+                      Downloaded
+                    </span>
+                  )}
+                </div>
               )}
             </div>
           );
@@ -257,6 +336,18 @@ export default function P2PAttachmentList({
             Sender must be online for transfer to work.
           </div>
         </div>
+      )}
+
+      {/* Preview Modal */}
+      {showPreview && previewFile && (
+        <InlinePreviewModal
+          isOpen={showPreview}
+          file={new File([previewFile.blob], previewFile.name, { type: previewFile.mimeType })}
+          onClose={() => {
+            setShowPreview(false);
+            setPreviewFile(null);
+          }}
+        />
       )}
     </div>
   );

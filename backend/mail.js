@@ -263,17 +263,21 @@ router.get("/email/thread/:threadId", async (req, res) => {
       email.cc_emails = rcp.filter(r => r.type === "cc").map(r => r.address);
       email.bcc_emails = rcp.filter(r => r.type === "bcc").map(r => r.address);
 
-      // ✅ attachment metadata
+      // ✅ attachment metadata including P2P fields
       const [atts] = await db.query(
         `
-        SELECT id, filename, mime_type, size_bytes
+        SELECT id, filename, mime_type, size_bytes, delivery_mode, delivered, p2p_message_id
         FROM email_attachments
         WHERE email_id = ?
         `,
         [email.id]
       );
 
-      email.attachments = atts;
+      email.attachments = atts.map(att => ({
+        ...att,
+        is_p2p: att.delivery_mode === 'P2P',
+        p2p_pending: att.delivery_mode === 'P2P' && !att.delivered
+      }));
       email.has_attachments = atts.length > 0;
       email.attachment_count = atts.length;
 
@@ -318,21 +322,29 @@ router.get("/emails/:userId/:folder", async (req, res) => {
 
     // fetch recipients + attachments for each email
     for (const email of emails) {
-// fetch attachment metadata (NO base64)
+// fetch attachment metadata including P2P fields (NO base64)
 const [atts] = await db.query(
   `
   SELECT
     id,
     filename,
     mime_type,
-    size_bytes
+    size_bytes,
+    delivery_mode,
+    delivered,
+    p2p_message_id
   FROM email_attachments
   WHERE email_id = ?
   `,
   [email.id]
 );
 
-email.attachments = atts;
+// Mark P2P attachments with is_p2p flag for frontend
+email.attachments = atts.map(att => ({
+  ...att,
+  is_p2p: att.delivery_mode === 'P2P',
+  p2p_pending: att.delivery_mode === 'P2P' && !att.delivered
+}));
 email.has_attachments = atts.length > 0;
 email.attachment_count = atts.length;
 
@@ -459,12 +471,12 @@ const resolvedFolderId = mailbox.id;
       resolvedThreadId = parent?.thread_id || null;
     }
 
-    // 2. INSERT email
+    // 2. INSERT email with P2P flags
     const [insert] = await conn.query(
       `INSERT INTO emails
        (user_id, thread_id, from_name, from_email, subject, body, is_html, in_reply_to,
-        to_header, cc_header, bcc_header, folder_id, is_draft, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        to_header, cc_header, bcc_header, folder_id, is_draft, p2p_enabled, p2p_delivered, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
         user_id,
         resolvedThreadId,
@@ -478,7 +490,9 @@ const resolvedFolderId = mailbox.id;
         ccList.join(", "),
         bccList.join(", "),
         resolvedFolderId,
-        is_draft ? 1 : 0
+        is_draft ? 1 : 0,
+        p2p_enabled ? 1 : 0,
+        p2p_delivered ? 1 : 0
       ]
     );
 
@@ -528,6 +542,8 @@ const content_base64 =
 
         const isP2P = p2p_enabled === true;
 
+    // For P2P: store content_base64 as FALLBACK (like torrent seeder)
+    // This allows download even if direct P2P transfer fails
     await conn.query(
       `INSERT INTO email_attachments
        (email_id, filename, mime_type, size_bytes,
@@ -538,7 +554,7 @@ const content_base64 =
        filename,
        mime_type,
        size_bytes,
-       isP2P ? null : content_base64,
+       content_base64, // Always store content as fallback
        isP2P ? 'P2P' : 'EMAIL',
        isP2P ? 0 : 1,
        a.p2p_message_id || null
@@ -712,6 +728,39 @@ router.post("/email/update", async (req, res) => {
   } catch (err) {
     console.error("EMAIL UPDATE ERROR:", err);
     return res.status(500).json({ error: "Server error while updating email" });
+  }
+});
+
+// -------------------- UPDATE P2P DELIVERY STATUS --------------------
+router.post("/p2p/delivered", async (req, res) => {
+  try {
+    const { p2p_message_id } = req.body;
+    
+    if (!p2p_message_id) {
+      return res.status(400).json({ error: "Missing p2p_message_id" });
+    }
+
+    // Update attachment as delivered
+    const [result] = await db.query(
+      `UPDATE email_attachments SET delivered = 1, delivered_at = NOW() WHERE p2p_message_id = ?`,
+      [p2p_message_id]
+    );
+
+    // Also update the email's p2p_delivered flag
+    await db.query(
+      `UPDATE emails e
+       JOIN email_attachments a ON e.id = a.email_id
+       SET e.p2p_delivered = 1
+       WHERE a.p2p_message_id = ?`,
+      [p2p_message_id]
+    );
+
+    console.log("[P2P] Marked as delivered:", p2p_message_id, "affected:", result.affectedRows);
+    
+    return res.json({ success: true, affectedRows: result.affectedRows });
+  } catch (err) {
+    console.error("P2P DELIVERED ERROR:", err);
+    return res.status(500).json({ error: "Failed to update delivery status" });
   }
 });
 

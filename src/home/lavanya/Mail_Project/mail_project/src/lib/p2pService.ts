@@ -36,40 +36,18 @@ import {
 /* ---------------------------------------------------- */
 
 const P2P_LIMITS = {
-  BASE_KBPS: 999999,    // Unlimited - no throttling
-  MIN_KBPS: 999999,     // Unlimited - no throttling  
-  MAX_KBPS: 999999,     // Unlimited - no throttling
-  CHUNK_SIZE: 512 * 1024, // 512 KB chunks for faster transfer
+  BASE_KBPS: 256,
+  MIN_KBPS: 32,
+  MAX_KBPS: 512,
+  CHUNK_SIZE: 64 * 1024,
 };
-
-// Helper functions for base64 encoding/decoding binary data
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  const chunkSize = 32768; // Process in chunks to avoid call stack issues
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
-    binary += String.fromCharCode.apply(null, Array.from(chunk));
-  }
-  return btoa(binary);
-}
-
-function base64ToArrayBuffer(base64: string): ArrayBuffer {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes.buffer;
-}
 
 const MAX_RETRIES_PER_CHUNK = 5;
 const chunkRetries = new Map<string, number>();
 
-// Maximum parallel lanes for fastest transfer
-const PARALLEL_LANES = navigator.hardwareConcurrency >= 4 ? 16 : 12;
+const PARALLEL_LANES = navigator.hardwareConcurrency >= 8 ? 4 : 3; //Increase Parallelism safely
 
-const ACK_TIMEOUT_MS = 500; // Very fast ACK timeout
+const ACK_TIMEOUT_MS = 2000;// Faster ACK feedback
 
 type NetworkType = 'internet' | 'mobile' | 'wifi';
 
@@ -479,7 +457,13 @@ for (const messageId of Array.from(this.receiverTransfers.keys())) {
   /* ---------------------------------------------------- */
 
   private async shouldDeferTransfer(): Promise<boolean> {
-    // Never defer - always transfer immediately
+    const conn = (navigator as any).connection;
+    if (conn?.saveData || conn?.effectiveType === '2g') return true;
+
+    if ('getBattery' in navigator) {
+      const battery = await (navigator as any).getBattery();
+      if (!battery.charging && battery.level < 0.2) return true;
+    }
     return false;
   }
 
@@ -496,13 +480,32 @@ for (const messageId of Array.from(this.receiverTransfers.keys())) {
   /* ---------------------------------------------------- */
 
   private async throttle(bytes: number) {
-    // No throttling - maximum speed
-    return;
+    const bytesPerMs = (this.currentKBPS * 1024) / 1000;
+    const delay = bytes / bytesPerMs;
+    await new Promise(r => setTimeout(r, delay));
   }
 
 private async carbonAwareThrottle(bytes: number) {
-  // No throttling - send at maximum speed
-  return;
+  const network = this.resolveNetworkType();
+
+  const metrics = calculateCarbonMetrics(
+    0,
+    bytes / (1024 ** 3),
+    network,
+    'realistic'
+  );
+
+  // Use derived intensity instead of nonexistent carbonScore
+  if (metrics.co2e > 0.05) {
+    this.currentKBPS = Math.max(P2P_LIMITS.MIN_KBPS, 64);
+  } else {
+    this.currentKBPS = Math.min(
+      P2P_LIMITS.MAX_KBPS,
+      this.currentKBPS + 32
+    );
+  }
+
+  await this.throttle(bytes);
 }
 
 private markReceiverPaused(messageId: string, reason: StopReason) {
@@ -866,9 +869,31 @@ private async clearChunks(messageId: string) {
   /* ---------------------------------------------------- */
 
   private adjustRate() {
-    // No rate limiting - always use maximum speed
-    this.lastAckAt = performance.now();
-    this.currentKBPS = P2P_LIMITS.MAX_KBPS;
+    const now = performance.now();
+    const rtt = now - this.lastAckAt;
+    this.lastAckAt = now;
+
+    // Network throttle detection
+    const isThrottled = rtt > 400 || this.currentKBPS <= P2P_LIMITS.MIN_KBPS + 16;
+    const isLowBandwidth = this.currentKBPS < 64;
+
+    if (rtt < 100) {
+      this.currentKBPS = Math.min(this.currentKBPS + 16, P2P_LIMITS.MAX_KBPS);
+    } else if (rtt > 400) {
+      this.currentKBPS = Math.max(this.currentKBPS - 32, P2P_LIMITS.MIN_KBPS);
+      
+      // Emit throttle event
+      window.dispatchEvent(new CustomEvent('p2p-network-throttle', {
+        detail: { isThrottled, isLowBandwidth, currentKBPS: this.currentKBPS }
+      }));
+    }
+
+    // Low bandwidth mode indicator
+    if (isLowBandwidth) {
+      window.dispatchEvent(new CustomEvent('p2p-low-bandwidth', {
+        detail: { currentKBPS: this.currentKBPS }
+      }));
+    }
   }
 
   /* ---------------------------------------------------- */
@@ -988,14 +1013,15 @@ if (lastSent && Date.now() - lastSent < ACK_TIMEOUT_MS) continue;
 // ✅ reserve only when actually sending
 transfer.missingChunks.delete(i);
 
-          // Check pause state (skip if not paused)
-if (transfer.paused) {
+          // Check pause state
+while (transfer.paused) {
   window.dispatchEvent(new CustomEvent('p2p-paused', {
-    detail: { messageId, reason: 'USER_PAUSED' }
+    detail: {
+      messageId,
+      reason: 'USER_PAUSED'
+    }
   }));
-  while (transfer.paused) {
-    await new Promise(r => setTimeout(r, 50));
-  }
+  await new Promise(r => setTimeout(r, 300));
 }
 
           const start = i * P2P_LIMITS.CHUNK_SIZE;
@@ -1005,7 +1031,6 @@ if (transfer.paused) {
           await this.carbonAwareThrottle(buffer.byteLength);
           const checksum = await sha256(buffer);
 
-          // Use base64 encoding for much smaller payload size
           const encrypted = await encrypt(key, {
             messageId,
             fileName: file.name,
@@ -1013,8 +1038,7 @@ if (transfer.paused) {
             chunkIndex: i,
             totalChunks,
             checksum,
-            chunkBase64: arrayBufferToBase64(buffer), // base64 instead of number array
-            isBase64: true // flag to indicate new format
+            chunk: Array.from(new Uint8Array(buffer))
           });
 
           this.send({
@@ -1068,11 +1092,9 @@ if (transfer.paused) {
 
       await Promise.all(lanes);
 
-      // Wait until all chunks are ACKed (minimal wait)
-      let waitCount = 0;
-      while (transfer.missingChunks.size > 0 && waitCount < 100) {
-        await new Promise(r => setTimeout(r, 10)); // Very fast polling
-        waitCount++;
+      // Wait until all chunks are ACKed
+      while (transfer.missingChunks.size > 0) {
+        await new Promise(r => setTimeout(r, 500));
       }
 
       totalBytesAllFiles += file.size;
@@ -1145,21 +1167,12 @@ private async receiveChunk(from: string, payload: EncryptedPayload) {
   const key = this.sessionKeys.get(from);
   if (!key) return;
 
-  let data;
-  try {
-    data = await decrypt(key, payload);
-  } catch (err) {
-    console.error('[P2P] Decryption failed:', err);
-    return;
-  }
-
+  const data = await decrypt(key, payload);
   const {
     messageId,
     chunkIndex,
     totalChunks,
     chunk,
-    chunkBase64,
-    isBase64,
     fileName,
     mimeType,
     checksum
@@ -1168,18 +1181,10 @@ private async receiveChunk(from: string, payload: EncryptedPayload) {
   this.transferSenders.set(messageId, from);
   localStorage.setItem(`p2p-sender-${messageId}`, from);
 
-  // Handle both old (array) and new (base64) formats
-  let rawChunk: Uint8Array;
-  if (isBase64 && chunkBase64) {
-    rawChunk = new Uint8Array(base64ToArrayBuffer(chunkBase64));
-  } else if (chunk) {
-    rawChunk = new Uint8Array(chunk);
-  } else {
-    console.error('[P2P] No chunk data received');
-    return;
-  }
+const rawChunk = new Uint8Array(chunk);
+const encrypted = await encryptChunkAES(key, rawChunk);
 
-  const raw = rawChunk.buffer;
+  const raw = new Uint8Array(chunk).buffer;
   const verify = await sha256(raw);
 
 if (verify !== checksum) {
@@ -1201,8 +1206,9 @@ if (verify !== checksum) {
     this.receivedChunks.set(messageId, new Map());
   }
 
-  this.receivedChunks.get(messageId)!.set(chunkIndex, rawChunk);
-  await this.storeChunk(messageId, chunkIndex, rawChunk);
+  const chunkData = new Uint8Array(chunk);
+  this.receivedChunks.get(messageId)!.set(chunkIndex, chunkData);
+  await this.storeChunk(messageId, chunkIndex, chunkData);
 
   let rt = this.receiverTransfers.get(messageId);
   if (!rt) {
@@ -1590,10 +1596,10 @@ window.addEventListener('p2p-delivered', async (e: any) => {
 window.addEventListener('p2p-download-error', (e: any) => {
   const { error } = e.detail;
   console.warn('[P2P] Download error:', error);
-  // Show error using a custom event that UI components listen to
-  window.dispatchEvent(new CustomEvent('show-toast', {
-    detail: { type: 'error', message: error || 'P2P file not available' }
-  }));
+  // Import toast dynamically to avoid circular deps
+  import('react-hot-toast').then(({ default: toast }) => {
+    toast.error(error || 'P2P file not available');
+  });
 });
 
 window.addEventListener('p2p-video-stream-init', (e: any) => {

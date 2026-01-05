@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import P2PTransferProgress from './P2PTransferProgress';
+import { p2pToast } from '../utils/p2pToasts';
 import toast from 'react-hot-toast';
 
 interface P2PReceiverHandlerProps {
@@ -46,7 +47,7 @@ export default function P2PReceiverHandler({ userId, userEmail }: P2PReceiverHan
       });
       
       setShowProgress(true);
-      toast.success(`📥 Receiving files from ${senderEmail}`, { duration: 3000 });
+      p2pToast.receiving(`files from ${senderEmail}`);
     };
 
     // Listen for file progress updates
@@ -69,9 +70,12 @@ export default function P2PReceiverHandler({ userId, userEmail }: P2PReceiverHan
 
     // Listen for file completion
     const handleFileReceived = (e: CustomEvent) => {
-      const { fileName, encryptedData } = e.detail;
+      const { messageId, fileName } = e.detail;
       
       console.log('[P2P Receiver] File received:', fileName);
+      
+      // Show toast notification
+      p2pToast.delivered(fileName);
       
       setIncomingTransfer(prev => {
         if (!prev) return prev;
@@ -80,7 +84,31 @@ export default function P2PReceiverHandler({ userId, userEmail }: P2PReceiverHan
           ...prev,
           files: prev.files.map(f =>
             f.name === fileName
-              ? { ...f, progress: 100, status: 'delivered' as const, encryptedData }
+              ? { ...f, progress: 100, status: 'delivered' as const }
+              : f
+          )
+        };
+      });
+    };
+    
+    // Listen for receiver progress updates
+    const handleReceiverProgress = (e: CustomEvent) => {
+      const { messageId, percentage, fileName, etaSeconds, speedBps } = e.detail;
+      
+      setIncomingTransfer(prev => {
+        if (!prev) return prev;
+        
+        return {
+          ...prev,
+          files: prev.files.map(f =>
+            f.name === fileName || f.messageId === messageId
+              ? { 
+                  ...f, 
+                  progress: percentage, 
+                  status: percentage >= 100 ? 'delivered' as const : 'sending' as const,
+                  etaSeconds,
+                  speedBps
+                }
               : f
           )
         };
@@ -135,6 +163,8 @@ export default function P2PReceiverHandler({ userId, userEmail }: P2PReceiverHan
     window.addEventListener('p2p-file-received', handleFileReceived as EventListener);
     window.addEventListener('p2p-transfer-complete', handleTransferComplete as EventListener);
     window.addEventListener('p2p-download-file', handleDownloadFile as EventListener);
+    window.addEventListener('p2p-file-ready', handleFileReceived as EventListener);
+    window.addEventListener('p2p-receiver-progress', handleReceiverProgress as EventListener);
 
     return () => {
       window.removeEventListener('p2p-incoming-transfer', handleIncomingTransfer as EventListener);
@@ -142,6 +172,8 @@ export default function P2PReceiverHandler({ userId, userEmail }: P2PReceiverHan
       window.removeEventListener('p2p-file-received', handleFileReceived as EventListener);
       window.removeEventListener('p2p-transfer-complete', handleTransferComplete as EventListener);
       window.removeEventListener('p2p-download-file', handleDownloadFile as EventListener);
+      window.removeEventListener('p2p-file-ready', handleFileReceived as EventListener);
+      window.removeEventListener('p2p-receiver-progress', handleReceiverProgress as EventListener);
     };
   }, [incomingTransfer]);
 
