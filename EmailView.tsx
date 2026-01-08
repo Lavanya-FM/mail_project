@@ -91,9 +91,6 @@ const autoResizeReply = () => {
     }>
   >({});
 
-  // Track video blob URLs for inline playback
-  const [videoBlobUrls, setVideoBlobUrls] = useState<Record<string, string>>({});
-
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(initialConfirmState);
   const [showLabelDropdown, setShowLabelDropdown] = useState(false);
   const labelDropdownRef = useRef<HTMLDivElement>(null);
@@ -209,13 +206,6 @@ useEffect(() => {
   setShowQuoted(false);
 }, [email?.id]);
 
-// Clean up video blob URLs when component unmounts or email changes
-useEffect(() => {
-  return () => {
-    Object.values(videoBlobUrls).forEach(url => URL.revokeObjectURL(url));
-  };
-}, [email?.id, videoBlobUrls]);
-
 useEffect(() => {
   bottomRef.current?.scrollIntoView({ behavior: "smooth" });
 }, [email?.id, inlineReplyMode]);
@@ -274,86 +264,68 @@ useEffect(() => {
             status: 'complete'
           }
         }));
-        
-        // Load video blob if it's a video file
-        const isVideo = typeof a.mime_type === 'string' && a.mime_type.startsWith('video/');
-        if (isVideo) {
-          try {
-            const blob = await p2pService.getReceivedBlob(a.p2p_message_id);
-            if (blob) {
-              const url = URL.createObjectURL(blob);
-              setVideoBlobUrls(prev => ({ ...prev, [a.p2p_message_id]: url }));
-            }
-          } catch (err) {
-            console.error('[EmailView] Failed to load video blob on email open:', err);
-          }
-        }
         return;
       }
       
       // File not complete, try to resume
-      // ✅ FIX: Pass sender email from email's from_email field
-      const senderEmail = email?.from_email ? email.from_email.toLowerCase() : null;
-      console.log('[EmailView] Resuming P2P receive for', a.filename, 'sender:', senderEmail);
-      p2pService.resumeReceive(a.p2p_message_id, senderEmail);
+      console.log('[EmailView] Resuming P2P receive for', a.filename);
+      p2pService.resumeReceive(a.p2p_message_id);
       
       // Also check if sender is online and request chunks if needed
-      const storedSender = localStorage.getItem(`p2p-sender-${a.p2p_message_id}`) || senderEmail;
-      if (storedSender && p2pService.isPeerOnline(storedSender)) {
+      const sender = localStorage.getItem(`p2p-sender-${a.p2p_message_id}`);
+      if (sender && p2pService.isPeerOnline(sender)) {
         console.log('[EmailView] Sender is online, requesting missing chunks');
-        p2pService.resumeReceive(a.p2p_message_id, storedSender);
-      } else if (storedSender) {
-        console.log('[EmailView] Sender is offline:', storedSender);
+        p2pService.resumeReceive(a.p2p_message_id);
+      } else if (sender) {
+        console.log('[EmailView] Sender is offline:', sender);
       }
     }
   });
 }, [email?.id]);
 
-// Listen for receiver-side P2P progress
 useEffect(() => {
-  if (!isReceiver) return;
-
   const handler = (e: any) => {
     const { messageId, percentage, etaSeconds, received, total, speedBps } = e.detail;
 
-    setP2pProgressMap((prev: any) => ({
+    setP2pProgressMap(prev => ({
       ...prev,
       [messageId]: { percentage, etaSeconds, received, total, speedBps }
     }));
   };
 
-  window.addEventListener('p2p-receiver-progress', handler);
-  return () => window.removeEventListener('p2p-receiver-progress', handler);
-}, [isReceiver]);
-
-// Listen for file-ready (complete) events to force 100% on receiver and load video blobs
-useEffect(() => {
-  if (!isReceiver) return;
-
-  const completeHandler = async (e: any) => {
-    const { messageId, fileName } = e.detail;
-    setP2pProgressMap((prev: any) => ({
+  // Listen for receiver progress
+  useEffect(() => {
+    if (!isReceiver) return;
+  
+    const handler = (e: any) => {
+      const { messageId, percentage, etaSeconds, received, total, speedBps } = e.detail;
+  
+      setP2pProgressMap(prev => ({
+        ...prev,
+        [messageId]: { percentage, etaSeconds, received, total, speedBps }
+      }));
+    };
+  
+    window.addEventListener('p2p-receiver-progress', handler);
+    return () => window.removeEventListener('p2p-receiver-progress', handler);
+  }, [isReceiver]);
+  
+  
+  // Also listen for file ready (complete) events
+  const completeHandler = (e: any) => {
+    const { messageId } = e.detail;
+    setP2pProgressMap(prev => ({
       ...prev,
-      [messageId]: { ...(prev?.[messageId] || {}), percentage: 100 }
+      [messageId]: { ...prev[messageId], percentage: 100 }
     }));
-
-    // Load video blob for inline playback
-    if (fileName && (fileName.endsWith('.mp4') || fileName.endsWith('.webm') || fileName.endsWith('.mov'))) {
-      try {
-        const blob = await p2pService.getReceivedBlob(messageId);
-        if (blob) {
-          const url = URL.createObjectURL(blob);
-          setVideoBlobUrls(prev => ({ ...prev, [messageId]: url }));
-        }
-      } catch (err) {
-        console.error('[EmailView] Failed to load video blob:', err);
-      }
-    }
   };
-
   window.addEventListener('p2p-file-ready', completeHandler);
-  return () => window.removeEventListener('p2p-file-ready', completeHandler);
-}, [isReceiver]);
+  
+  return () => {
+    window.removeEventListener('p2p-receiver-progress', handler);
+    window.removeEventListener('p2p-file-ready', completeHandler);
+  };
+}, []);
 
 useEffect(() => {
   if (!isSender) return;
@@ -561,6 +533,9 @@ const attachments = Array.isArray(email.attachments)
   : [];
 
 const [deliveredP2P, setDeliveredP2P] = useState<Set<string>>(new Set());
+
+const hasBeenDownloaded =
+  a.p2p_message_id ? downloadedMap[a.p2p_message_id] : false;
 
 useEffect(() => {
   const handler = (e: any) => {
@@ -1091,28 +1066,21 @@ const googleDocPreview = (url: string) =>
           const hasP2PId = !!a.p2p_message_id;
 
           const hasBeenDownloaded = a.p2p_message_id
-            ? downloadedMap[a.p2p_message_id]
-            : false;
-
+          ? downloadedMap[a.p2p_message_id]
+          : false;
+                  
           const downloadUrl = `/api/email/${email.id}/attachment/${a.id}?download=1&user_id=${currentUser.id}`;
-
-          const isVideo =
-            typeof a.mime_type === 'string' &&
-            a.mime_type.startsWith('video/');
-
+          
           // Get P2P transfer progress for receiver
           const p2pProgress = hasP2PId ? p2pProgressMap[a.p2p_message_id] : null;
-
-          // Fast in-memory check for local P2P blob (may be false after refresh)
-          const hasLocalP2PFile = hasP2PId && p2pService.hasReceivedFileSync(a.p2p_message_id);
-
           const isTransferComplete =
             isSender ||
             a.p2p_completed ||
             (a.p2p_message_id && deliveredP2P.has(a.p2p_message_id)) ||
             (p2pProgress?.percentage === 100) ||
-            hasLocalP2PFile;
+            (hasP2PId && p2pService.hasReceivedFileSync(a.p2p_message_id));
 
+      
           const isTransferInProgress = hasP2PId && p2pProgress && p2pProgress.percentage > 0 && p2pProgress.percentage < 100;
           const transferPercentage = p2pProgress?.percentage || 0;
           const etaSeconds = p2pProgress?.etaSeconds;
@@ -1157,11 +1125,6 @@ const googleDocPreview = (url: string) =>
                 </p>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
                   {formatSize(a.size || a.size_bytes || 0)}
-                  {isVideo && (
-                    <span className="ml-2 text-purple-600 dark:text-purple-400">
-                      • Video
-                    </span>
-                  )}
                   {isP2PAttachment && !isSender && (
   <span className={`ml-2 ${
     isTransferComplete 
@@ -1170,11 +1133,7 @@ const googleDocPreview = (url: string) =>
         ? 'text-blue-600 dark:text-blue-400'
         : 'text-yellow-600 dark:text-yellow-400'
   }`}>
-    • {isTransferComplete 
-        ? '✓ Received' 
-        : isTransferInProgress 
-          ? `Receiving... ${p2pProgress?.received || 0}/${p2pProgress?.total || 0} chunks`
-          : 'Awaiting transfer'}
+    • {isTransferComplete ? '✓ Received' : isTransferInProgress ? 'Receiving...' : 'Awaiting transfer'}
   </span>
 )}
 
@@ -1193,28 +1152,22 @@ const googleDocPreview = (url: string) =>
                   <span className="text-green-600 dark:text-green-400">
                     <CheckCircle className="w-5 h-5" />
                   </span>
-                  ) : (
+                  ) : isTransferComplete ? (
+                    // RECEIVER - Transfer complete, show download buttons
                   <>
-                    {/* RECEIVER - Always allow download/preview when attachment row exists */}
                     <button
-                      onClick={() => {
-                        // Prefer local P2P blob when available, otherwise HTTP fallback
-                        if (a.p2p_message_id && p2pService.hasReceivedFileSync(a.p2p_message_id)) {
-                          window.dispatchEvent(
-                            new CustomEvent('p2p-download-file', {
-                              detail: {
-                                messageId: a.p2p_message_id,
-                                fileName: a.filename
-                              }
-                            })
-                          );
-                        } else if (a.id) {
-                          // Fallback to server-stored attachment (content_base64)
-                          window.open(downloadUrl, '_blank');
-                        } else {
-                          toast.error('File not available yet');
-                        }
-                      }}
+  onClick={() => {
+    if (!a.p2p_message_id) return;
+
+    window.dispatchEvent(
+      new CustomEvent('p2p-download-file', {
+        detail: {
+          messageId: a.p2p_message_id,
+          fileName: a.filename
+        }
+      })
+    );
+  }}
   className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-200
              dark:text-gray-400 dark:hover:text-white dark:hover:bg-slate-600
              rounded-lg transition-colors"
@@ -1224,23 +1177,18 @@ const googleDocPreview = (url: string) =>
 </button>
 <button
   onClick={async () => {
-    // Prefer local P2P blob for preview; if missing, use HTTP preview
-    if (a.p2p_message_id && p2pService.hasReceivedFileSync(a.p2p_message_id)) {
-      const blob = await p2pService.getReceivedBlob(a.p2p_message_id);
-      if (!blob) {
-        toast.error('File not available for preview');
-        return;
-      }
+    if (!a.p2p_message_id) return;
 
-      const url = URL.createObjectURL(blob);
-      window.open(url, '_blank');
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } else if (a.id) {
-      // Open server-side attachment URL; browser will preview or download
-      window.open(downloadUrl, '_blank');
-    } else {
-      toast.error('File not available yet');
+    const blob = await p2pService.getReceivedBlob(a.p2p_message_id);
+    if (!blob) {
+      toast.error('File not available for preview');
+      return;
     }
+
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }}
   className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-200
              dark:text-gray-400 dark:hover:text-white dark:hover:bg-slate-600
@@ -1249,31 +1197,20 @@ const googleDocPreview = (url: string) =>
 >
   <Eye className="w-5 h-5" />
 </button>
-                    {/* Optional small status text to the right when P2P not finished */}
-                    {!isTransferComplete && isP2PAttachment && (
-                      <span className="text-xs text-yellow-600 dark:text-yellow-400 px-2 py-1 bg-yellow-100 dark:bg-yellow-900/30 rounded-full">
-                        {isTransferInProgress ? 'Receiving…' : 'Awaiting transfer'}
-                      </span>
-                    )}
                   </>
+                  ) : isTransferInProgress ? (
+                    // RECEIVER - Transfer in progress, show percentage
+                    <span className="text-sm font-semibold text-blue-600 dark:text-blue-400 min-w-[50px] text-right">
+                      {transferPercentage}%
+                    </span>
+                  ) : (
+                    // RECEIVER - Awaiting transfer
+                    <span className="text-xs text-yellow-600 dark:text-yellow-400 px-2 py-1 bg-yellow-100 dark:bg-yellow-900/30 rounded-full">
+                      Waiting
+                    </span>
                 )}
               </div>
               </div>
-
-              {/* Inline video preview when transfer is complete */}
-              {!isSender && isVideo && isTransferComplete && (
-                <div className="mt-3">
-                  <video
-                    data-message-id={a.p2p_message_id || a.id}
-                    src={a.p2p_message_id ? videoBlobUrls[a.p2p_message_id] : downloadUrl}
-                    controls
-                    className="w-full max-h-64 rounded-lg border border-gray-200 dark:border-slate-700"
-                    preload="metadata"
-                  >
-                    Your browser does not support the video tag.
-                  </video>
-                </div>
-              )}
 
               {/* Progress Bar for P2P transfers (receiver view) */}
               {!isSender && isP2PAttachment && !isTransferComplete && (
@@ -1283,22 +1220,11 @@ const googleDocPreview = (url: string) =>
                       {isTransferInProgress 
                         ? (
                           <>
-                            <span className="font-semibold text-blue-600 dark:text-blue-400">{transferPercentage}%</span>
-                            {' '}•{' '}
-                            <span className="font-medium text-gray-700 dark:text-gray-300">
-                              Chunks: {p2pProgress?.received || 0} / {p2pProgress?.total || 0}
-                            </span>
-                            {p2pProgress?.etaSeconds && p2pProgress.etaSeconds > 0 && (
-                              <>
-                                {' '}•{' '}
-                                <span className="font-medium text-purple-600 dark:text-purple-400">
-                                  ETA: {p2pProgress.etaSeconds < 60 
-                                    ? `${p2pProgress.etaSeconds}s` 
-                                    : p2pProgress.etaSeconds < 3600
-                                      ? `${Math.floor(p2pProgress.etaSeconds / 60)}m ${p2pProgress.etaSeconds % 60}s`
-                                      : `${Math.floor(p2pProgress.etaSeconds / 3600)}h ${Math.floor((p2pProgress.etaSeconds % 3600) / 60)}m`}
-                                </span>
-                              </>
+                            Receiving: <span className="font-semibold text-blue-600 dark:text-blue-400">{transferPercentage}%</span>
+                            {p2pProgress?.received !== undefined && p2pProgress?.total !== undefined && (
+                              <span className="ml-2 text-gray-400">
+                                ({p2pProgress.received}/{p2pProgress.total} chunks)
+                              </span>
                             )}
                           </>
                         )
@@ -1306,8 +1232,15 @@ const googleDocPreview = (url: string) =>
                     </span>
                     <span className="flex items-center gap-2">
                       {p2pProgress?.speedBps && p2pProgress.speedBps > 0 && (
-                        <span className="text-green-600 dark:text-green-400 font-medium">
+                        <span className="text-green-600 dark:text-green-400">
                           {(p2pProgress.speedBps / 1024).toFixed(0)} KB/s
+                        </span>
+                      )}
+                      {etaSeconds && etaSeconds > 0 && (
+                        <span>
+                          ETA: {etaSeconds < 60 
+                            ? `${etaSeconds}s` 
+                            : `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s`}
                         </span>
                       )}
                     </span>

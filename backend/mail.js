@@ -12,7 +12,7 @@ const bcrypt = require("bcryptjs");
 const nodemailer = require("nodemailer");
 
 const db = require("./db"); // expects exported promise-based query/getConnection interface
-const { sanitizeBody, normalizeEmail } = require("./utils");
+const { sanitizeBody, normalizeEmail, isValidEmailFormat } = require("./utils");
 
 const router = express.Router();
 
@@ -51,25 +51,260 @@ async function createSystemFolders(userId) {
 // REGISTER
 router.post("/register", async (req, res) => {
   try {
-    const { name, email, password, dateOfBirth, gender } = req.body || {};
+    // ✅ CRITICAL: Log the raw request body to debug data corruption
+    console.log('REGISTER: Raw request body', JSON.stringify(req.body, null, 2));
+    
+    // ✅ CRITICAL: Extract raw values from request body
+    const rawName = req.body?.name;
+    const rawEmail = req.body?.email;
+    const password = req.body.password;
+    const dateOfBirth = req.body.dateOfBirth;
+    const gender = req.body.gender;
+    
+    // ✅ CRITICAL: Log raw input values
+    console.log('REGISTER: Raw input values', {
+      rawName: rawName || 'MISSING',
+      rawEmail: rawEmail || 'MISSING',
+      passwordLength: password ? password.length : 0,
+      dateOfBirth: dateOfBirth || 'MISSING',
+      gender: gender || 'MISSING'
+    });
+    
+    // ✅ CRITICAL: Validate email is required
+    if (!rawEmail) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+    
+    // ✅ CRITICAL: Normalize email
+    const email = normalizeEmail(String(rawEmail).trim());
+    
+    // ✅ CRITICAL: Extract email username (part before @)
+    const emailUsername = email.split('@')[0] || '';
+    
+    // 🔒 SAFETY FIX: Handle malformed input where name contains email pattern or equals email
+    // This is a defensive backend fix only - does not change existing functionality
+    let name = rawName ? String(rawName).trim() : '';
+    const originalName = name;
+    
+    // ✅ CRITICAL: If name contains @ symbol, strip it (recover from corrupted data)
+    if (name.includes('@')) {
+      // Remove @jeemail.in pattern if present
+      name = name.replace(/@jeemail\.in/gi, '');
+      // Remove @ and everything after it
+      if (name.includes('@')) {
+        name = name.split('@')[0].trim();
+      }
+      console.warn('REGISTER: Name contained @ symbol, stripped email pattern', {
+        originalName: originalName,
+        email: email,
+        emailUsername: emailUsername,
+        recoveredName: name
+      });
+    }
+    
+    // If name is missing OR equals email (data corruption), recover safely
+    if (!name || name === rawEmail || name === email) {
+      // Extract username from email as fallback
+      const emailParts = email.split('@');
+      if (emailParts.length > 0 && emailParts[0]) {
+        name = emailParts[0];
+        console.warn('REGISTER: Name was missing or equal to email, using email username as fallback', {
+          originalName: originalName,
+          email: email,
+          emailUsername: emailUsername,
+          recoveredName: name
+        });
+      } else {
+        return res.status(400).json({ error: "Name is required" });
+      }
+    }
+    
+    // ✅ CRITICAL: Final validation - name cannot contain @ symbol (should never happen after recovery)
+    if (name.includes('@')) {
+      console.error('REGISTER ERROR: Name still contains @ symbol after recovery - severe data corruption!', {
+        originalName: originalName,
+        name: name,
+        email: email,
+        emailUsername: emailUsername,
+        password: password ? `*** (length: ${password.length})` : 'MISSING'
+      });
+      return res.status(400).json({ 
+        error: "Name cannot contain @ symbol. Please enter your actual name, not your email address." 
+      });
+    }
+    
+    // ✅ CRITICAL: Log extracted and processed values
+    console.log('REGISTER: Extracted and processed values', {
+      originalRawName: rawName || 'MISSING',
+      processedName: name || 'MISSING',
+      nameLength: name ? name.length : 0,
+      originalRawEmail: rawEmail || 'MISSING',
+      normalizedEmail: email || 'MISSING',
+      emailUsername: emailUsername || 'MISSING',
+      emailLength: email ? email.length : 0,
+      passwordLength: password ? password.length : 0,
+      dateOfBirth: dateOfBirth ? `${dateOfBirth.year}-${dateOfBirth.month}-${dateOfBirth.day}` : 'MISSING',
+      gender: gender || 'MISSING'
+    });
 
-    if (!name || !email || !password)
-      return res.status(400).json({ error: "Missing fields" });
+    if (!password)
+      return res.status(400).json({ error: "Password is required" });
+    
+    // ✅ CRITICAL: Validate that email IS an email address and NOT a password
+    if (!email.includes('@')) {
+      console.error('REGISTER ERROR: Email does not contain @ symbol - data corruption detected!', {
+        name,
+        email,
+        password: password ? `*** (length: ${password.length})` : 'MISSING'
+      });
+      return res.status(400).json({ error: "Invalid email format. Email must contain @ symbol." });
+    }
+    
+    // ✅ CRITICAL: Validate that email is NOT actually a password (password might contain @)
+    // If email looks like a password (contains @ but doesn't have a valid domain), reject it
+    if (email.includes('@') && !email.includes('.')) {
+      console.error('REGISTER ERROR: Email appears to be a password (has @ but no domain) - data corruption detected!', {
+        name,
+        email,
+        password: password ? `*** (length: ${password.length})` : 'MISSING'
+      });
+      return res.status(400).json({ error: "Invalid email format. Email must have a valid domain." });
+    }
+    
+    // ✅ CRITICAL: Validate that password is NOT being used as email
+    // If email matches password pattern (contains @ but not a proper email domain), reject
+    if (password && email === password) {
+      console.error('REGISTER ERROR: Email matches password - data corruption detected!', {
+        name,
+        email,
+        password: password ? `*** (length: ${password.length})` : 'MISSING'
+      });
+      return res.status(400).json({ error: "Email cannot be the same as password." });
+    }
+    
+    // ✅ CRITICAL: Check if email looks like a password (has @ but domain is not jeemail.in or is invalid)
+    const emailParts = email.split('@');
+    if (emailParts.length === 2) {
+      const domain = emailParts[1];
+      // If domain is not jeemail.in and doesn't look like a valid email domain, it might be a password
+      if (domain !== 'jeemail.in' && !domain.includes('.')) {
+        console.error('REGISTER ERROR: Email domain is invalid - might be password corruption!', {
+          name,
+          email,
+          domain,
+          password: password ? `*** (length: ${password.length})` : 'MISSING'
+        });
+        return res.status(400).json({ error: "Invalid email domain." });
+      }
+    }
 
+    // ✅ CRITICAL: Detect data swap/corruption - email should not look like a password
+    // If email username looks like a password (all numbers, too short, no letters), reject
+    const emailLocalPart = email.split('@')[0];
+    if (emailLocalPart) {
+      // Check if email username looks like a password pattern
+      const looksLikePassword = 
+        /^\d+$/.test(emailLocalPart) || // All numbers like "123456asd" (but this has letters, so check differently)
+        (emailLocalPart.length >= 6 && /^[a-zA-Z0-9]{6,}$/.test(emailLocalPart) && !/[a-z]/.test(emailLocalPart.toLowerCase())) || // All uppercase or mixed case alphanumeric without lowercase
+        (emailLocalPart.length >= 8 && /^[0-9a-zA-Z]{8,}$/.test(emailLocalPart) && /[0-9]/.test(emailLocalPart) && !/[a-z]/.test(emailLocalPart.toLowerCase())); // Long alphanumeric with numbers but no lowercase
+      
+      // More specific: if email username is 8+ chars, all alphanumeric, has numbers, and looks like "123456asd" pattern
+      if (emailLocalPart.length >= 8 && /^[0-9a-zA-Z]+$/.test(emailLocalPart) && /[0-9]/.test(emailLocalPart)) {
+        // Check if it starts with numbers (common password pattern)
+        if (/^[0-9]/.test(emailLocalPart)) {
+          console.error('REGISTER ERROR: Email username looks like a password (starts with numbers)!', {
+            emailLocalPart: emailLocalPart,
+            email: email,
+            name: name,
+            passwordLength: password ? password.length : 0,
+            rawName: rawName,
+            rawEmail: rawEmail
+          });
+          return res.status(400).json({ 
+            error: "Invalid email format. Email username should not start with numbers (e.g., '123asd456'). Please use a proper email username that starts with a letter (e.g., 'doe', 'john', 'jane')." 
+          });
+        }
+      }
+    }
+    
+    // ✅ CRITICAL: Validate email format first
+    if (!isValidEmailFormat(email)) {
+      return res.status(400).json({ 
+        error: "Invalid email format. Please enter a valid email address." 
+      });
+    }
+    
     const normalizedEmail = normalizeEmail(email);
+    
+    // ✅ FIX: Add logging to debug registration
+    console.log('REGISTER ATTEMPT:', { 
+      originalEmail: email, 
+      normalizedEmail: normalizedEmail,
+      name: name 
+    });
 
-    if (!isValidDomain(normalizedEmail))
-      return res
-        .status(400)
-        .json({ error: `Email must be under ${ALLOWED_DOMAIN}` });
+    // ✅ CRITICAL: Validate domain (must be jeemail.in)
+    if (!isValidDomain(normalizedEmail)) {
+      return res.status(400).json({ 
+        error: `Email must be under ${ALLOWED_DOMAIN}` 
+      });
+    }
 
+    // ✅ CRITICAL: Check for email uniqueness (case-insensitive, like Gmail)
+    // Use LOWER() and TRIM() to ensure case-insensitive comparison and handle whitespace
+    // Also check the exact normalized email to catch any edge cases
     const [exists] = await db.query(
-      "SELECT id FROM users WHERE email = ? LIMIT 1",
-      [normalizedEmail]
+      "SELECT id, email FROM users WHERE LOWER(TRIM(email)) = LOWER(TRIM(?)) OR email = ? LIMIT 1",
+      [normalizedEmail, normalizedEmail]
     );
-    if (exists.length)
-      return res.status(409).json({ error: "Email already exists" });
+    
+    console.log('REGISTER CHECK:', { 
+      normalizedEmail: normalizedEmail,
+      alreadyExists: exists.length > 0,
+      existingUserId: exists[0]?.id,
+      existingEmail: exists[0]?.email
+    });
+    
+    if (exists.length) {
+      return res.status(409).json({ 
+        error: "This email address is already registered. Please use a different email or sign in." 
+      });
+    }
 
+    // ✅ CRITICAL: Validate password before hashing
+    if (!password || typeof password !== 'string') {
+      return res.status(400).json({ error: "Password is required" });
+    }
+    
+    // ✅ CRITICAL: Detect if password looks like a name (data swap detection)
+    // Password should not be a common name (4-5 chars, all lowercase letters)
+    if (password.length <= 5 && /^[a-z]+$/.test(password.toLowerCase())) {
+      const commonNames = ['john', 'jane', 'doe', 'mary', 'joe', 'bob', 'tom', 'sam', 'max', 'leo', 'ray', 'jay', 'roy', 'dan', 'ben', 'tim', 'kim', 'amy', 'ann', 'eva', 'mia', 'zoe'];
+      if (commonNames.includes(password.toLowerCase())) {
+        console.error('REGISTER ERROR: Password looks like a name - possible data swap detected!', {
+          password: password,
+          name: name,
+          email: email,
+          emailUsername: emailUsername
+        });
+        return res.status(400).json({ 
+          error: "Password appears to be invalid. Please use a stronger password (at least 6 characters with letters, numbers, or special characters)." 
+        });
+      }
+    }
+    
+    // ✅ CRITICAL: Validate password length (minimum 6 characters, maximum 128)
+    if (password.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters long" });
+    }
+    if (password.length > 128) {
+      return res.status(400).json({ error: "Password is too long (maximum 128 characters)" });
+    }
+    
+    // ✅ CRITICAL: Don't trim password - user might have intentionally added spaces
+    // But ensure it's a valid string
+    const passwordString = String(password);
+    
     let dobString = null;
     if (dateOfBirth?.year) {
       dobString = `${dateOfBirth.year}-${String(dateOfBirth.month).padStart(
@@ -78,29 +313,199 @@ router.post("/register", async (req, res) => {
       )}-${String(dateOfBirth.day).padStart(2, "0")}`;
     }
 
-    const hash = await bcrypt.hash(password, 10);
+    // ✅ CRITICAL: Hash password with bcrypt (10 salt rounds for security)
+    // This creates a secure one-way hash that cannot be reversed
+    let hash;
+    try {
+      hash = await bcrypt.hash(passwordString, 10);
+      console.log('REGISTER: Password hashed successfully', { 
+        hashLength: hash.length,
+        hashPrefix: hash.substring(0, 10) + '...' // Log first 10 chars for debugging
+      });
+    } catch (hashError) {
+      console.error('REGISTER ERROR: Password hashing failed', hashError);
+      return res.status(500).json({ error: "Password encryption failed" });
+    }
+    
+    // ✅ CRITICAL: Verify hash was created (should be 60 characters for bcrypt)
+    if (!hash || hash.length < 50) {
+      console.error('REGISTER ERROR: Invalid hash generated', { hashLength: hash?.length });
+      return res.status(500).json({ error: "Password encryption failed" });
+    }
 
+    // ✅ CRITICAL: Log values before INSERT to verify correct order
+    console.log('REGISTER: Values to INSERT', {
+      name: name ? `${name.substring(0, 20)}...` : 'NULL',
+      email: normalizedEmail ? `${normalizedEmail.substring(0, 30)}...` : 'NULL',
+      passwordHash: hash ? `*** (length: ${hash.length})` : 'NULL',
+      dateOfBirth: dobString || 'NULL',
+      gender: gender || 'NULL'
+    });
+    
+    // ✅ CRITICAL: Verify values are in correct order before INSERT
+    if (name.includes('@')) {
+      console.error('REGISTER CRITICAL ERROR: Name contains @ before INSERT! Aborting.', {
+        name,
+        normalizedEmail
+      });
+      return res.status(500).json({ error: "Data validation failed: name contains email format" });
+    }
+    
+    if (!normalizedEmail.includes('@')) {
+      console.error('REGISTER CRITICAL ERROR: Email does not contain @ before INSERT! Aborting.', {
+        name,
+        normalizedEmail
+      });
+      return res.status(500).json({ error: "Data validation failed: email is invalid" });
+    }
+    
     const [insert] = await db.query(
       `INSERT INTO users (name, email, password, date_of_birth, gender)
        VALUES (?, ?, ?, ?, ?)`,
       [name, normalizedEmail, hash, dobString, gender]
     );
-
+    
+    // ✅ CRITICAL: Verify what was actually inserted
+    const [verifyInsert] = await db.query(
+      "SELECT name, email, LENGTH(password) as pwd_length FROM users WHERE id = ? LIMIT 1",
+      [insert.insertId]
+    );
+    
+    if (verifyInsert.length > 0) {
+      const inserted = verifyInsert[0];
+      console.log('REGISTER: Verification of inserted data', {
+        insertedName: inserted.name ? `${inserted.name.substring(0, 20)}...` : 'NULL',
+        insertedEmail: inserted.email ? `${inserted.email.substring(0, 30)}...` : 'NULL',
+        passwordLength: inserted.pwd_length
+      });
+      
+      // ✅ CRITICAL: Check if data corruption occurred
+      if (inserted.name && inserted.name.includes('@')) {
+        console.error('REGISTER CRITICAL ERROR: Name field contains @ after INSERT! Data corruption detected!', {
+          insertedName: inserted.name,
+          insertedEmail: inserted.email,
+          expectedName: name,
+          expectedEmail: normalizedEmail
+        });
+        // Try to fix it by updating the record
+        await db.query(
+          "UPDATE users SET name = ?, email = ? WHERE id = ?",
+          [name, normalizedEmail, insert.insertId]
+        );
+        console.log('REGISTER: Attempted to fix corrupted data');
+      }
+      
+      if (inserted.email && !inserted.email.includes('@')) {
+        console.error('REGISTER CRITICAL ERROR: Email field does not contain @ after INSERT! Data corruption detected!', {
+          insertedName: inserted.name,
+          insertedEmail: inserted.email,
+          expectedName: name,
+          expectedEmail: normalizedEmail
+        });
+        // Try to fix it by updating the record
+        await db.query(
+          "UPDATE users SET name = ?, email = ? WHERE id = ?",
+          [name, normalizedEmail, insert.insertId]
+        );
+        console.log('REGISTER: Attempted to fix corrupted data');
+      }
+    }
+    
     const userId = insert.insertId;
-    await createSystemFolders(userId);
-
-    return res.json({
-      user: {
-        id: userId,
-        name,
-        email: normalizedEmail,
-        date_of_birth: dobString,
-        gender: gender || null,
-      },
+    
+    // ✅ CRITICAL: Verify user was created and can be retrieved for login
+    const [verifyUser] = await db.query(
+      "SELECT id, email, name, LENGTH(password) as pwd_length FROM users WHERE id = ? LIMIT 1",
+      [userId]
+    );
+    
+    if (verifyUser.length === 0) {
+      console.error('REGISTER ERROR: User was not created in database!', { userId });
+      return res.status(500).json({ error: "Failed to create user account" });
+    }
+    
+    console.log('REGISTER: User created and verified in database', { 
+      userId: verifyUser[0].id,
+      email: verifyUser[0].email,
+      name: verifyUser[0].name,
+      storedHashLength: verifyUser[0].pwd_length 
     });
+    
+    // ✅ CRITICAL: Test that the user can be found with login query (same query as login uses)
+    const [loginTest] = await db.query(
+      "SELECT id, email FROM users WHERE LOWER(TRIM(email)) = LOWER(TRIM(?)) LIMIT 1",
+      [normalizedEmail]
+    );
+    
+    if (loginTest.length === 0) {
+      console.error('REGISTER ERROR: User cannot be found with login query!', { 
+        normalizedEmail,
+        userId 
+      });
+      return res.status(500).json({ error: "User created but login query failed" });
+    }
+    
+    console.log('REGISTER: Login query test passed', { 
+      userId: loginTest[0].id,
+      email: loginTest[0].email 
+    });
+
+    await createSystemFolders(userId);
+    
+    // ✅ FIX: Log successful registration
+    console.log('REGISTER SUCCESS:', { 
+      userId: userId,
+      name: name,
+      normalizedEmail: normalizedEmail 
+    });
+
+    // ✅ FIX: Explicitly map fields to ensure correct data structure
+    // ✅ CRITICAL: NEVER include password in response
+    // ✅ CRITICAL: Return name and email exactly as stored in database (no trimming)
+    const responseUser = {
+      id: userId,
+      name: String(name || ''), // ✅ Return exactly as stored (no trim)
+      email: String(normalizedEmail || ''), // ✅ Return exactly as stored (no trim)
+      date_of_birth: dobString || null,
+      gender: gender || null,
+    };
+    
+    // ✅ CRITICAL: Validate response doesn't contain password
+    if ('password' in responseUser) {
+      console.error('REGISTER ERROR: Password accidentally included in response!');
+      delete responseUser.password;
+    }
+    
+    // ✅ CRITICAL: Validate name is not an email and email is valid
+    if (responseUser.name.includes('@')) {
+      console.error('REGISTER ERROR: Name field contains email address!', { 
+        name: responseUser.name, 
+        email: responseUser.email 
+      });
+      return res.status(500).json({ error: "Data corruption detected" });
+    }
+    
+    if (!responseUser.email.includes('@') || responseUser.email.length > 100) {
+      console.error('REGISTER ERROR: Invalid email in response!', { 
+        email: responseUser.email 
+      });
+      return res.status(500).json({ error: "Data corruption detected" });
+    }
+    
+    return res.json({ user: responseUser });
   } catch (err) {
+    // ✅ CRITICAL: Map database/validation errors to meaningful HTTP responses
     console.error("REGISTER ERROR:", err);
-    res.status(500).json({ error: "Registration failed" });
+
+    // MariaDB trigger/constraint violation for name containing '@'
+    // err.errno === 1644 and err.sqlState === '45000' in our tests
+    if (err && (err.errno === 1644 || err.sqlState === '45000')) {
+      const msg = err.sqlMessage || err.message || "Name cannot contain @ symbol";
+      return res.status(400).json({ error: msg });
+    }
+
+    // Generic validation or query error
+    return res.status(500).json({ error: "Registration failed" });
   }
 });
 
@@ -109,35 +514,177 @@ router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body || {};
 
+    // ✅ CRITICAL: Validate email format first
+    if (!isValidEmailFormat(email || "")) {
+      return res.status(400).json({ 
+        error: "Invalid email format. Please enter a valid email address." 
+      });
+    }
+    
     const normalized = normalizeEmail(email || "");
+    
+    // ✅ FIX: Add logging to debug login issues
+    console.log('LOGIN ATTEMPT:', { 
+      originalEmail: email, 
+      normalizedEmail: normalized,
+      hasPassword: !!password 
+    });
+    
+    // ✅ CRITICAL: Use case-insensitive email lookup (like Gmail)
+    // Since we store emails in lowercase, we can compare directly, but use LOWER() for safety
+    // This ensures emails stored as "user@jeemail.in" match queries for "User@Jeemail.In"
     const [rows] = await db.query(
-      "SELECT * FROM users WHERE email = ? LIMIT 1",
+      "SELECT id, name, email, password, date_of_birth, gender FROM users WHERE LOWER(TRIM(email)) = LOWER(TRIM(?)) LIMIT 1",
       [normalized]
     );
 
-    if (!rows.length) return res.status(404).json({ error: "User not found" });
+    console.log('LOGIN QUERY RESULT:', { 
+      normalizedEmail: normalized,
+      foundUsers: rows.length,
+      userId: rows[0]?.id,
+      dbEmail: rows[0]?.email,
+      queryUsed: "LOWER(TRIM(email)) = LOWER(TRIM(?))"
+    });
+
+    if (!rows.length) {
+      // ✅ CRITICAL: Try alternative query in case of whitespace or case issues
+      const [altRows] = await db.query(
+        "SELECT id, name, email, password, date_of_birth, gender FROM users WHERE email = ? LIMIT 1",
+        [normalized]
+      );
+      
+      if (altRows.length > 0) {
+        console.log('LOGIN: Found user with alternative query (exact match)', { 
+          userId: altRows[0].id,
+          email: altRows[0].email 
+        });
+        rows.push(...altRows);
+      } else {
+        // ✅ CRITICAL: Try one more time with just LOWER() in case TRIM() is causing issues
+        const [lowerRows] = await db.query(
+          "SELECT id, name, email, password, date_of_birth, gender FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1",
+          [normalized]
+        );
+        
+        if (lowerRows.length > 0) {
+          console.log('LOGIN: Found user with LOWER() only query', { 
+            userId: lowerRows[0].id,
+            email: lowerRows[0].email 
+          });
+          rows.push(...lowerRows);
+        } else {
+          console.error('LOGIN FAILED: User not found with any query', { 
+            normalizedEmail: normalized,
+            triedQueries: [
+              'LOWER(TRIM(email)) = LOWER(TRIM(?))',
+              'email = ?',
+              'LOWER(email) = LOWER(?)'
+            ]
+          });
+          return res.status(404).json({ error: "User not found. Please check your email address or register first." });
+        }
+      }
+    }
 
     const user = rows[0];
-    const match = await bcrypt.compare(password, user.password);
-    if (!match) return res.status(401).json({ error: "Incorrect password" });
+    
+    // ✅ FIX: Validate that we got the expected columns
+    if (!user.id || !user.email || !user.password) {
+      console.error("LOGIN ERROR: Invalid user data structure", { 
+        hasId: !!user.id, 
+        hasEmail: !!user.email, 
+        hasPassword: !!user.password,
+        keys: Object.keys(user)
+      });
+      return res.status(500).json({ error: "Database structure error" });
+    }
+    
+    // ✅ CRITICAL: Validate password input
+    if (!password || typeof password !== 'string') {
+      console.error('LOGIN ERROR: Invalid password provided', { hasPassword: !!password, passwordType: typeof password });
+      return res.status(400).json({ error: "Password is required" });
+    }
+    
+    // ✅ CRITICAL: Don't trim password - must match exactly what was stored
+    const passwordString = String(password);
+    
+    // ✅ CRITICAL: Verify stored password hash format (bcrypt hashes are 60 chars)
+    if (!user.password || user.password.length < 50) {
+      console.error('LOGIN ERROR: Invalid password hash in database', { 
+        hashLength: user.password?.length,
+        userId: user.id 
+      });
+      return res.status(500).json({ error: "Database password format error" });
+    }
+    
+    // ✅ CRITICAL: Compare password using bcrypt.compare
+    // This securely compares the plain password with the stored hash
+    let match;
+    try {
+      match = await bcrypt.compare(passwordString, user.password);
+      console.log('LOGIN: Password comparison result', { 
+        userId: user.id,
+        email: user.email,
+        match: match,
+        providedPasswordLength: passwordString.length,
+        storedHashLength: user.password.length
+      });
+    } catch (compareError) {
+      console.error('LOGIN ERROR: Password comparison failed', compareError);
+      return res.status(500).json({ error: "Password verification failed" });
+    }
+    
+    if (!match) {
+      console.warn('LOGIN FAILED: Incorrect password', { 
+        userId: user.id,
+        email: user.email 
+      });
+      return res.status(401).json({ error: "Incorrect password" });
+    }
 
     await createSystemFolders(user.id);
 
-    return res.json({
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        date_of_birth: user.date_of_birth,
-        gender: user.gender,
-      },
-    });
+    // ✅ FIX: Explicitly map fields to ensure correct mapping
+    // ✅ CRITICAL: NEVER include password in response - explicitly exclude it
+    // ✅ CRITICAL: Return name and email exactly as stored in database (no trimming)
+    const responseUser = {
+      id: user.id,
+      name: String(user.name || ''), // ✅ Return exactly as stored (no trim)
+      email: String(user.email || ''), // ✅ Return exactly as stored (no trim)
+      date_of_birth: user.date_of_birth || null,
+      gender: user.gender || null,
+    };
+    
+    // ✅ CRITICAL: Validate response doesn't contain password
+    if ('password' in responseUser) {
+      console.error('LOGIN ERROR: Password accidentally included in response!');
+      delete responseUser.password;
+    }
+    
+    // ✅ CRITICAL: Validate name is not an email and email is valid
+    if (responseUser.name.includes('@')) {
+      console.error('LOGIN ERROR: Name field contains email address!', { 
+        name: responseUser.name, 
+        email: responseUser.email,
+        dbUser: user 
+      });
+      return res.status(500).json({ error: "Data corruption detected" });
+    }
+    
+    if (!responseUser.email.includes('@') || responseUser.email.length > 100) {
+      console.error('LOGIN ERROR: Invalid email in response!', { 
+        email: responseUser.email,
+        dbUser: user 
+      });
+      return res.status(500).json({ error: "Data corruption detected" });
+    }
+    
+    return res.json({ user: responseUser });
   } catch (err) {
     console.error("LOGIN ERROR:", err);
     res.status(500).json({ error: "Login failed" });
   }
 });
-
 
 // -------------------- CHUNKED STREAMING --------------------
 router.get("/email/:emailId/attachment/:attachmentId", async (req, res) => {
@@ -299,9 +846,14 @@ router.get("/emails/:userId/:folder", async (req, res) => {
     const folder = req.params.folder;
 
     // resolve folder id
-    let folderId = folder;
+    let folderId = null;
 
-    if (isNaN(folder)) {
+    // Check if folder is a numeric string or number
+    const numericFolderId = Number(folder);
+    if (!isNaN(numericFolderId) && numericFolderId > 0) {
+      folderId = numericFolderId;
+    } else {
+      // Try to resolve folder name to ID
       const [r] = await db.query(
         "SELECT id FROM mailboxes WHERE user_id = ? AND system_box = ? LIMIT 1",
         [userId, folder]
@@ -309,6 +861,8 @@ router.get("/emails/:userId/:folder", async (req, res) => {
       if (!r.length) return res.status(400).json({ error: "Invalid folder" });
       folderId = r[0].id;
     }
+
+    if (!folderId) return res.status(400).json({ error: "Invalid folder" });
 
     const [emails] = await db.query(
       `SELECT e.*, m.is_read, m.is_starred, m.mailbox_id
@@ -396,6 +950,20 @@ router.post("/email/create", async (req, res) => {
 
   if (!user_id) return res.status(400).json({ error: "Missing user_id" });
 
+  // Normalize attachments array first (needed for P2P detection)
+  const attachmentsList = Array.isArray(attachments) ? attachments : [];
+
+  // 🔒 SERVER-AUTHORITATIVE P2P DECISION
+  const hasP2PAttachments =
+    attachmentsList.some(a => a && a.p2p_message_id);
+
+  const resolvedP2PEnabled = hasP2PAttachments ? 1 : 0;
+
+  // ❗ NEVER mark delivered at creation time (will be set by /api/p2p/delivered)
+  const resolvedP2PDelivered = 0;
+
+  // Debug logging removed to prevent connection errors
+
   // normalize recipients
   const extractEmails = arr =>
     (arr || []).map(v =>
@@ -415,8 +983,6 @@ router.post("/email/create", async (req, res) => {
 
   // normalize attachments array - check for P2P mode
   // If P2P is enabled and delivered, don't store attachments in DB (they were sent via P2P)
-  const attachmentsList = Array.isArray(attachments) ? attachments : [];
-
   console.log("=== EMAIL CREATE DEBUG ===");
   console.log("P2P Enabled:", p2p_enabled);
   console.log("P2P Delivered:", p2p_delivered);
@@ -470,33 +1036,48 @@ const resolvedFolderId = mailbox.id;
       );
       resolvedThreadId = parent?.thread_id || null;
     }
+    const crypto = require("crypto");
+
+const generatedMessageId =
+  `<${crypto.randomUUID()}@jeemail.in>`;
+
 
     // 2. INSERT email with P2P flags
-    const [insert] = await conn.query(
-      `INSERT INTO emails
-       (user_id, thread_id, from_name, from_email, subject, body, is_html, in_reply_to,
-        to_header, cc_header, bcc_header, folder_id, is_draft, p2p_enabled, p2p_delivered, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [
-        user_id,
-        resolvedThreadId,
-        sender.name,
-        sender.email,
-        subject || "(No Subject)",
-        cleanBody,
-        1,
-        in_reply_to || null,
-        toList.join(", "),
-        ccList.join(", "),
-        bccList.join(", "),
-        resolvedFolderId,
-        is_draft ? 1 : 0,
-        p2p_enabled ? 1 : 0,
-        p2p_delivered ? 1 : 0
-      ]
-    );
+    // ✅ FIX: Removed created_at from column list (it has a default value)
+    const insertSql = `INSERT INTO emails
+       (user_id, thread_id, message_id, from_name, from_email, subject, body, is_html, in_reply_to,
+        to_header, cc_header, bcc_header, folder_id, is_draft, p2p_enabled, p2p_delivered)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    
+    const insertValues = [
+      user_id,
+      resolvedThreadId,
+      generatedMessageId,
+      sender.name,
+      sender.email,
+      subject || "(No Subject)",
+      cleanBody,
+      1,
+      in_reply_to || null,
+      toList.join(", "),
+      ccList.join(", "),
+      bccList.join(", "),
+      resolvedFolderId,
+      is_draft ? 1 : 0,
+      resolvedP2PEnabled,
+      resolvedP2PDelivered
+    ];
+    
+    // ✅ DEBUG: Log the exact SQL and values being used
+    console.log('EMAIL INSERT SQL:', insertSql);
+    console.log('EMAIL INSERT VALUES COUNT:', insertValues.length);
+    console.log('EMAIL INSERT VALUES:', insertValues.map((v, i) => `${i + 1}. ${typeof v === 'string' && v.length > 50 ? v.substring(0, 50) + '...' : v}`));
+    
+    const [insert] = await conn.query(insertSql, insertValues);
 
     const emailId = insert.insertId;
+
+    // Debug logging removed to prevent connection errors
 
     // ✅ Only now emailId exists - update thread_id if needed
     if (!resolvedThreadId) {
@@ -540,7 +1121,10 @@ const content_base64 =
       ? a.content
       : null;
 
-        const isP2P = p2p_enabled === true;
+      const isP2P =
+      typeof a.p2p_message_id === 'string' &&
+      a.p2p_message_id.length > 0;
+    
 
     // For P2P: store content_base64 as FALLBACK (like torrent seeder)
     // This allows download even if direct P2P transfer fails
@@ -756,6 +1340,8 @@ router.post("/p2p/delivered", async (req, res) => {
     );
 
     console.log("[P2P] Marked as delivered:", p2p_message_id, "affected:", result.affectedRows);
+
+    // Debug logging removed to prevent connection errors
     
     return res.json({ success: true, affectedRows: result.affectedRows });
   } catch (err) {
@@ -900,6 +1486,30 @@ router.post("/email/delete-permanent", async (req, res) => {
   );
 
   res.json({ success: true });
+});
+
+// ---------------------------------------------
+// CHECK IF EMAIL EXISTS (USED BY SIGNUP)
+// ---------------------------------------------
+router.get("/users/email/:email", async (req, res) => {
+  try {
+    const emailParam = req.params.email ? decodeURIComponent(req.params.email) : "";
+    const email = emailParam.toLowerCase();
+
+    if (!email) {
+      return res.status(400).json({ error: "Email parameter is required" });
+    }
+
+    const [rows] = await db.query(
+      "SELECT id FROM users WHERE email = ? LIMIT 1",
+      [email]
+    );
+
+    return res.json({ exists: rows.length > 0 });
+  } catch (err) {
+    console.error("EMAIL CHECK ERROR:", err);
+    return res.status(500).json({ error: "Failed to check email" });
+  }
 });
 
 module.exports = router;

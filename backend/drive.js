@@ -317,6 +317,48 @@ router.get("/recent", async (req, res) => {
 });
 
 /* ===============================
+   GET TRASH FILES
+   GET /trash?user_id=1
+================================ */
+router.get("/trash", async (req, res) => {
+  try {
+    const userId = req.query.user_id;
+
+    if (!userId) return res.status(400).json({ error: "user_id is required" });
+
+    const [rows] = await db.query(
+      `SELECT id, filename, filepath, size, is_starred, folder_id, created_at, user_id, deleted_at,
+       DATEDIFF(DATE_ADD(deleted_at, INTERVAL 30 DAY), NOW()) as days_until_delete
+       FROM drive_files
+       WHERE user_id = ? AND is_deleted = 1
+       ORDER BY deleted_at DESC`,
+      [userId]
+    );
+
+    const files = (rows || []).map(f => ({
+      id: f.id,
+      name: f.filename,
+      filename: f.filename,
+      user_id: f.user_id || userId,
+      filepath: f.filepath,
+      size_bytes: f.size,
+      file_type: (f.filename || "").split('.').pop(),
+      folder_id: f.folder_id,
+      is_starred: !!f.is_starred,
+      created_at: f.created_at,
+      deleted_at: f.deleted_at,
+      days_until_delete: f.days_until_delete || 0,
+      updated_at: f.created_at
+    }));
+
+    res.json({ success: true, files });
+  } catch (err) {
+    console.error("TRASH GET ERROR:", err);
+    res.status(500).json({ error: "Failed to fetch trash files" });
+  }
+});
+
+/* ===============================
    GET STARRED FILES
    GET /starred?user_id=1
 ================================ */

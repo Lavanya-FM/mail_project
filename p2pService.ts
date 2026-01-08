@@ -334,55 +334,11 @@ resumeTransfer(messageId: string) {
   }
 
 
-async resumeReceive(messageId: string, senderEmail?: string) {
-  console.log('[P2P] Resume receive requested for', messageId, 'senderEmail:', senderEmail);
-  
-  // First check if file is already complete
-  const hasFile = await this.hasReceivedFile(messageId);
-  if (hasFile) {
-    console.log('[P2P] File already complete for', messageId);
-    // Ensure UI is updated to 100%
-    window.dispatchEvent(new CustomEvent('p2p-receiver-progress', {
-      detail: { messageId, percentage: 100, received: 100, total: 100, status: 'complete' }
-    }));
-    window.dispatchEvent(new CustomEvent('p2p-file-ready', { detail: { messageId, fileName: (await getMeta(messageId))?.fileName } }));
-    return;
-  }
-  
-  // ✅ FIX: Try multiple sources for sender email
-  let sender = senderEmail 
-    || this.transferSenders.get(messageId) 
-    || localStorage.getItem(`p2p-sender-${messageId}`);
-  
-  // If we have a sender, store it for future use
-  if (sender && !this.transferSenders.has(messageId)) {
-    this.transferSenders.set(messageId, sender);
-    localStorage.setItem(`p2p-sender-${messageId}`, sender);
-  }
-  
+async resumeReceive(messageId: string) {
+  console.log('[P2P] Resume receive requested for', messageId);
   const meta = await getMeta(messageId);
   if (!meta) {
-    console.warn('[P2P] No metadata found for', messageId, '- requesting from sender');
-    
-    if (sender && this.isPeerOnline(sender)) {
-      // Request metadata by sending a resume-request
-      this.send({
-        type: 'resume-request',
-        to: sender,
-        from: this.email,
-        messageId: messageId,
-        requestType: 'metadata'
-      });
-      console.log('[P2P] Requested metadata for', messageId, 'from', sender);
-    } else {
-      console.warn('[P2P] Cannot request metadata - sender offline or unknown:', sender);
-      // Don't return early - try to continue with missing chunks request
-    }
-    // Continue to check for missing chunks even if metadata is missing
-  }
-  
-  // If we still don't have metadata, we can't proceed
-  if (!meta) {
+    console.warn('[P2P] No metadata found for', messageId);
     return;
   }
 
@@ -396,17 +352,12 @@ async resumeReceive(messageId: string, senderEmail?: string) {
   // 🔴 HARD STOP
   if (missing.length === 0) {
     console.log('[P2P] All chunks already received for', messageId);
-    // Try to assemble the file
-    const rt = this.receiverTransfers.get(messageId);
-    if (rt) {
-      await this.assembleFile(messageId, rt.fileName, rt.mimeType);
-    }
     return;
   }
 
-  // ✅ FIX: Ensure we have sender before requesting missing chunks
+  const sender = this.transferSenders.get(messageId) || localStorage.getItem(`p2p-sender-${messageId}`);
   if (!sender) {
-    console.warn('[P2P] Cannot request missing chunks - sender unknown for', messageId);
+    console.warn('[P2P] No sender found for', messageId);
     return;
   }
 
@@ -633,12 +584,6 @@ private markReceiverPaused(messageId: string, reason: StopReason) {
         
           console.log('[P2P] Offer received:', messageId, 'from', from);
         
-          // ✅ FIX: Store sender for this messageId
-          if (from && messageId) {
-            this.transferSenders.set(messageId, from);
-            localStorage.setItem(`p2p-sender-${messageId}`, from);
-          }
-        
           // 1️⃣ PREPARE RECEIVER STATE FIRST
           this.receiverTransfers.set(messageId!, {
             messageId: messageId!,
@@ -755,23 +700,6 @@ case 'p2p-offer-ack': {
             from: this.email,
             publicKey: Array.from(new Uint8Array(pub))
           });
-        }
-
-        // ✅ NEW: Auto-resume any pending receives for this peer
-        if (peerEmail) {
-          for (const [messageId, senderEmail] of this.transferSenders.entries()) {
-            if (senderEmail === peerEmail) {
-              const rt = this.receiverTransfers.get(messageId);
-              // Only auto-resume if not already complete
-              if (rt && rt.status !== 'complete') {
-                console.log('[P2P] Peer came online, auto-resuming receive for', messageId, 'from', peerEmail);
-                // Fire and forget – resume on background
-                this.resumeReceive(messageId, peerEmail).catch(err => {
-                  console.warn('[P2P] Auto-resume failed for', messageId, err);
-                });
-              }
-            }
-          }
         }
 
         break;

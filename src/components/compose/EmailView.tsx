@@ -292,18 +292,16 @@ useEffect(() => {
       }
       
       // File not complete, try to resume
-      // ✅ FIX: Pass sender email from email's from_email field
-      const senderEmail = email?.from_email ? email.from_email.toLowerCase() : null;
-      console.log('[EmailView] Resuming P2P receive for', a.filename, 'sender:', senderEmail);
-      p2pService.resumeReceive(a.p2p_message_id, senderEmail);
+      console.log('[EmailView] Resuming P2P receive for', a.filename);
+      p2pService.resumeReceive(a.p2p_message_id);
       
       // Also check if sender is online and request chunks if needed
-      const storedSender = localStorage.getItem(`p2p-sender-${a.p2p_message_id}`) || senderEmail;
-      if (storedSender && p2pService.isPeerOnline(storedSender)) {
+      const sender = localStorage.getItem(`p2p-sender-${a.p2p_message_id}`);
+      if (sender && p2pService.isPeerOnline(sender)) {
         console.log('[EmailView] Sender is online, requesting missing chunks');
-        p2pService.resumeReceive(a.p2p_message_id, storedSender);
-      } else if (storedSender) {
-        console.log('[EmailView] Sender is offline:', storedSender);
+        p2pService.resumeReceive(a.p2p_message_id);
+      } else if (sender) {
+        console.log('[EmailView] Sender is offline:', sender);
       }
     }
   });

@@ -124,8 +124,12 @@ const AttachmentPreview = ({
               {getStatusText()}
             </span>
             {etaSeconds != null && etaSeconds > 0 && (
-              <span className="text-xs text-gray-400">
-                {etaSeconds < 60 ? `${etaSeconds}s` : `${Math.ceil(etaSeconds / 60)}m`}
+              <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
+                ETA: {etaSeconds < 60 
+                  ? `${etaSeconds}s` 
+                  : etaSeconds < 3600
+                    ? `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s`
+                    : `${Math.floor(etaSeconds / 3600)}h ${Math.floor((etaSeconds % 3600) / 60)}m`}
               </span>
             )}
           </div>
@@ -200,7 +204,6 @@ export interface ComposeUIProps {
   draftStatus?: 'idle' | 'saving' | 'saved';
 
   liveRecipientStatus: 'online' | 'offline' | 'unknown';
-  deliveryMode: 'EMAIL' | 'P2P';
 
   attachments: File[];
   isImageFile?: (f: File) => boolean;
@@ -261,7 +264,6 @@ export default function ComposeUI(props: ComposeUIProps) {
     setShowBcc,
     sending,
     liveRecipientStatus,
-    deliveryMode,
     attachments,
     removeAttachment,
     formatFileSize,
@@ -358,27 +360,23 @@ useEffect(() => {
   const senderProgress = (e: any) => {
     const pct = e.detail.progress;
     const fileName = e.detail.fileName;
-    // Show milestone toasts
-    if (pct === 25 || pct === 50 || pct === 75) {
-      p2pToast.sending(fileName, pct);
-    }
+    // REMOVED: Progress toasts (too many notifications)
+    // Progress is shown in the UI components
   };
 
   // Sender done handler  
   const senderDone = (e: any) => {
-    p2pToast.sent(e.detail.fileName);
+    // REMOVED: Toast (shown in ComposeEmail)
   };
 
   // Receiver handlers
   const receiverProgress = (e: any) => {
-    const pct = e.detail.percentage;
-    if (pct === 25 || pct === 50 || pct === 75) {
-      p2pToast.progress(e.detail.fileName, pct);
-    }
+    // REMOVED: Progress toasts (too many notifications)
   };
 
-  const receiverDone = (e: any) =>
-    p2pToast.delivered(e.detail.fileName);
+  const receiverDone = (e: any) => {
+    // REMOVED: Toast (shown in other components)
+  };
 
   const failed = (e: any) =>
     p2pToast.failed(e.detail.fileName, e.detail.reason);
@@ -478,6 +476,22 @@ useEffect(() => {
     }
   };
 
+  const hasActiveP2PTransfers = localP2PFiles.some(
+    f => f.status !== 'delivered' && f.progress < 100
+  );
+  
+  // Emit a single signal when all P2P transfers finish
+  useEffect(() => {
+    if (
+      localP2PFiles.length > 0 &&
+      localP2PFiles.every(f => f.status === 'delivered' || f.progress === 100)
+    ) {
+      window.dispatchEvent(
+        new CustomEvent('p2p-all-delivered')
+      );
+    }
+  }, [localP2PFiles]);
+  
   /* ------------------------------------------------------------------ */
   /* DERIVED STATE                                                      */
   /* ------------------------------------------------------------------ */
@@ -775,9 +789,9 @@ useEffect(() => {
           )}
 
           <button
-            disabled={sending || !to.trim()}
+            disabled={sending || !to.trim() || hasActiveP2PTransfers}
 onClick={() => {
-  if (deliveryMode === 'P2P') {
+  if (hasActiveP2PTransfers) {
     alert('Please wait until P2P transfer completes.');
     return;
   }
