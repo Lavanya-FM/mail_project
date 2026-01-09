@@ -1517,4 +1517,377 @@ router.get("/users/email/:email", async (req, res) => {
   }
 });
 
+// GET STORAGE QUOTA AND USAGE
+// GET /api/storage/quota?user_id=1
+router.get("/storage/quota", async (req, res) => {
+  try {
+    const userId = req.query.user_id;
+
+    if (!userId) {
+      return res.status(400).json({ error: "user_id is required" });
+    }
+
+    // Calculate used storage from drive_files
+    const [fileStats] = await db.query(
+      `SELECT 
+        COALESCE(SUM(size), 0) as used_bytes
+      FROM drive_files
+      WHERE user_id = ? 
+      AND (is_deleted = 0 OR is_deleted IS NULL)`,
+      [userId]
+    );
+
+    const usedBytes = Number(fileStats[0]?.used_bytes || 0);
+    
+    // Set quota to 1 GB (1073741824 bytes)
+    const quotaBytes = 1073741824; // 1 GB
+    const bonusBytes = 0;
+    const availableBytes = Math.max(0, quotaBytes - usedBytes);
+    const percentageUsed = quotaBytes > 0 ? Math.round((usedBytes / quotaBytes) * 100) : 0;
+
+    res.json({
+      user_id: Number(userId),
+      quota_bytes: quotaBytes,
+      used_bytes: usedBytes,
+      bonus_bytes: bonusBytes,
+      available_bytes: availableBytes,
+      percentage_used: percentageUsed
+    });
+  } catch (err) {
+    console.error("STORAGE QUOTA ERROR:", err);
+    return res.status(500).json({ error: "Failed to fetch storage quota" });
+  }
+});
+
+// GET STORAGE BREAKDOWN
+// GET /api/storage/breakdown?user_id=1
+router.get("/storage/breakdown", async (req, res) => {
+  try {
+    const userId = req.query.user_id;
+
+    if (!userId) {
+      return res.status(400).json({ error: "user_id is required" });
+    }
+
+    // Get breakdown by file type
+    const [typeStats] = await db.query(
+      `SELECT 
+        CASE 
+          WHEN filename LIKE '%.jpg' OR filename LIKE '%.jpeg' OR filename LIKE '%.png' OR filename LIKE '%.gif' OR filename LIKE '%.webp' OR filename LIKE '%.svg' THEN 'Images'
+          WHEN filename LIKE '%.mp4' OR filename LIKE '%.avi' OR filename LIKE '%.mov' OR filename LIKE '%.mkv' OR filename LIKE '%.webm' THEN 'Videos'
+          WHEN filename LIKE '%.pdf' OR filename LIKE '%.doc' OR filename LIKE '%.docx' OR filename LIKE '%.xls' OR filename LIKE '%.xlsx' OR filename LIKE '%.ppt' OR filename LIKE '%.pptx' OR filename LIKE '%.txt' THEN 'Documents'
+          WHEN filename LIKE '%.zip' OR filename LIKE '%.rar' OR filename LIKE '%.7z' OR filename LIKE '%.tar' OR filename LIKE '%.gz' THEN 'Archives'
+          ELSE 'Others'
+        END as type,
+        SUM(size) as size_bytes,
+        COUNT(*) as file_count
+      FROM drive_files
+      WHERE user_id = ? 
+      AND (is_deleted = 0 OR is_deleted IS NULL)
+      GROUP BY type
+      ORDER BY size_bytes DESC`,
+      [userId]
+    );
+
+    // Get total for percentage calculation
+    const totalSize = typeStats.reduce((sum, item) => sum + Number(item.size_bytes || 0), 0);
+
+    const byType = typeStats.map(item => {
+      const size = Number(item.size_bytes || 0);
+      const percentage = totalSize > 0 ? Number(((size / totalSize) * 100).toFixed(1)) : 0;
+      return {
+        type: item.type,
+        size_bytes: size,
+        file_count: Number(item.file_count || 0),
+        percentage: percentage,
+        color: getColorForType(item.type)
+      };
+    });
+
+    // Get breakdown by folder
+    const [folderStats] = await db.query(
+      `SELECT 
+        f.id as folder_id,
+        COALESCE(f.name, 'Root') as folder_name,
+        COALESCE(SUM(df.size), 0) as size_bytes,
+        COUNT(df.id) as file_count
+      FROM drive_folders f
+      LEFT JOIN drive_files df ON df.folder_id = f.id AND df.user_id = ? AND (df.is_deleted = 0 OR df.is_deleted IS NULL)
+      WHERE f.user_id = ?
+      GROUP BY f.id, f.name
+      UNION ALL
+      SELECT 
+        NULL as folder_id,
+        'Root' as folder_name,
+        COALESCE(SUM(size), 0) as size_bytes,
+        COUNT(*) as file_count
+      FROM drive_files
+      WHERE user_id = ? 
+      AND folder_id IS NULL
+      AND (is_deleted = 0 OR is_deleted IS NULL)
+      ORDER BY size_bytes DESC`,
+      [userId, userId, userId]
+    );
+
+    const byFolder = folderStats.map(item => {
+      const size = Number(item.size_bytes || 0);
+      const percentage = totalSize > 0 ? Number(((size / totalSize) * 100).toFixed(1)) : 0;
+      return {
+        folder_id: item.folder_id,
+        folder_name: item.folder_name,
+        size_bytes: size,
+        file_count: Number(item.file_count || 0),
+        percentage: percentage
+      };
+    });
+
+    // Get timeline (last 30 days)
+    const [timelineData] = await db.query(
+      `SELECT 
+        DATE(created_at) as date,
+        SUM(size) as size_bytes
+      FROM drive_files
+      WHERE user_id = ? 
+      AND (is_deleted = 0 OR is_deleted IS NULL)
+      AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+      GROUP BY DATE(created_at)
+      ORDER BY date ASC`,
+      [userId]
+    );
+
+    const timeline = timelineData.map(item => ({
+      date: item.date.toISOString().split('T')[0],
+      size_bytes: Number(item.size_bytes || 0)
+    }));
+
+    res.json({
+      by_type: byType,
+      by_folder: byFolder,
+      timeline: timeline
+    });
+  } catch (err) {
+    console.error("STORAGE BREAKDOWN ERROR:", err);
+    return res.status(500).json({ error: "Failed to fetch storage breakdown" });
+  }
+});
+
+// GET LARGE FILES
+// GET /api/storage/large-files?user_id=1&min_size=5000000
+router.get("/storage/large-files", async (req, res) => {
+  try {
+    const userId = req.query.user_id;
+    const minSize = Number(req.query.min_size) || 5000000; // Default 5MB
+
+    if (!userId) {
+      return res.status(400).json({ error: "user_id is required" });
+    }
+
+    const [files] = await db.query(
+      `SELECT 
+        id,
+        filename as name,
+        size as size_bytes,
+        folder_id,
+        CASE 
+          WHEN filename LIKE '%.jpg' OR filename LIKE '%.jpeg' OR filename LIKE '%.png' OR filename LIKE '%.gif' THEN 'image'
+          WHEN filename LIKE '%.mp4' OR filename LIKE '%.avi' OR filename LIKE '%.mov' THEN 'video'
+          WHEN filename LIKE '%.pdf' OR filename LIKE '%.doc' OR filename LIKE '%.docx' THEN 'document'
+          WHEN filename LIKE '%.zip' OR filename LIKE '%.rar' THEN 'archive'
+          ELSE 'other'
+        END as file_type,
+        created_at
+      FROM drive_files
+      WHERE user_id = ? 
+      AND size >= ?
+      AND (is_deleted = 0 OR is_deleted IS NULL)
+      ORDER BY size DESC`,
+      [userId, minSize]
+    );
+
+    const largeFiles = files.map(f => ({
+      id: f.id,
+      name: f.name,
+      size_bytes: Number(f.size_bytes || 0),
+      folder_id: f.folder_id,
+      file_type: f.file_type,
+      created_at: f.created_at ? f.created_at.toISOString() : new Date().toISOString()
+    }));
+
+    res.json(largeFiles);
+  } catch (err) {
+    console.error("LARGE FILES ERROR:", err);
+    return res.status(500).json({ error: "Failed to fetch large files" });
+  }
+});
+
+// GET DUPLICATE FILES
+// GET /api/storage/duplicates?user_id=1
+router.get("/storage/duplicates", async (req, res) => {
+  try {
+    const userId = req.query.user_id;
+
+    if (!userId) {
+      return res.status(400).json({ error: "user_id is required" });
+    }
+
+    // Find files with same filename and size (potential duplicates)
+    const [duplicates] = await db.query(
+      `SELECT 
+        filename,
+        size,
+        COUNT(*) as count,
+        GROUP_CONCAT(id ORDER BY created_at) as file_ids,
+        GROUP_CONCAT(folder_id ORDER BY created_at) as folder_ids,
+        GROUP_CONCAT(created_at ORDER BY created_at) as created_dates
+      FROM drive_files
+      WHERE user_id = ? 
+      AND (is_deleted = 0 OR is_deleted IS NULL)
+      GROUP BY filename, size
+      HAVING count > 1`,
+      [userId]
+    );
+
+    const duplicateGroups = duplicates.map(dup => {
+      const ids = dup.file_ids.split(',').map(Number);
+      const folderIds = dup.folder_ids.split(',').map((id) => id === 'NULL' ? null : Number(id));
+      const dates = dup.created_dates.split(',');
+      
+      const files = ids.map((id, index) => ({
+        id: id,
+        name: dup.filename,
+        size_bytes: Number(dup.size || 0),
+        folder_id: folderIds[index],
+        created_at: dates[index] || new Date().toISOString()
+      }));
+
+      // Potential savings = size of all duplicates except one
+      const potentialSavings = Number(dup.size || 0) * (ids.length - 1);
+      const totalSize = Number(dup.size || 0) * ids.length;
+
+      return {
+        files: files,
+        total_size: totalSize,
+        potential_savings: potentialSavings
+      };
+    });
+
+    res.json(duplicateGroups);
+  } catch (err) {
+    console.error("DUPLICATES ERROR:", err);
+    return res.status(500).json({ error: "Failed to fetch duplicate files" });
+  }
+});
+
+// GET OPTIMIZATION SUGGESTIONS
+// GET /api/storage/suggestions?user_id=1
+router.get("/storage/suggestions", async (req, res) => {
+  try {
+    const userId = req.query.user_id;
+
+    if (!userId) {
+      return res.status(400).json({ error: "user_id is required" });
+    }
+
+    const suggestions = [];
+
+    // Get duplicate files
+    const [duplicates] = await db.query(
+      `SELECT 
+        filename,
+        size,
+        COUNT(*) as count,
+        GROUP_CONCAT(id ORDER BY created_at) as file_ids
+      FROM drive_files
+      WHERE user_id = ? 
+      AND (is_deleted = 0 OR is_deleted IS NULL)
+      GROUP BY filename, size
+      HAVING count > 1`,
+      [userId]
+    );
+
+    if (duplicates.length > 0) {
+      const totalSavings = duplicates.reduce((sum, dup) => {
+        return sum + (Number(dup.size || 0) * (Number(dup.count) - 1));
+      }, 0);
+      
+      const fileIds = duplicates.flatMap(dup => 
+        dup.file_ids.split(',').map(Number)
+      );
+
+      suggestions.push({
+        type: 'duplicate',
+        title: 'Remove Duplicate Files',
+        description: `Found ${duplicates.length} set(s) of duplicate files`,
+        potential_savings: totalSavings,
+        action: 'Review and delete duplicates',
+        file_ids: fileIds
+      });
+    }
+
+    // Get large files (>5MB)
+    const [largeFiles] = await db.query(
+      `SELECT id, size
+      FROM drive_files
+      WHERE user_id = ? 
+      AND size >= 5242880
+      AND (is_deleted = 0 OR is_deleted IS NULL)`,
+      [userId]
+    );
+
+    if (largeFiles.length > 0) {
+      const totalLargeSize = largeFiles.reduce((sum, f) => sum + Number(f.size || 0), 0);
+      const fileIds = largeFiles.map(f => f.id);
+
+      suggestions.push({
+        type: 'large_file',
+        title: 'Archive Large Files',
+        description: `${largeFiles.length} files are larger than 5MB`,
+        potential_savings: Math.round(totalLargeSize * 0.3), // Estimate 30% savings from compression
+        action: 'Compress or archive large files',
+        file_ids: fileIds
+      });
+    }
+
+    // Get old files (>6 months)
+    const [oldFiles] = await db.query(
+      `SELECT id, size
+      FROM drive_files
+      WHERE user_id = ? 
+      AND created_at < DATE_SUB(NOW(), INTERVAL 6 MONTH)
+      AND (is_deleted = 0 OR is_deleted IS NULL)`,
+      [userId]
+    );
+
+    if (oldFiles.length > 0) {
+      const totalOldSize = oldFiles.reduce((sum, f) => sum + Number(f.size || 0), 0);
+
+      suggestions.push({
+        type: 'old_file',
+        title: 'Clean Up Old Files',
+        description: `${oldFiles.length} files older than 6 months`,
+        potential_savings: totalOldSize,
+        action: 'Review and delete old files',
+        file_ids: oldFiles.map(f => f.id)
+      });
+    }
+
+    res.json(suggestions);
+  } catch (err) {
+    console.error("SUGGESTIONS ERROR:", err);
+    return res.status(500).json({ error: "Failed to fetch optimization suggestions" });
+  }
+});
+
+// Helper function to get color for file type
+function getColorForType(type) {
+  const colors = {
+    'Images': '#8b5cf6',
+    'Videos': '#ef4444',
+    'Documents': '#3b82f6',
+    'Archives': '#f59e0b',
+    'Others': '#6b7280'
+  };
+  return colors[type] || '#6b7280';
+}
+
 module.exports = router;
