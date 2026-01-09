@@ -94,12 +94,7 @@ router.post("/register", async (req, res) => {
       if (name.includes('@')) {
         name = name.split('@')[0].trim();
       }
-      console.warn('REGISTER: Name contained @ symbol, stripped email pattern', {
-        originalName: originalName,
-        email: email,
-        emailUsername: emailUsername,
-        recoveredName: name
-      });
+      // Silently recover - no logging needed as this is expected behavior
     }
     
     // If name is missing OR equals email (data corruption), recover safely
@@ -367,29 +362,29 @@ router.post("/register", async (req, res) => {
     
     // ✅ CRITICAL: Verify what was actually inserted
     const [verifyInsert] = await db.query(
-      "SELECT name, email, LENGTH(password) as pwd_length FROM users WHERE id = ? LIMIT 1",
+      "SELECT full_name, email, LENGTH(password) as pwd_length FROM users WHERE id = ? LIMIT 1",
       [insert.insertId]
     );
     
     if (verifyInsert.length > 0) {
       const inserted = verifyInsert[0];
       console.log('REGISTER: Verification of inserted data', {
-        insertedName: inserted.name ? `${inserted.name.substring(0, 20)}...` : 'NULL',
+        insertedName: inserted.full_name ? `${inserted.full_name.substring(0, 20)}...` : 'NULL',
         insertedEmail: inserted.email ? `${inserted.email.substring(0, 30)}...` : 'NULL',
         passwordLength: inserted.pwd_length
       });
       
       // ✅ CRITICAL: Check if data corruption occurred
-      if (inserted.name && inserted.name.includes('@')) {
+      if (inserted.full_name && inserted.full_name.includes('@')) {
         console.error('REGISTER CRITICAL ERROR: Name field contains @ after INSERT! Data corruption detected!', {
-          insertedName: inserted.name,
+          insertedName: inserted.full_name,
           insertedEmail: inserted.email,
           expectedName: name,
           expectedEmail: normalizedEmail
         });
         // Try to fix it by updating the record
         await db.query(
-          "UPDATE users SET name = ?, email = ? WHERE id = ?",
+          "UPDATE users SET full_name = ?, email = ? WHERE id = ?",
           [name, normalizedEmail, insert.insertId]
         );
         console.log('REGISTER: Attempted to fix corrupted data');
@@ -397,14 +392,14 @@ router.post("/register", async (req, res) => {
       
       if (inserted.email && !inserted.email.includes('@')) {
         console.error('REGISTER CRITICAL ERROR: Email field does not contain @ after INSERT! Data corruption detected!', {
-          insertedName: inserted.name,
+          insertedName: inserted.full_name,
           insertedEmail: inserted.email,
           expectedName: name,
           expectedEmail: normalizedEmail
         });
         // Try to fix it by updating the record
         await db.query(
-          "UPDATE users SET name = ?, email = ? WHERE id = ?",
+          "UPDATE users SET full_name = ?, email = ? WHERE id = ?",
           [name, normalizedEmail, insert.insertId]
         );
         console.log('REGISTER: Attempted to fix corrupted data');
@@ -415,7 +410,7 @@ router.post("/register", async (req, res) => {
     
     // ✅ CRITICAL: Verify user was created and can be retrieved for login
     const [verifyUser] = await db.query(
-      "SELECT id, email, name, LENGTH(password) as pwd_length FROM users WHERE id = ? LIMIT 1",
+      "SELECT id, email, full_name, LENGTH(password) as pwd_length FROM users WHERE id = ? LIMIT 1",
       [userId]
     );
     
@@ -534,7 +529,17 @@ router.post("/login", async (req, res) => {
     // Since we store emails in lowercase, we can compare directly, but use LOWER() for safety
     // This ensures emails stored as "user@jeemail.in" match queries for "User@Jeemail.In"
     const [rows] = await db.query(
-      "SELECT id, name, email, password, date_of_birth, gender FROM users WHERE LOWER(TRIM(email)) = LOWER(TRIM(?)) LIMIT 1",
+      `SELECT
+      id,
+      full_name,
+      email_username,
+      email,
+      password,
+      date_of_birth,
+      gender
+    FROM users
+    WHERE LOWER(TRIM(email)) = LOWER(TRIM(?))
+    LIMIT 1`,
       [normalized]
     );
 
@@ -549,7 +554,7 @@ router.post("/login", async (req, res) => {
     if (!rows.length) {
       // ✅ CRITICAL: Try alternative query in case of whitespace or case issues
       const [altRows] = await db.query(
-        "SELECT id, name, email, password, date_of_birth, gender FROM users WHERE email = ? LIMIT 1",
+        "SELECT id, full_name,email_username, email, password, date_of_birth, gender FROM users WHERE email = ? LIMIT 1",
         [normalized]
       );
       
@@ -562,7 +567,7 @@ router.post("/login", async (req, res) => {
       } else {
         // ✅ CRITICAL: Try one more time with just LOWER() in case TRIM() is causing issues
         const [lowerRows] = await db.query(
-          "SELECT id, name, email, password, date_of_birth, gender FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1",
+          "SELECT id, full_name, email_username,email, password, date_of_birth, gender FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1",
           [normalized]
         );
         
@@ -649,7 +654,7 @@ router.post("/login", async (req, res) => {
     // ✅ CRITICAL: Return name and email exactly as stored in database (no trimming)
     const responseUser = {
       id: user.id,
-      name: String(user.name || ''), // ✅ Return exactly as stored (no trim)
+      name: String(user.full_name || ''), // ✅ Return exactly as stored (no trim)
       email: String(user.email || ''), // ✅ Return exactly as stored (no trim)
       date_of_birth: user.date_of_birth || null,
       gender: user.gender || null,
@@ -1007,7 +1012,7 @@ router.post("/email/create", async (req, res) => {
 
   try {
     const [[sender]] = await conn.query(
-      "SELECT name, email FROM users WHERE id = ? LIMIT 1",
+      "SELECT full_name, email_username, email FROM users WHERE id = ? LIMIT 1",
       [user_id]
     );
 
