@@ -72,13 +72,15 @@ function calculateCarbonMetrics(storageSavedGB, dataTransferReducedGB, mode = 'r
 
 // Helper: fetch email stats from DB for a user (best-effort)
 async function fetchEmailStatsForUser(userId) {
+  // Calculate size from attachments (size_bytes) and convert to KB
   const sql = `
     SELECT
-      COUNT(*) AS email_count,
-(SELECT COUNT(*) FROM email_attachments ea WHERE ea.email_id = e.id) AS attachments_count
-      SUM(COALESCE(size_kb, 0)) AS total_size_kb
-    FROM emails
-    WHERE user_id = ?
+      COUNT(DISTINCT e.id) AS email_count,
+      COUNT(DISTINCT ea.id) AS attachments_count,
+      COALESCE(SUM(ea.size_bytes), 0) / 1024 AS total_size_kb
+    FROM emails e
+    LEFT JOIN email_attachments ea ON e.id = ea.email_id
+    WHERE e.user_id = ?
   `;
 
   const [rows] = typeof db.query === 'function' ? await db.query(sql, [userId]) : await db.execute(sql, [userId]);
@@ -134,8 +136,37 @@ router.get('/metrics/me', async (req, res) => {
   try {
     await ensureSchema();
 
-    // try to read user id from req.user (if JWT middleware sets it) or from query fallback
-    const userId = (req.user && (req.user.id || req.user.userId || req.user.sub)) || req.query.userId;
+    // Extract user id from JWT token or req.user
+    let userId = null;
+    
+    // Try to get from req.user (set by JWT middleware)
+    if (req.user) {
+      userId = req.user.id || req.user.userId || req.user.user_id || req.user.sub;
+    }
+    
+    // If not found, try to extract from Authorization header directly
+    if (!userId) {
+      const authHeader = req.headers.authorization || '';
+      if (authHeader.startsWith('Bearer ')) {
+        try {
+          const jwt = require('jsonwebtoken');
+          const token = authHeader.replace('Bearer ', '').trim();
+          const payload = jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret');
+          // JWT payload structure: { user: { id: ... } } or { id: ... } or { userId: ... }
+          userId = payload.user?.id || payload.user?.userId || payload.id || payload.userId || payload.user_id;
+        } catch (err) {
+          console.warn('Failed to extract user from token:', err.message);
+        }
+      }
+    }
+    
+    // Fallback to query parameter
+    if (!userId) {
+      userId = req.query.userId || req.query.user_id;
+    }
+    
+    console.log('Carbon metrics /me - userId extracted:', userId, 'from req.user:', req.user);
+    
     const mode = String(req.query.mode || 'realistic');
 
     if (!userId) {
@@ -145,7 +176,7 @@ router.get('/metrics/me', async (req, res) => {
         const metrics = calculateCarbonMetrics(Number(storageSavedGB), Number(dataTransferReducedGB), mode);
         return res.json({ ok: true, metrics });
       }
-      return res.status(400).json({ ok: false, error: 'Missing user id and no overrides provided' });
+      return res.status(400).json({ ok: false, error: 'Missing user id. Please provide userId in query or ensure you are authenticated.' });
     }
 
     // derive from emails
