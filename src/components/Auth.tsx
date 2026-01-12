@@ -126,7 +126,7 @@ export default function Auth() {
           setError('Password is too weak. Please include uppercase, lowercase, numbers, and special characters.');
           return;
         }
-        const result = await authService.register(email, password, fullName, dateOfBirth, gender);
+        const result = await authService.register(fullName, email, password, dateOfBirth, gender);
         if (!result.success) {
           setError(result.error || 'Registration failed');
           return;

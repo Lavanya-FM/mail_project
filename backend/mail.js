@@ -193,32 +193,21 @@ router.post("/register", async (req, res) => {
       }
     }
 
-    // ✅ CRITICAL: Detect data swap/corruption - email should not look like a password
-    // If email username looks like a password (all numbers, too short, no letters), reject
+    // ✅ CRITICAL: Only reject if email username is ALL numbers (which is clearly invalid)
+    // Email usernames CAN legitimately start with numbers (e.g., "123abc@domain.com" is valid)
     const emailLocalPart = email.split('@')[0];
     if (emailLocalPart) {
-      // Check if email username looks like a password pattern
-      const looksLikePassword = 
-        /^\d+$/.test(emailLocalPart) || // All numbers like "123456asd" (but this has letters, so check differently)
-        (emailLocalPart.length >= 6 && /^[a-zA-Z0-9]{6,}$/.test(emailLocalPart) && !/[a-z]/.test(emailLocalPart.toLowerCase())) || // All uppercase or mixed case alphanumeric without lowercase
-        (emailLocalPart.length >= 8 && /^[0-9a-zA-Z]{8,}$/.test(emailLocalPart) && /[0-9]/.test(emailLocalPart) && !/[a-z]/.test(emailLocalPart.toLowerCase())); // Long alphanumeric with numbers but no lowercase
-      
-      // More specific: if email username is 8+ chars, all alphanumeric, has numbers, and looks like "123456asd" pattern
-      if (emailLocalPart.length >= 8 && /^[0-9a-zA-Z]+$/.test(emailLocalPart) && /[0-9]/.test(emailLocalPart)) {
-        // Check if it starts with numbers (common password pattern)
-        if (/^[0-9]/.test(emailLocalPart)) {
-          console.error('REGISTER ERROR: Email username looks like a password (starts with numbers)!', {
-            emailLocalPart: emailLocalPart,
-            email: email,
-            name: name,
-            passwordLength: password ? password.length : 0,
-            rawName: rawName,
-            rawEmail: rawEmail
-          });
-          return res.status(400).json({ 
-            error: "Invalid email format. Email username should not start with numbers (e.g., '123asd456'). Please use a proper email username that starts with a letter (e.g., 'doe', 'john', 'jane')." 
-          });
-        }
+      // Only reject if the entire email username is composed ONLY of numbers (no letters at all)
+      // This would be an invalid email format
+      if (/^\d+$/.test(emailLocalPart) && emailLocalPart.length >= 6) {
+        console.error('REGISTER ERROR: Email username is all numbers - invalid email format!', {
+          emailLocalPart: emailLocalPart,
+          email: email,
+          name: name
+        });
+        return res.status(400).json({ 
+          error: "Invalid email format. Email username cannot be only numbers. Please include at least one letter." 
+        });
       }
     }
     
@@ -354,10 +343,14 @@ router.post("/register", async (req, res) => {
       return res.status(500).json({ error: "Data validation failed: email is invalid" });
     }
     
+    // ✅ CRITICAL: Extract email username from normalized email for storage
+    // emailUsername was already extracted earlier, but we need to ensure it matches normalizedEmail
+    const finalEmailUsername = normalizedEmail.split('@')[0] || emailUsername || '';
+    
     const [insert] = await db.query(
-      `INSERT INTO users (name, email, password, date_of_birth, gender)
-       VALUES (?, ?, ?, ?, ?)`,
-      [name, normalizedEmail, hash, dobString, gender]
+      `INSERT INTO users (full_name, email, email_username, password, date_of_birth, gender)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [name, normalizedEmail, finalEmailUsername, hash, dobString, gender]
     );
     
     // ✅ CRITICAL: Verify what was actually inserted
@@ -422,7 +415,7 @@ router.post("/register", async (req, res) => {
     console.log('REGISTER: User created and verified in database', { 
       userId: verifyUser[0].id,
       email: verifyUser[0].email,
-      name: verifyUser[0].name,
+      name: verifyUser[0].full_name,
       storedHashLength: verifyUser[0].pwd_length 
     });
     
