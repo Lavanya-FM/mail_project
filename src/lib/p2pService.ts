@@ -414,6 +414,12 @@ async resumeReceive(messageId: string, senderEmail?: string) {
   missing.forEach(idx => this.retryChunk(messageId, idx, sender));
 }
 
+async getPreviewURL(messageId: string): Promise<string | null> {
+  const blob = await this.getReceivedBlob(messageId);
+  if (!blob) return null;
+  return URL.createObjectURL(blob);
+}
+
 async getReceivedBlob(messageId: string): Promise<Blob | null> {
   if (this.receivedFiles.has(messageId)) {
     return this.receivedFiles.get(messageId)!;
@@ -1539,6 +1545,9 @@ private async assembleFile(
   fileName: string,
   mimeType: string
 ) {
+  // 🔒 HARD STOP if already assembled
+  if (this.receivedFiles.has(messageId)) return;
+
   const chunks = await this.loadChunks(messageId);
   if (!chunks || chunks.size === 0) return;
 
@@ -1550,19 +1559,35 @@ private async assembleFile(
     type: mimeType || 'application/octet-stream'
   });
 
-  // Persist
+  // Persist to IndexedDB
   const db = await this.openDB();
   const tx = db.transaction('files', 'readwrite');
-  tx.objectStore('files').put({ messageId, fileName, mimeType, blob });
+  tx.objectStore('files').put({
+    messageId,
+    fileName,
+    mimeType,
+    blob,
+    completedAt: Date.now() // 🔑 terminal marker
+  });
   await new Promise(res => (tx.oncomplete = () => res(true)));
 
+  // 🔒 Lock completion in memory
   this.receivedFiles.set(messageId, blob);
 
   const rt = this.receiverTransfers.get(messageId);
-  if (rt) rt.status = 'complete';
+  if (rt) {
+    rt.status = 'complete';
+    rt.reason = null;
+    rt.lastUpdated = Date.now();
+  }
 
+  // 🔥 SINGLE FINAL EVENT
   window.dispatchEvent(new CustomEvent('p2p-file-ready', {
-    detail: { messageId, fileName }
+    detail: {
+      messageId,
+      fileName,
+      status: 'complete'
+    }
   }));
 
   await this.clearChunks(messageId);
