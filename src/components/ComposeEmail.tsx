@@ -1,15 +1,16 @@
 // ComposeEmail.tsx - Complete implementation with two send modes
 import { useState, useEffect, useRef } from 'react';
-import { emailService } from '../../lib/emailService';
-import { authService } from '../../lib/authService';
-import { p2pService } from '../../lib/p2pService';
-import { normalizeEmailBody } from '../../utils/email';
-import { p2pToast } from '../../utils/p2pToasts';
+import { emailService } from '../lib/emailService';
+import { authService } from '../lib/authService';
+import { p2pService } from '../lib/p2pService';
+import { normalizeEmailBody } from '../utils/email';
+import { p2pToast } from '../utils/p2pToasts';
 import toast from 'react-hot-toast';
-import ComposeUI from './ComposeUI';
-import { presenceService } from '../../lib/presenceService';
-import { filesToBase64 } from '../../lib/fileUtils';
-import { MAX_EMAIL_ATTACHMENT_BYTES } from '../../constants/attachmentLimits';
+import ComposeUI from './compose/ComposeUI';
+import { presenceService } from '../lib/presenceService';
+import { filesToBase64 } from '../lib/fileUtils';
+import { MAX_EMAIL_ATTACHMENT_BYTES } from '../constants/attachmentLimits';
+import { useDraft } from '../hooks/useDraft';
 
 const getFolderIdByName = (name: string) => {
   const folders = JSON.parse(localStorage.getItem("folders") || "[]");
@@ -90,12 +91,12 @@ export default function ComposeEmail(props: ComposeEmailProps) {
         bcc_emails: [],
         subject,
         body,
-attachments: attachments.map(f => ({
-  filename: f.name,
-  mime_type: f.type,
-  size_bytes: f.size,
-  content_base64: null
-})),
+        attachments: attachments.map(f => ({
+          filename: f.name,
+          mime_type: f.type,
+          size_bytes: f.size,
+          content_base64: null
+        })),
         is_draft: true,
         folder_id: getFolderIdByName('draft'),
       });
@@ -148,7 +149,7 @@ attachments: attachments.map(f => ({
           ? { ...f, status: 'delivered' as const, progress: 100 }
           : f
       ));
-      
+
       // Show toast notification
       p2pToast.delivered(fileName);
     };
@@ -284,10 +285,10 @@ attachments: attachments.map(f => ({
     return `${(mb / 1024).toFixed(1)} GB`;
   };
 
-const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-  const files = Array.from(e.target.files || []);
-  setAttachments(prev => [...prev, ...files]);
-};
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    setAttachments(prev => [...prev, ...files]);
+  };
 
   const removeAttachment = (index: number) => {
     setAttachments(prev => prev.filter((_, i) => i !== index));
@@ -345,11 +346,11 @@ const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         p2p_delivered: false,
       };
 
-if (attachments.some(f => f.size > MAX_EMAIL_ATTACHMENT_BYTES)) {
-  toast.error('Email attachments must be under 25MB. Use P2P.');
-  setSending(false);
-  return;
-}
+      if (attachments.some(f => f.size > MAX_EMAIL_ATTACHMENT_BYTES)) {
+        toast.error('Email attachments must be under 25MB. Use P2P.');
+        setSending(false);
+        return;
+      }
 
       // Always send full attachments for regular email
       if (attachments.length > 0) {
@@ -451,7 +452,7 @@ if (attachments.some(f => f.size > MAX_EMAIL_ATTACHMENT_BYTES)) {
       // STEP 4: start P2P transfer
       // Support multiple recipients (comma-separated)
       const recipients = to.split(',').map(e => e.trim()).filter(Boolean);
-      
+
       // Show toast for each file
       attachments.forEach((file: File) => {
         p2pToast.started(file.name);

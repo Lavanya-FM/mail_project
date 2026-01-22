@@ -7,6 +7,7 @@ const WebSocket = require('ws');
 const crypto = require('crypto');
 const redis = require('redis');
 const db = require('./db'); // Promise pool
+const { handleCallSignaling } = require('./callSignaling');
 
 /* ---------------- SAFETY GUARD ---------------- */
 
@@ -49,7 +50,7 @@ const TEMP_STORAGE_TTL = 3600;
 
 /* ---------------- STATE ---------------- */
 
-const peerConnections = new Map(); 
+const peerConnections = new Map();
 // connectionId → { ws, userId, email, lastSeen }
 
 /* ---------------- WEBSOCKET SETUP ---------------- */
@@ -101,6 +102,11 @@ function setupP2PWebSocket(server) {
             await handleTransferComplete(msg);
             break;
 
+          case 'CALL_EVENT':
+            // NEW: Handle call signaling
+            await handleCallSignaling(ws, msg, peerConnections);
+            break;
+
           case 'ping':
             ws.send(JSON.stringify({ type: 'pong' }));
             break;
@@ -134,7 +140,7 @@ function setupP2PWebSocket(server) {
 
 async function handleRegister(ws, connectionId, msg, wss) {
   const { userId, email, publicKey } = msg;
-  
+
   if (!email || !userId) {
     ws.send(JSON.stringify({
       type: 'error',
@@ -168,7 +174,7 @@ async function handleRegister(ws, connectionId, msg, wss) {
       lastSeen: new Date()
     });
     broadcastPresence();
- 
+
     // Save to database with public key
     await db.query(
       `INSERT INTO p2p_peers (user_id, email, connection_id, is_online, public_key)
@@ -293,13 +299,13 @@ async function handleChunkRequest(ws, msg) {
 
   if (!cached) return;
 
-sendToPeer(to, {
-  type: 'file-chunk',
-  from: ws.email,
-  to,
-  messageId,
-  payload: JSON.parse(cached).payload
-});
+  sendToPeer(to, {
+    type: 'file-chunk',
+    from: ws.email,
+    to,
+    messageId,
+    payload: JSON.parse(cached).payload
+  });
 }
 
 async function handleTransferComplete(msg) {
@@ -355,15 +361,15 @@ async function handleDisconnect(connectionId, wss) {
     [peer.email, peer.email]
   );
 
-await db.query(
-  `UPDATE email_attachments
+  await db.query(
+    `UPDATE email_attachments
    SET delivered = 0
    WHERE message_id IN (
      SELECT message_id
      FROM p2p_file_metadata
      WHERE status = 'failed'
    )`
-);
+  );
 
   broadcastToPeers(wss, {
     type: 'peer-offline',

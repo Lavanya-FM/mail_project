@@ -29,10 +29,15 @@ function initP2PSocket(server) {
         }, email);
       }
 
-      // 🔁 ROUTE SECURE MESSAGE
-      if (msg.type === 'secure-message' && msg.to) {
-        const target = clientsByEmail.get(msg.to);
-        if (target) target.send(JSON.stringify(msg));
+      // 🔁 ROUTE ANY DIRECTED MESSAGE (Secure, Call, File Chunk)
+      if (msg.to) {
+        const recipients = Array.isArray(msg.to) ? msg.to : [msg.to];
+        recipients.forEach(to => {
+          const target = clientsByEmail.get(to);
+          if (target && target.readyState === WebSocket.OPEN) {
+            target.send(JSON.stringify(msg));
+          }
+        });
       }
     });
 

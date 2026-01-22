@@ -29,6 +29,7 @@ app.use((req, res, next) => {
 // -------------------------
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api', require('./mail'));
+app.use('/api', require('./draftController')); // Gmail-style draft management
 app.use('/api/drive', require('./drive'));
 app.use('/api/carbon', require('./carbonService'));
 

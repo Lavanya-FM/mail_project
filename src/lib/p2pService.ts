@@ -19,8 +19,6 @@ import {
 import { enhancedP2PService } from './enhancedP2PService';
 
 import {
-  encryptChunkAES,
-  decryptChunkAES,
   sha256
 } from './p2pCrypto';
 
@@ -151,7 +149,7 @@ interface TransferState {
   progress: number;
   bytesSent: number;
   paused: boolean;
-  phase: TransferPhase;  
+  phase: TransferPhase;
   retryCount: Map<number, number>;
   lastSentAt: Map<number, number>;
 }
@@ -164,14 +162,15 @@ class StrictP2PService {
   private userId: string | number = '';
   private connected = false;
   private isRegistering = false;
-private congestion = {
-  rtt: 0,
-  loss: 0,
-  window: 4,
-  lastAck: performance.now()
-};
+  private congestion = {
+    rtt: 0,
+    loss: 0,
+    window: 4,
+    lastAck: performance.now()
+  };
 
   private keyPair!: CryptoKeyPair;
+  private myPublicKeyBytes: Uint8Array | null = null;
   private onlinePeers = new Set<string>();
 
   private sessionKeys = new Map<string, CryptoKey>();
@@ -214,11 +213,11 @@ private congestion = {
   // --- Receive buffer ---
   private receivedChunks = new Map<string, Map<number, Uint8Array>>();
   private receiverTransfers = new Map<string, ReceiverTransferState>();
-  
+
   // --- Queue system (one file at a time) ---
   private receiverQueue: string[] = []; // messageIds in queue
   private currentProcessingMessageId: string | null = null;
-  
+
   // --- Pending chunks (arrived before key exchange) ---
   private pendingChunks = new Map<string, Array<{ from: string; payload: EncryptedPayload }>>();
 
@@ -235,36 +234,40 @@ private congestion = {
     return this.onlinePeers.has(email);
   }
 
-getReceiveProgress(messageId: string): {
-  percentage: number;
-  received: number;
-  total: number;
-  status: 'receiving' | 'paused' | 'complete' | 'not-started';
-} {
-  const rt = this.receiverTransfers.get(messageId);
-
-  if (!rt) {
-    return {
-      percentage: 0,
-      received: 0,
-      total: 0,
-      status: 'not-started'
-    };
+  public getOnlinePeers(): string[] {
+    return Array.from(this.onlinePeers);
   }
 
-  const received = rt.receivedChunks.size;
-  const total = rt.totalChunks || 0;
+  getReceiveProgress(messageId: string): {
+    percentage: number;
+    received: number;
+    total: number;
+    status: 'receiving' | 'paused' | 'complete' | 'not-started';
+  } {
+    const rt = this.receiverTransfers.get(messageId);
 
-  const percentage =
-    total > 0 ? Math.floor((received / total) * 100) : 0;
+    if (!rt) {
+      return {
+        percentage: 0,
+        received: 0,
+        total: 0,
+        status: 'not-started'
+      };
+    }
 
-  return {
-    percentage,
-    received,
-    total,
-    status: rt.status
-  };
-}
+    const received = rt.receivedChunks.size;
+    const total = rt.totalChunks || 0;
+
+    const percentage =
+      total > 0 ? Math.floor((received / total) * 100) : 0;
+
+    return {
+      percentage,
+      received,
+      total,
+      status: rt.status
+    };
+  }
 
   pauseTransfer(messageId: string) {
     const transfer = this.activeTransfers.get(messageId);
@@ -273,13 +276,13 @@ getReceiveProgress(messageId: string): {
     }
   }
 
-resumeTransfer(messageId: string) {
-  const t = this.activeTransfers.get(messageId);
-  if (t) {
-    t.paused = false;
-    t.phase = TransferPhase.SENDING;
+  resumeTransfer(messageId: string) {
+    const t = this.activeTransfers.get(messageId);
+    if (t) {
+      t.paused = false;
+      t.phase = TransferPhase.SENDING;
+    }
   }
-}
 
   // --- USER CONTROLLED BANDWIDTH ---
   public setUserBandwidth(kbps: number) {
@@ -289,9 +292,9 @@ resumeTransfer(messageId: string) {
     );
 
     console.log('[P2P] User bandwidth set to', this.currentKBPS, 'KBPS');
-  }  
+  }
 
-// ============================================================
+  // ============================================================
   // DEBUG: Inspect in-memory + IndexedDB storage
   // ============================================================
   async debugStorage(): Promise<void> {
@@ -334,118 +337,118 @@ resumeTransfer(messageId: string) {
   }
 
 
-async resumeReceive(messageId: string, senderEmail?: string) {
-  console.log('[P2P] Resume receive requested for', messageId, 'senderEmail:', senderEmail);
-  
-  // First check if file is already complete
-  const hasFile = await this.hasReceivedFile(messageId);
-  if (hasFile) {
-    console.log('[P2P] File already complete for', messageId);
-    // Ensure UI is updated to 100%
-    window.dispatchEvent(new CustomEvent('p2p-receiver-progress', {
-      detail: { messageId, percentage: 100, received: 100, total: 100, status: 'complete' }
-    }));
-    window.dispatchEvent(new CustomEvent('p2p-file-ready', { detail: { messageId, fileName: (await getMeta(messageId))?.fileName } }));
-    return;
+  async resumeReceive(messageId: string, senderEmail?: string) {
+    console.log('[P2P] Resume receive requested for', messageId, 'senderEmail:', senderEmail);
+
+    // First check if file is already complete
+    const hasFile = await this.hasReceivedFile(messageId);
+    if (hasFile) {
+      console.log('[P2P] File already complete for', messageId);
+      // Ensure UI is updated to 100%
+      window.dispatchEvent(new CustomEvent('p2p-receiver-progress', {
+        detail: { messageId, percentage: 100, received: 100, total: 100, status: 'complete' }
+      }));
+      window.dispatchEvent(new CustomEvent('p2p-file-ready', { detail: { messageId, fileName: (await getMeta(messageId))?.fileName } }));
+      return;
+    }
+
+    // ✅ FIX: Try multiple sources for sender email
+    let sender = senderEmail
+      || this.transferSenders.get(messageId)
+      || localStorage.getItem(`p2p-sender-${messageId}`);
+
+    // If we have a sender, store it for future use
+    if (sender && !this.transferSenders.has(messageId)) {
+      this.transferSenders.set(messageId, sender);
+      localStorage.setItem(`p2p-sender-${messageId}`, sender);
+    }
+
+    const meta = await getMeta(messageId);
+    if (!meta) {
+      console.warn('[P2P] No metadata found for', messageId, '- requesting from sender');
+
+      if (sender && this.isPeerOnline(sender)) {
+        // Request metadata by sending a resume-request
+        this.send({
+          type: 'resume-request',
+          to: sender,
+          from: this.email,
+          messageId: messageId,
+          requestType: 'metadata'
+        });
+        console.log('[P2P] Requested metadata for', messageId, 'from', sender);
+      } else {
+        console.warn('[P2P] Cannot request metadata - sender offline or unknown:', sender);
+        // Don't return early - try to continue with missing chunks request
+      }
+      // Continue to check for missing chunks even if metadata is missing
+    }
+
+    // If we still don't have metadata, we can't proceed
+    if (!meta) {
+      return;
+    }
+
+    const received = await getReceivedChunkIndexes(messageId);
+    const missing: number[] = [];
+
+    for (let i = 0; i < meta.totalChunks; i++) {
+      if (!received.includes(i)) missing.push(i);
+    }
+
+    // 🔴 HARD STOP
+    if (missing.length === 0) {
+      console.log('[P2P] All chunks already received for', messageId);
+      // Try to assemble the file
+      const rt = this.receiverTransfers.get(messageId);
+      if (rt) {
+        await this.assembleFile(messageId, rt.fileName, rt.mimeType);
+      }
+      return;
+    }
+
+    // ✅ FIX: Ensure we have sender before requesting missing chunks
+    if (!sender) {
+      console.warn('[P2P] Cannot request missing chunks - sender unknown for', messageId);
+      return;
+    }
+
+    console.log('[P2P] Requesting', missing.length, 'missing chunks for', messageId, 'from', sender);
+    missing.forEach(idx => this.retryChunk(messageId, idx, sender));
   }
-  
-  // ✅ FIX: Try multiple sources for sender email
-  let sender = senderEmail 
-    || this.transferSenders.get(messageId) 
-    || localStorage.getItem(`p2p-sender-${messageId}`);
-  
-  // If we have a sender, store it for future use
-  if (sender && !this.transferSenders.has(messageId)) {
-    this.transferSenders.set(messageId, sender);
-    localStorage.setItem(`p2p-sender-${messageId}`, sender);
+
+  async getPreviewURL(messageId: string): Promise<string | null> {
+    const blob = await this.getReceivedBlob(messageId);
+    if (!blob) return null;
+    return URL.createObjectURL(blob);
   }
-  
-  const meta = await getMeta(messageId);
-  if (!meta) {
-    console.warn('[P2P] No metadata found for', messageId, '- requesting from sender');
-    
-    if (sender && this.isPeerOnline(sender)) {
-      // Request metadata by sending a resume-request
-      this.send({
-        type: 'resume-request',
-        to: sender,
-        from: this.email,
-        messageId: messageId,
-        requestType: 'metadata'
+
+  async getReceivedBlob(messageId: string): Promise<Blob | null> {
+    if (this.receivedFiles.has(messageId)) {
+      return this.receivedFiles.get(messageId)!;
+    }
+
+    try {
+      const db = await this.openDB();
+      const tx = db.transaction('files', 'readonly');
+      const store = tx.objectStore('files');
+
+      const record = await new Promise<any>((resolve, reject) => {
+        const req = store.get(messageId);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
       });
-      console.log('[P2P] Requested metadata for', messageId, 'from', sender);
-    } else {
-      console.warn('[P2P] Cannot request metadata - sender offline or unknown:', sender);
-      // Don't return early - try to continue with missing chunks request
+
+      if (record?.blob) {
+        this.receivedFiles.set(messageId, record.blob);
+        return record.blob;
+      }
+    } catch (e) {
+      console.error('[P2P] Failed to load blob for preview', e);
     }
-    // Continue to check for missing chunks even if metadata is missing
+
+    return null;
   }
-  
-  // If we still don't have metadata, we can't proceed
-  if (!meta) {
-    return;
-  }
-
-  const received = await getReceivedChunkIndexes(messageId);
-  const missing: number[] = [];
-
-  for (let i = 0; i < meta.totalChunks; i++) {
-    if (!received.includes(i)) missing.push(i);
-  }
-
-  // 🔴 HARD STOP
-  if (missing.length === 0) {
-    console.log('[P2P] All chunks already received for', messageId);
-    // Try to assemble the file
-    const rt = this.receiverTransfers.get(messageId);
-    if (rt) {
-      await this.assembleFile(messageId, rt.fileName, rt.mimeType);
-    }
-    return;
-  }
-
-  // ✅ FIX: Ensure we have sender before requesting missing chunks
-  if (!sender) {
-    console.warn('[P2P] Cannot request missing chunks - sender unknown for', messageId);
-    return;
-  }
-
-  console.log('[P2P] Requesting', missing.length, 'missing chunks for', messageId, 'from', sender);
-  missing.forEach(idx => this.retryChunk(messageId, idx, sender));
-}
-
-async getPreviewURL(messageId: string): Promise<string | null> {
-  const blob = await this.getReceivedBlob(messageId);
-  if (!blob) return null;
-  return URL.createObjectURL(blob);
-}
-
-async getReceivedBlob(messageId: string): Promise<Blob | null> {
-  if (this.receivedFiles.has(messageId)) {
-    return this.receivedFiles.get(messageId)!;
-  }
-
-  try {
-    const db = await this.openDB();
-    const tx = db.transaction('files', 'readonly');
-    const store = tx.objectStore('files');
-
-    const record = await new Promise<any>((resolve, reject) => {
-      const req = store.get(messageId);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-
-    if (record?.blob) {
-      this.receivedFiles.set(messageId, record.blob);
-      return record.blob;
-    }
-  } catch (e) {
-    console.error('[P2P] Failed to load blob for preview', e);
-  }
-
-  return null;
-}
 
   /* ---------------------------------------------------- */
   /* ------------------ CONNECT ------------------------- */
@@ -467,93 +470,97 @@ async getReceivedBlob(messageId: string): Promise<Blob | null> {
       localStorage.setItem('p2p-keypair', await exportKeyPair(this.keyPair));
     }
 
+    // Cache public key
+    const rawKey = await exportPublicKey(this.keyPair.publicKey);
+    this.myPublicKeyBytes = new Uint8Array(rawKey);
+
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     this.ws = new WebSocket(`${protocol}//${location.host}/api/p2p`);
 
-this.ws.onopen = async () => {
-  const pub = await exportPublicKey(this.keyPair.publicKey);
+    this.ws.onopen = async () => {
+      const pub = await exportPublicKey(this.keyPair.publicKey);
 
-  this.send({
-    type: 'register',
-    from: this.email,
-    email: this.email,
-    userId: this.userId,
-    publicKey: Array.from(new Uint8Array(pub)),
-    timestamp: Date.now()
-  });
+      this.send({
+        type: 'register',
+        from: this.email,
+        email: this.email,
+        userId: this.userId,
+        publicKey: Array.from(new Uint8Array(pub)),
+        timestamp: Date.now()
+      });
 
-const db = await this.openDB();
-const tx = db.transaction('files', 'readonly');
-const store = tx.objectStore('files');
+      const db = await this.openDB();
+      const tx = db.transaction('files', 'readonly');
+      const store = tx.objectStore('files');
 
-store.openCursor().onsuccess = (e) => {
-  const cursor = (e.target as any).result;
-  if (!cursor) return;
+      store.openCursor().onsuccess = (e) => {
+        const cursor = (e.target as any).result;
+        if (!cursor) return;
 
-  const { messageId, blob } = cursor.value;
-  this.receivedFiles.set(messageId, blob);
-  cursor.continue();
-};
+        const { messageId, blob } = cursor.value;
+        this.receivedFiles.set(messageId, blob);
+        cursor.continue();
+      };
 
-// Restore receiver transfer states (for UI + resume)
-store.openCursor().onsuccess = (e) => {
-  const cursor = (e.target as any).result;
-  if (!cursor) return;
+      // Restore receiver transfer states (for UI + resume)
+      store.openCursor().onsuccess = (e) => {
+        const cursor = (e.target as any).result;
+        if (!cursor) return;
 
-  const { messageId, fileName, mimeType } = cursor.value;
+        const { messageId, fileName, mimeType } = cursor.value;
 
-  this.receiverTransfers.set(messageId, {
-    messageId,
-    fileName,
-    mimeType,
-    totalChunks: 0,
-    receivedChunks: new Set(),
-    verifiedChunks: new Set(),
-    failedChunks: new Set(),
-    status: 'complete',
-    reason: null,
-    lastUpdated: Date.now()
-  });
+        this.receiverTransfers.set(messageId, {
+          messageId,
+          fileName,
+          mimeType,
+          totalChunks: 0,
+          receivedChunks: new Set(),
+          verifiedChunks: new Set(),
+          failedChunks: new Set(),
+          status: 'complete',
+          reason: null,
+          lastUpdated: Date.now()
+        });
 
-  cursor.continue();
-};
+        cursor.continue();
+      };
 
-  // Resume only from stored state
-  for (const key of Object.keys(localStorage)) {
-    if (!key.startsWith('p2p-recv-')) continue;
+      // Resume only from stored state
+      for (const key of Object.keys(localStorage)) {
+        if (!key.startsWith('p2p-recv-')) continue;
 
-    const messageId = key.replace('p2p-recv-', '');
-    const received = JSON.parse(localStorage.getItem(key)!);
+        const messageId = key.replace('p2p-recv-', '');
+        const received = JSON.parse(localStorage.getItem(key)!);
 
-    const sender =
-      this.transferSenders.get(messageId) ||
-      localStorage.getItem(`p2p-sender-${messageId}`);
+        const sender =
+          this.transferSenders.get(messageId) ||
+          localStorage.getItem(`p2p-sender-${messageId}`);
 
-    const persisted = await this.loadChunks(messageId);
-if (persisted.size) {
-  this.receivedChunks.set(messageId, persisted);
+        const persisted = await this.loadChunks(messageId);
+        if (persisted.size) {
+          this.receivedChunks.set(messageId, persisted);
 
-  this.receiverTransfers.set(messageId, {
-    messageId,
-    fileName: 'unknown',
-    mimeType: 'application/octet-stream',
-    totalChunks: persisted.size,
-    receivedChunks: new Set(persisted.keys()),
-    status: 'paused',
-    reason: 'NETWORK_DROP',
-    lastUpdated: Date.now()
-  });
-}
+          this.receiverTransfers.set(messageId, {
+            messageId,
+            fileName: 'unknown',
+            mimeType: 'application/octet-stream',
+            totalChunks: persisted.size,
+            receivedChunks: new Set(persisted.keys()),
+            status: 'paused',
+            reason: 'NETWORK_DROP',
+            lastUpdated: Date.now()
+          });
+        }
 
-    if (!sender) continue;
+        if (!sender) continue;
 
-for (let i = 0; i < persisted.size; i++) {
-  if (!received.includes(i)) {
-    this.retryChunk(messageId, i, sender);
-  }
-}
-  }
-};
+        for (let i = 0; i < persisted.size; i++) {
+          if (!received.includes(i)) {
+            this.retryChunk(messageId, i, sender);
+          }
+        }
+      }
+    };
 
     this.ws.onmessage = async (e) => {
       const message = JSON.parse(e.data);
@@ -563,9 +570,9 @@ for (let i = 0; i < persisted.size; i++) {
     this.ws.onclose = () => {
       this.connected = false;
       this.isRegistering = false;
-for (const messageId of Array.from(this.receiverTransfers.keys())) {
-  this.markReceiverPaused(messageId, 'NETWORK_DROP');
-}
+      for (const messageId of Array.from(this.receiverTransfers.keys())) {
+        this.markReceiverPaused(messageId, 'NETWORK_DROP');
+      }
 
       if (!this.email || !this.userId) return;
 
@@ -601,26 +608,26 @@ for (const messageId of Array.from(this.receiverTransfers.keys())) {
     return;
   }
 
-private async carbonAwareThrottle(bytes: number) {
-  // No throttling - send at maximum speed
-  return;
-}
+  private async carbonAwareThrottle(bytes: number) {
+    // No throttling - send at maximum speed
+    return;
+  }
 
-private markReceiverPaused(messageId: string, reason: StopReason) {
-  const rt = this.receiverTransfers.get(messageId);
-  if (!rt) return;
+  private markReceiverPaused(messageId: string, reason: StopReason) {
+    const rt = this.receiverTransfers.get(messageId);
+    if (!rt) return;
 
-  rt.status = 'paused';
-  rt.reason = reason;
-  rt.lastUpdated = Date.now();
+    rt.status = 'paused';
+    rt.reason = reason;
+    rt.lastUpdated = Date.now();
 
-  window.dispatchEvent(new CustomEvent('p2p-receiver-paused', {
-    detail: {
-      messageId,
-      reason
-    }
-  }));
-}
+    window.dispatchEvent(new CustomEvent('p2p-receiver-paused', {
+      detail: {
+        messageId,
+        reason
+      }
+    }));
+  }
 
   /* ---------------------------------------------------- */
   /* ------------------ MESSAGE HANDLER ---------------- */
@@ -634,66 +641,66 @@ private markReceiverPaused(messageId: string, reason: StopReason) {
         console.log('[P2P] Successfully registered');
         break;
 
-        case 'p2p-offer': {
-          const { messageId, from, data } = msg;
-        
-          console.log('[P2P] Offer received:', messageId, 'from', from);
-        
-          // ✅ FIX: Store sender for this messageId
-          if (from && messageId) {
-            this.transferSenders.set(messageId, from);
-            localStorage.setItem(`p2p-sender-${messageId}`, from);
-          }
-        
-          // 1️⃣ PREPARE RECEIVER STATE FIRST
-          this.receiverTransfers.set(messageId!, {
-            messageId: messageId!,
-            fileName: data.fileName,
-            mimeType: data.mimeType,
-            totalChunks: data.totalChunks,
-            receivedChunks: new Set(),
-            verifiedChunks: new Set(),
-            failedChunks: new Set(),
-            status: 'receiving',
-            reason: null,
-            lastUpdated: Date.now()
-          });
-        
-          // 2️⃣ **ACK IMMEDIATELY — THIS IS THE MISSING PIECE**
-          this.send({
-            type: 'p2p-offer-ack',
-            to: from,
-            from: this.email,
-            messageId: messageId!
-          });
-        
-          console.log('[P2P] Offer ACK sent for', messageId);
-        
-          // 3️⃣ THEN notify UI (NON-BLOCKING)
-          window.dispatchEvent(
-            new CustomEvent('p2p-incoming-file', {
-              detail: {
-                messageId,
-                from,
-                fileName: data.fileName,
-                size: data.size,
-                mimeType: data.mimeType
-              }
-            })
-          );
-        
-          break;
+      case 'p2p-offer': {
+        const { messageId, from, data } = msg;
+
+        console.log('[P2P] Offer received:', messageId, 'from', from);
+
+        // ✅ FIX: Store sender for this messageId
+        if (from && messageId) {
+          this.transferSenders.set(messageId, from);
+          localStorage.setItem(`p2p-sender-${messageId}`, from);
         }
 
-case 'p2p-offer-ack': {
-  const t = this.activeTransfers.get(msg.messageId!);
-  if (t) {
-    t.paused = false;
-    t.phase = TransferPhase.SENDING;
-    // Transfer already started, this confirms receiver is ready
-  }
-  break;
-}
+        // 1️⃣ PREPARE RECEIVER STATE FIRST
+        this.receiverTransfers.set(messageId!, {
+          messageId: messageId!,
+          fileName: data.fileName,
+          mimeType: data.mimeType,
+          totalChunks: data.totalChunks,
+          receivedChunks: new Set(),
+          verifiedChunks: new Set(),
+          failedChunks: new Set(),
+          status: 'receiving',
+          reason: null,
+          lastUpdated: Date.now()
+        });
+
+        // 2️⃣ **ACK IMMEDIATELY — THIS IS THE MISSING PIECE**
+        this.send({
+          type: 'p2p-offer-ack',
+          to: from,
+          from: this.email,
+          messageId: messageId!
+        });
+
+        console.log('[P2P] Offer ACK sent for', messageId);
+
+        // 3️⃣ THEN notify UI (NON-BLOCKING)
+        window.dispatchEvent(
+          new CustomEvent('p2p-incoming-file', {
+            detail: {
+              messageId,
+              from,
+              fileName: data.fileName,
+              size: data.size,
+              mimeType: data.mimeType
+            }
+          })
+        );
+
+        break;
+      }
+
+      case 'p2p-offer-ack': {
+        const t = this.activeTransfers.get(msg.messageId!);
+        if (t) {
+          t.paused = false;
+          t.phase = TransferPhase.SENDING;
+          // Transfer already started, this confirms receiver is ready
+        }
+        break;
+      }
 
       case 'online-peers':
         if (Array.isArray(msg.data)) {
@@ -725,6 +732,9 @@ case 'p2p-offer-ack': {
               }
             }
           });
+          window.dispatchEvent(new CustomEvent('p2p-peers-updated', {
+            detail: { peers: Array.from(this.onlinePeers) }
+          }));
         }
         break;
 
@@ -780,6 +790,10 @@ case 'p2p-offer-ack': {
           }
         }
 
+        window.dispatchEvent(new CustomEvent('p2p-peers-updated', {
+          detail: { peers: Array.from(this.onlinePeers) }
+        }));
+
         break;
       }
 
@@ -789,12 +803,15 @@ case 'p2p-offer-ack': {
           this.onlinePeers.delete(from);
           this.sessionKeys.delete(from);
           console.log('[P2P] Peer offline:', from);
+          window.dispatchEvent(new CustomEvent('p2p-peers-updated', {
+            detail: { peers: Array.from(this.onlinePeers) }
+          }));
         }
-for (const [id, rt] of this.receiverTransfers) {
-  if (this.transferSenders.get(id) === msg.from) {
-    this.markReceiverPaused(id, 'SENDER_OFFLINE');
-  }
-}
+        for (const [id, rt] of this.receiverTransfers) {
+          if (this.transferSenders.get(id) === msg.from) {
+            this.markReceiverPaused(id, 'SENDER_OFFLINE');
+          }
+        }
 
         break;
 
@@ -840,14 +857,14 @@ for (const [id, rt] of this.receiverTransfers) {
 
         this.sessionKeys.set(peerEmail, sessionKey);
         console.log('[P2P] Session key established with', peerEmail);
-        
+
         // Process any pending chunks that arrived before key exchange
         const pending = this.pendingChunks.get(peerEmail);
         if (pending && pending.length > 0) {
           console.log(`[P2P] Processing ${pending.length} queued chunks from ${peerEmail}`);
           const chunksToProcess = [...pending];
           this.pendingChunks.delete(peerEmail);
-          
+
           // Process chunks asynchronously
           for (const { from, payload } of chunksToProcess) {
             this.receiveChunk(from, payload).catch(err => {
@@ -881,136 +898,138 @@ for (const [id, rt] of this.receiverTransfers) {
         const t = this.activeTransfers.get(msg.messageId!);
         if (!t) break;
 
-if (Array.isArray(msg.data?.received)) {
-  t.missingChunks = new Set(
-    [...Array(t.totalChunks).keys()]
-      .filter(i => !msg.data.received.includes(i))
-  );
-} else if (typeof msg.chunkIndex === 'number') {
-  t.missingChunks.add(msg.chunkIndex);
-}
-      
-        t.paused = false;      
+        if (Array.isArray(msg.data?.received)) {
+          t.missingChunks = new Set(
+            [...Array(t.totalChunks).keys()]
+              .filter(i => !msg.data.received.includes(i))
+          );
+        } else if (typeof msg.chunkIndex === 'number') {
+          t.missingChunks.add(msg.chunkIndex);
+        }
+
+        t.paused = false;
         break;
       }
 
-case 'transfer-complete': {
-  const t = this.activeTransfers.get(msg.messageId!);
-  if (t) {
-    t.phase = TransferPhase.DONE;
-  }
+      case 'transfer-complete': {
+        const t = this.activeTransfers.get(msg.messageId!);
+        if (t) {
+          t.phase = TransferPhase.DONE;
+        }
 
-  window.dispatchEvent(new CustomEvent('p2p-delivered', {
-    detail: {
-      messageId: msg.messageId,
-      from: msg.from
-    }
-  }));
-  break;
-}
+        window.dispatchEvent(new CustomEvent('p2p-delivered', {
+          detail: {
+            messageId: msg.messageId,
+            from: msg.from
+          }
+        }));
+        break;
+      }
 
       default:
+        // Forward unknown messages (like CALL_EVENT) to other listeners
+        window.dispatchEvent(new CustomEvent('p2p-message', { detail: msg }));
         break;
     }
   }
 
-private dbPromise: Promise<IDBDatabase> | null = null;
+  private dbPromise: Promise<IDBDatabase> | null = null;
 
-private openDB(): Promise<IDBDatabase> {
-  if (this.dbPromise) return this.dbPromise;
+  private openDB(): Promise<IDBDatabase> {
+    if (this.dbPromise) return this.dbPromise;
 
-  this.dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open('p2p-transfer-db', 2);
+    this.dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open('p2p-transfer-db', 2);
 
-    req.onupgradeneeded = () => {
-      const db = req.result;
+      req.onupgradeneeded = () => {
+        const db = req.result;
 
-      if (!db.objectStoreNames.contains('chunks')) {
-        db.createObjectStore('chunks', {
-          keyPath: ['messageId', 'chunkIndex']
-        });
-      }
+        if (!db.objectStoreNames.contains('chunks')) {
+          db.createObjectStore('chunks', {
+            keyPath: ['messageId', 'chunkIndex']
+          });
+        }
 
-      if (!db.objectStoreNames.contains('files')) {
-        db.createObjectStore('files', {
-          keyPath: 'messageId'
-        });
-      }
-    };
+        if (!db.objectStoreNames.contains('files')) {
+          db.createObjectStore('files', {
+            keyPath: 'messageId'
+          });
+        }
+      };
 
-    req.onsuccess = () => {
-      const db = req.result;
+      req.onsuccess = () => {
+        const db = req.result;
 
-      // Safety check: if stores are missing (old/corrupt DB), recreate database
-      const hasChunks = db.objectStoreNames.contains('chunks');
-      const hasFiles = db.objectStoreNames.contains('files');
+        // Safety check: if stores are missing (old/corrupt DB), recreate database
+        const hasChunks = db.objectStoreNames.contains('chunks');
+        const hasFiles = db.objectStoreNames.contains('files');
 
-      if (!hasChunks || !hasFiles) {
-        console.warn('[P2P] IndexedDB schema mismatch. Resetting p2p-transfer-db.');
-        db.close();
-        const delReq = indexedDB.deleteDatabase('p2p-transfer-db');
-        delReq.onsuccess = () => {
-          // Clear cached promise and reopen
-          this.dbPromise = undefined as any;
-          this.openDB().then(resolve).catch(reject);
-        };
-        delReq.onerror = () => {
-          reject(delReq.error);
-        };
-        return;
-      }
+        if (!hasChunks || !hasFiles) {
+          console.warn('[P2P] IndexedDB schema mismatch. Resetting p2p-transfer-db.');
+          db.close();
+          const delReq = indexedDB.deleteDatabase('p2p-transfer-db');
+          delReq.onsuccess = () => {
+            // Clear cached promise and reopen
+            this.dbPromise = undefined as any;
+            this.openDB().then(resolve).catch(reject);
+          };
+          delReq.onerror = () => {
+            reject(delReq.error);
+          };
+          return;
+        }
 
-      resolve(db);
-    };
+        resolve(db);
+      };
 
-    req.onerror = () => {
-      reject(req.error);
-    };
-  });
+      req.onerror = () => {
+        reject(req.error);
+      };
+    });
 
-  return this.dbPromise;
-}
+    return this.dbPromise;
+  }
 
-private async storeChunk(messageId: string, chunkIndex: number, data: Uint8Array) {
-  const db = await this.openDB();
-  const tx = db.transaction('chunks', 'readwrite');
-  tx.objectStore('chunks').put({ messageId, chunkIndex, data });
-}
+  private async storeChunk(messageId: string, chunkIndex: number, data: Uint8Array) {
+    const db = await this.openDB();
+    const tx = db.transaction('chunks', 'readwrite');
+    tx.objectStore('chunks').put({ messageId, chunkIndex, data });
+  }
 
-private async loadChunks(messageId: string): Promise<Map<number, Uint8Array>> {
-  const db = await this.openDB();
-  const tx = db.transaction('chunks', 'readonly');
-  const store = tx.objectStore('chunks');
+  private async loadChunks(messageId: string): Promise<Map<number, Uint8Array>> {
+    const db = await this.openDB();
+    const tx = db.transaction('chunks', 'readonly');
+    const store = tx.objectStore('chunks');
 
-  return new Promise((resolve) => {
-    const result = new Map<number, Uint8Array>();
+    return new Promise((resolve) => {
+      const result = new Map<number, Uint8Array>();
+      const cursor = store.openCursor();
+
+      cursor.onsuccess = () => {
+        const c = cursor.result;
+        if (!c) return resolve(result);
+
+        if (c.key[0] === messageId) {
+          result.set(c.key[1], c.value.data);
+        }
+        c.continue();
+      };
+    });
+  }
+
+  private async clearChunks(messageId: string) {
+    const db = await this.openDB();
+    const tx = db.transaction('chunks', 'readwrite');
+    const store = tx.objectStore('chunks');
+
     const cursor = store.openCursor();
-
     cursor.onsuccess = () => {
       const c = cursor.result;
-      if (!c) return resolve(result);
-
-      if (c.key[0] === messageId) {
-        result.set(c.key[1], c.value.data);
-      }
+      if (!c) return;
+      if (c.key[0] === messageId) store.delete(c.key);
       c.continue();
     };
-  });
-}
-
-private async clearChunks(messageId: string) {
-  const db = await this.openDB();
-  const tx = db.transaction('chunks', 'readwrite');
-  const store = tx.objectStore('chunks');
-
-  const cursor = store.openCursor();
-  cursor.onsuccess = () => {
-    const c = cursor.result;
-    if (!c) return;
-    if (c.key[0] === messageId) store.delete(c.key);
-    c.continue();
-  };
-}
+  }
 
   /* ---------------------------------------------------- */
   /* ------------------ KEY EXCHANGE ------------------- */
@@ -1044,8 +1063,8 @@ private async clearChunks(messageId: string) {
     }
 
     // Support multiple recipients (comma-separated string or array)
-    const recipients = Array.isArray(recipientEmail) 
-      ? recipientEmail 
+    const recipients = Array.isArray(recipientEmail)
+      ? recipientEmail
       : recipientEmail.split(',').map(e => e.trim()).filter(Boolean);
 
     if (recipients.length === 0) {
@@ -1059,7 +1078,7 @@ private async clearChunks(messageId: string) {
         console.warn(`[P2P] No session key for ${recipient}, skipping`);
         return;
       }
-      
+
       return this.startTransferToRecipient(recipient, files, messageIds, key);
     });
 
@@ -1071,19 +1090,19 @@ private async clearChunks(messageId: string) {
     let totalBytesAllFiles = 0;
 
     for (let index = 0; index < files.length; index++) {
-  const file = files[index];
-  const messageId = messageIds[index]; //Indexed loop
- 
-  const totalChunks = Math.ceil(file.size / P2P_LIMITS.CHUNK_SIZE);
+      const file = files[index];
+      const messageId = messageIds[index]; //Indexed loop
 
-  navigator.serviceWorker?.addEventListener('message', e => {
-    if (e.data?.type === 'P2P_RESUME_REQUEST') {
-      this.resumeReceive(e.data.messageId);
-    }
-  });
-  
-  const missingChunks = new Set<number>();
-    for (let i = 0; i < totalChunks; i++) missingChunks.add(i); 
+      const totalChunks = Math.ceil(file.size / P2P_LIMITS.CHUNK_SIZE);
+
+      navigator.serviceWorker?.addEventListener('message', e => {
+        if (e.data?.type === 'P2P_RESUME_REQUEST') {
+          this.resumeReceive(e.data.messageId);
+        }
+      });
+
+      const missingChunks = new Set<number>();
+      for (let i = 0; i < totalChunks; i++) missingChunks.add(i);
 
       // 🔥 Emit initial progress event
       window.dispatchEvent(new CustomEvent('p2p-progress', {
@@ -1103,90 +1122,90 @@ private async clearChunks(messageId: string) {
         progress: 0,
         bytesSent: 0,
         paused: false,  // Start immediately - don't wait
-        phase: TransferPhase.SENDING, 
+        phase: TransferPhase.SENDING,
         retryCount: new Map(),
         lastSentAt: new Map()
       };
 
       this.activeTransfers.set(messageId, transfer);
 
-const watchdog = setInterval(() => {
-  const t = this.activeTransfers.get(messageId);
-  if (!t) {
-    clearInterval(watchdog);
-    return;
-  }
+      const watchdog = setInterval(() => {
+        const t = this.activeTransfers.get(messageId);
+        if (!t) {
+          clearInterval(watchdog);
+          return;
+        }
 
-  if (t.phase === TransferPhase.SENDING && t.missingChunks.size > 0) {
-    console.warn('[P2P] Watchdog: pending chunks', [...t.missingChunks]);
-  }
-}, 3000);
+        if (t.phase === TransferPhase.SENDING && t.missingChunks.size > 0) {
+          console.warn('[P2P] Watchdog: pending chunks', [...t.missingChunks]);
+        }
+      }, 3000);
 
-// ✅ NOW safe
+      // ✅ NOW safe
       this.send({
-         type: 'p2p-offer',
-         from: this.email,
-         to: recipientEmail,
-         messageId,
-         data: {
-           fileName: file.name,
-           size: file.size,
-           totalChunks,
-           mimeType: file.type,
-  }
-});
+        type: 'p2p-offer',
+        from: this.email,
+        to: recipientEmail,
+        messageId,
+        data: {
+          fileName: file.name,
+          size: file.size,
+          totalChunks,
+          mimeType: file.type,
+        }
+      });
 
-transfer.phase = TransferPhase.OFFERED;
+      transfer.phase = TransferPhase.OFFERED;
 
-// Start sending immediately (receiver auto-accepts)
-// Small delay to ensure offer is processed
-await new Promise(r => setTimeout(r, 100));
-transfer.phase = TransferPhase.SENDING;
-transfer.paused = false;
+      // Start sending immediately (receiver auto-accepts)
+      // Small delay to ensure offer is processed
+      await new Promise(r => setTimeout(r, 100));
+      transfer.phase = TransferPhase.SENDING;
+      transfer.paused = false;
 
-navigator.serviceWorker?.addEventListener('message', e => {
-  if (e.data?.type === 'P2P_RESUME_REQUEST') {
-    this.resumeReceive(e.data.messageId);
-  }
-});
-self.addEventListener('sync', event => {
-  if (event.tag.startsWith('p2p-resume-')) {
-    const messageId = event.tag.replace('p2p-resume-', '');
+      navigator.serviceWorker?.addEventListener('message', e => {
+        if (e.data?.type === 'P2P_RESUME_REQUEST') {
+          this.resumeReceive(e.data.messageId);
+        }
+      });
+      self.addEventListener('sync', event => {
+        if (event.tag.startsWith('p2p-resume-')) {
+          const messageId = event.tag.replace('p2p-resume-', '');
 
-    event.waitUntil(
-      self.clients.matchAll().then(clients => {
-        clients.forEach(client =>
-          client.postMessage({
-            type: 'P2P_RESUME_REQUEST',
-            messageId
-          })
-        );
-      })
-    );
-  }
-});
+          event.waitUntil(
+            self.clients.matchAll().then(clients => {
+              clients.forEach(client =>
+                client.postMessage({
+                  type: 'P2P_RESUME_REQUEST',
+                  messageId
+                })
+              );
+            })
+          );
+        }
+      });
 
 
       const lanes = Array.from({ length: PARALLEL_LANES }, async (_, lane) => {
         for (let i = lane; i < totalChunks; i += PARALLEL_LANES) {
           // Skip if ACKed
-if (!transfer.missingChunks.has(i)) continue;
+          if (!transfer.missingChunks.has(i)) continue;
 
-const lastSent = transfer.lastSentAt.get(i);
-if (lastSent && Date.now() - lastSent < ACK_TIMEOUT_MS) continue;
+          const lastSent = transfer.lastSentAt.get(i);
+          if (lastSent && Date.now() - lastSent < ACK_TIMEOUT_MS) continue;
 
-// ✅ reserve only when actually sending
-transfer.missingChunks.delete(i);
+          // ✅ reserve only when actually sending
+          transfer.missingChunks.delete(i);
 
           // Check pause state (skip if not paused)
-if (transfer.paused) {
-  window.dispatchEvent(new CustomEvent('p2p-paused', {
-    detail: { messageId, reason: 'USER_PAUSED' }
-  }));
-  while (transfer.paused) {
-    await new Promise(r => setTimeout(r, 50));
-  }
-}
+          if (transfer.paused) {
+            window.dispatchEvent(new CustomEvent('p2p-paused', {
+              detail: { messageId, reason: 'USER_PAUSED' }
+            }));
+            while (transfer.paused) {
+              await new Promise(r => setTimeout(r, 50));
+            }
+          }
 
           const start = i * P2P_LIMITS.CHUNK_SIZE;
           const end = Math.min(start + P2P_LIMITS.CHUNK_SIZE, file.size);
@@ -1239,7 +1258,7 @@ if (transfer.paused) {
 
           // Calculate ETA
           const remainingBytes = file.size - transfer.bytesSent;
-          const etaSeconds = speed.speedBps > 0 
+          const etaSeconds = speed.speedBps > 0
             ? Math.ceil(remainingBytes / speed.speedBps)
             : null;
 
@@ -1267,9 +1286,9 @@ if (transfer.paused) {
 
       totalBytesAllFiles += file.size;
 
-clearInterval(watchdog);
-this.transferSenders.delete(messageId);
-this.activeTransfers.delete(messageId);
+      clearInterval(watchdog);
+      this.transferSenders.delete(messageId);
+      this.activeTransfers.delete(messageId);
 
       // 🔥 Emit completion event
       window.dispatchEvent(new CustomEvent('p2p-delivered', {
@@ -1313,7 +1332,7 @@ this.activeTransfers.delete(messageId);
     if (rt) {
       rt.status = 'receiving';
       rt.reason = null;
-      
+
       window.dispatchEvent(new CustomEvent('p2p-transfer-started', {
         detail: { messageId: nextMessageId, fileName: rt.fileName }
       }));
@@ -1331,267 +1350,267 @@ this.activeTransfers.delete(messageId);
   /* ------------------ RECEIVE SIDE ------------------- */
   /* ---------------------------------------------------- */
 
-private async receiveChunk(from: string, payload: EncryptedPayload) {
-  const key = this.sessionKeys.get(from);
-  if (!key) {
-    console.warn('[P2P] No session key for', from, '- queuing chunk for later decryption');
-    // Queue chunk until key exchange completes
-    if (!this.pendingChunks.has(from)) {
-      this.pendingChunks.set(from, []);
-    }
-    this.pendingChunks.get(from)!.push({ from, payload });
-    
-    // Trigger key exchange if not already in progress
-    if (!this.sessionKeys.has(from)) {
-      this.send({
-        type: 'key-exchange',
-        to: from,
-        from: this.email,
-        publicKey: Array.from(this.publicKey)
-      });
-    }
-    return;
-  }
-
-  let data;
-  try {
-    data = await decrypt(key, payload);
-  } catch (err) {
-    console.error('[P2P] Decryption failed:', err);
-    return;
-  }
-
-  const {
-    messageId,
-    chunkIndex,
-    totalChunks,
-    chunk,
-    chunkBase64,
-    isBase64,
-    fileName,
-    mimeType,
-    checksum
-  } = data;
-
-  this.transferSenders.set(messageId, from);
-  localStorage.setItem(`p2p-sender-${messageId}`, from);
-
-  // Handle both old (array) and new (base64) formats
-  let rawChunk: Uint8Array;
-  if (isBase64 && chunkBase64) {
-    rawChunk = new Uint8Array(base64ToArrayBuffer(chunkBase64));
-  } else if (chunk) {
-    rawChunk = new Uint8Array(chunk);
-  } else {
-    console.error('[P2P] No chunk data received');
-    return;
-  }
-
-  const raw = rawChunk.buffer;
-  const verify = await sha256(raw);
-
-if (verify !== checksum) {
-  let rt = this.receiverTransfers.get(messageId);
-  if (rt) {
-    rt.failedChunks.add(chunkIndex);
-  }
-
-  this.send({
-    type: 'resume-request',
-    to: from,
-    messageId,
-    chunkIndex
-  });
-  return;
-}
-
-  if (!this.receivedChunks.has(messageId)) {
-    this.receivedChunks.set(messageId, new Map());
-  }
-
-  this.receivedChunks.get(messageId)!.set(chunkIndex, rawChunk);
-  await this.storeChunk(messageId, chunkIndex, rawChunk);
-
-  let rt = this.receiverTransfers.get(messageId);
-  if (!rt) {
-    rt = {
-      messageId,
-      fileName,
-      mimeType: mimeType || 'application/octet-stream',
-      totalChunks,
-      receivedChunks: new Set(),
-      verifiedChunks: new Set(),
-      failedChunks: new Set(),
-      status: 'receiving',
-      reason: null,
-      lastUpdated: Date.now()
-    };
-    this.receiverTransfers.set(messageId, rt);
-  }
-
-  rt.receivedChunks.add(chunkIndex);
-  rt.verifiedChunks.add(chunkIndex);
-  rt.lastUpdated = Date.now();
-
-  console.log('[P2P] Chunk received:', chunkIndex, '/', totalChunks, 'for', messageId, 'Total received:', rt.receivedChunks.size);
-
-const now = Date.now();
-const bytesReceived = rt.receivedChunks.size * P2P_LIMITS.CHUNK_SIZE;
-
-let speed = this.receiveSpeed.get(messageId);
-if (!speed) {
-  speed = { lastBytes: bytesReceived, lastTime: now, speedBps: 0 };
-  this.receiveSpeed.set(messageId, speed);
-} else {
-  const deltaBytes = bytesReceived - speed.lastBytes;
-  const deltaTime = (now - speed.lastTime) / 1000;
-  if (deltaTime > 0) {
-    speed.speedBps = deltaBytes / deltaTime;
-  }
-  speed.lastBytes = bytesReceived;
-  speed.lastTime = now;
-}
-
-const remainingBytes =
-  (totalChunks - rt.receivedChunks.size) * P2P_LIMITS.CHUNK_SIZE;
-
-const etaSeconds =
-  speed.speedBps > 0
-    ? Math.ceil(remainingBytes / speed.speedBps)
-    : null;
-
-  // ✅ EMIT PROGRESS (UI + ETA + Speed)
-  window.dispatchEvent(new CustomEvent('p2p-receiver-progress', {
-    detail: {
-      messageId,
-      received: rt.receivedChunks.size,
-      total: totalChunks,
-      percentage: Math.floor((rt.receivedChunks.size / totalChunks) * 100),
-      status: rt.status,
-      timestamp: Date.now(),
-      etaSeconds,
-      speedBps: speed.speedBps
-    }
-  }));
-
-  this.send({
-    type: 'chunk-ack',
-    to: from,
-    messageId,
-    chunkIndex,
-    timestamp: Date.now()
-  });
-
-  localStorage.setItem(
-    `p2p-recv-${messageId}`,
-    JSON.stringify([...rt.receivedChunks])
-  );
-
-if (rt.receivedChunks.size === totalChunks) {
-  await this.assembleFile(messageId, fileName, mimeType);
-  this.onTransferComplete(messageId);
-} else if (rt.failedChunks.size > 0) {
-  rt.status = 'failed';
-
-  window.dispatchEvent(
-    new CustomEvent('p2p-receiver-failed', {
-      detail: {
-        messageId,
-        failedChunks: [...rt.failedChunks]
+  private async receiveChunk(from: string, payload: EncryptedPayload) {
+    const key = this.sessionKeys.get(from);
+    if (!key) {
+      console.warn('[P2P] No session key for', from, '- queuing chunk for later decryption');
+      // Queue chunk until key exchange completes
+      if (!this.pendingChunks.has(from)) {
+        this.pendingChunks.set(from, []);
       }
-    })
-  );
-}
-}
+      this.pendingChunks.get(from)!.push({ from, payload });
 
-private chunkRetries = new Map<string, number>();
-private readonly MAX_RETRIES_PER_CHUNK = 5;
+      // Trigger key exchange if not already in progress
+      if (!this.sessionKeys.has(from)) {
+        this.send({
+          type: 'key-exchange',
+          to: from,
+          from: this.email,
+          publicKey: Array.from(this.myPublicKeyBytes || new Uint8Array())
+        });
+      }
+      return;
+    }
 
-private retryChunk(messageId: string, chunkIndex: number, to: string) {
-  const key = `${messageId}:${chunkIndex}`;
-  const count = this.chunkRetries.get(key) ?? 0;
+    let data;
+    try {
+      data = await decrypt(key, payload);
+    } catch (err) {
+      console.error('[P2P] Decryption failed:', err);
+      return;
+    }
 
-  if (count >= this.MAX_RETRIES_PER_CHUNK) {
-    window.dispatchEvent(new CustomEvent('p2p-transfer-failed', {
+    const {
+      messageId,
+      chunkIndex,
+      totalChunks,
+      chunk,
+      chunkBase64,
+      isBase64,
+      fileName,
+      mimeType,
+      checksum
+    } = data;
+
+    this.transferSenders.set(messageId, from);
+    localStorage.setItem(`p2p-sender-${messageId}`, from);
+
+    // Handle both old (array) and new (base64) formats
+    let rawChunk: Uint8Array;
+    if (isBase64 && chunkBase64) {
+      rawChunk = new Uint8Array(base64ToArrayBuffer(chunkBase64));
+    } else if (chunk) {
+      rawChunk = new Uint8Array(chunk);
+    } else {
+      console.error('[P2P] No chunk data received');
+      return;
+    }
+
+    const raw = rawChunk.buffer;
+    const verify = await sha256(raw);
+
+    if (verify !== checksum) {
+      let rt = this.receiverTransfers.get(messageId);
+      if (rt) {
+        rt.failedChunks.add(chunkIndex);
+      }
+
+      this.send({
+        type: 'resume-request',
+        to: from,
+        messageId,
+        chunkIndex
+      });
+      return;
+    }
+
+    if (!this.receivedChunks.has(messageId)) {
+      this.receivedChunks.set(messageId, new Map());
+    }
+
+    this.receivedChunks.get(messageId)!.set(chunkIndex, rawChunk);
+    await this.storeChunk(messageId, chunkIndex, rawChunk);
+
+    let rt = this.receiverTransfers.get(messageId);
+    if (!rt) {
+      rt = {
+        messageId,
+        fileName,
+        mimeType: mimeType || 'application/octet-stream',
+        totalChunks,
+        receivedChunks: new Set(),
+        verifiedChunks: new Set(),
+        failedChunks: new Set(),
+        status: 'receiving',
+        reason: null,
+        lastUpdated: Date.now()
+      };
+      this.receiverTransfers.set(messageId, rt);
+    }
+
+    rt.receivedChunks.add(chunkIndex);
+    rt.verifiedChunks.add(chunkIndex);
+    rt.lastUpdated = Date.now();
+
+    console.log('[P2P] Chunk received:', chunkIndex, '/', totalChunks, 'for', messageId, 'Total received:', rt.receivedChunks.size);
+
+    const now = Date.now();
+    const bytesReceived = rt.receivedChunks.size * P2P_LIMITS.CHUNK_SIZE;
+
+    let speed = this.receiveSpeed.get(messageId);
+    if (!speed) {
+      speed = { lastBytes: bytesReceived, lastTime: now, speedBps: 0 };
+      this.receiveSpeed.set(messageId, speed);
+    } else {
+      const deltaBytes = bytesReceived - speed.lastBytes;
+      const deltaTime = (now - speed.lastTime) / 1000;
+      if (deltaTime > 0) {
+        speed.speedBps = deltaBytes / deltaTime;
+      }
+      speed.lastBytes = bytesReceived;
+      speed.lastTime = now;
+    }
+
+    const remainingBytes =
+      (totalChunks - rt.receivedChunks.size) * P2P_LIMITS.CHUNK_SIZE;
+
+    const etaSeconds =
+      speed.speedBps > 0
+        ? Math.ceil(remainingBytes / speed.speedBps)
+        : null;
+
+    // ✅ EMIT PROGRESS (UI + ETA + Speed)
+    window.dispatchEvent(new CustomEvent('p2p-receiver-progress', {
       detail: {
         messageId,
-        reason: 'CHUNK_RETRY_EXCEEDED'
+        received: rt.receivedChunks.size,
+        total: totalChunks,
+        percentage: Math.floor((rt.receivedChunks.size / totalChunks) * 100),
+        status: rt.status,
+        timestamp: Date.now(),
+        etaSeconds,
+        speedBps: speed.speedBps
       }
     }));
-    return;
-  }
 
-  this.chunkRetries.set(key, count + 1);
-
-  const backoffMs = Math.min(1000 * Math.pow(2, count), 30000);
-
-  setTimeout(() => {
     this.send({
-      type: 'resume-request',
-      to,
+      type: 'chunk-ack',
+      to: from,
       messageId,
-      chunkIndex
+      chunkIndex,
+      timestamp: Date.now()
     });
-  }, backoffMs);
-}
 
+    localStorage.setItem(
+      `p2p-recv-${messageId}`,
+      JSON.stringify([...rt.receivedChunks])
+    );
 
-// ============================================================================
-// FIX 1: Update p2pService.ts - assembleFile method
-// ============================================================================
+    if (rt.receivedChunks.size === totalChunks) {
+      await this.assembleFile(messageId, fileName, mimeType);
+      this.onTransferComplete(messageId);
+    } else if (rt.failedChunks.size > 0) {
+      rt.status = 'failed';
 
-private async assembleFile(
-  messageId: string,
-  fileName: string,
-  mimeType: string
-) {
-  // 🔒 HARD STOP if already assembled
-  if (this.receivedFiles.has(messageId)) return;
-
-  const chunks = await this.loadChunks(messageId);
-  if (!chunks || chunks.size === 0) return;
-
-  const ordered = Array.from(chunks.entries())
-    .sort((a, b) => a[0] - b[0])
-    .map(([, data]) => data);
-
-  const blob = new Blob(ordered, {
-    type: mimeType || 'application/octet-stream'
-  });
-
-  // Persist to IndexedDB
-  const db = await this.openDB();
-  const tx = db.transaction('files', 'readwrite');
-  tx.objectStore('files').put({
-    messageId,
-    fileName,
-    mimeType,
-    blob,
-    completedAt: Date.now() // 🔑 terminal marker
-  });
-  await new Promise(res => (tx.oncomplete = () => res(true)));
-
-  // 🔒 Lock completion in memory
-  this.receivedFiles.set(messageId, blob);
-
-  const rt = this.receiverTransfers.get(messageId);
-  if (rt) {
-    rt.status = 'complete';
-    rt.reason = null;
-    rt.lastUpdated = Date.now();
+      window.dispatchEvent(
+        new CustomEvent('p2p-receiver-failed', {
+          detail: {
+            messageId,
+            failedChunks: [...rt.failedChunks]
+          }
+        })
+      );
+    }
   }
 
-  // 🔥 SINGLE FINAL EVENT
-  window.dispatchEvent(new CustomEvent('p2p-file-ready', {
-    detail: {
+  private chunkRetries = new Map<string, number>();
+  private readonly MAX_RETRIES_PER_CHUNK = 5;
+
+  private retryChunk(messageId: string, chunkIndex: number, to: string) {
+    const key = `${messageId}:${chunkIndex}`;
+    const count = this.chunkRetries.get(key) ?? 0;
+
+    if (count >= this.MAX_RETRIES_PER_CHUNK) {
+      window.dispatchEvent(new CustomEvent('p2p-transfer-failed', {
+        detail: {
+          messageId,
+          reason: 'CHUNK_RETRY_EXCEEDED'
+        }
+      }));
+      return;
+    }
+
+    this.chunkRetries.set(key, count + 1);
+
+    const backoffMs = Math.min(1000 * Math.pow(2, count), 30000);
+
+    setTimeout(() => {
+      this.send({
+        type: 'resume-request',
+        to,
+        messageId,
+        chunkIndex
+      });
+    }, backoffMs);
+  }
+
+
+  // ============================================================================
+  // FIX 1: Update p2pService.ts - assembleFile method
+  // ============================================================================
+
+  private async assembleFile(
+    messageId: string,
+    fileName: string,
+    mimeType: string
+  ) {
+    // 🔒 HARD STOP if already assembled
+    if (this.receivedFiles.has(messageId)) return;
+
+    const chunks = await this.loadChunks(messageId);
+    if (!chunks || chunks.size === 0) return;
+
+    const ordered = Array.from(chunks.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([, data]) => data);
+
+    const blob = new Blob(ordered, {
+      type: mimeType || 'application/octet-stream'
+    });
+
+    // Persist to IndexedDB
+    const db = await this.openDB();
+    const tx = db.transaction('files', 'readwrite');
+    tx.objectStore('files').put({
       messageId,
       fileName,
-      status: 'complete'
-    }
-  }));
+      mimeType,
+      blob,
+      completedAt: Date.now() // 🔑 terminal marker
+    });
+    await new Promise(res => (tx.oncomplete = () => res(true)));
 
-  await this.clearChunks(messageId);
-}
+    // 🔒 Lock completion in memory
+    this.receivedFiles.set(messageId, blob);
+
+    const rt = this.receiverTransfers.get(messageId);
+    if (rt) {
+      rt.status = 'complete';
+      rt.reason = null;
+      rt.lastUpdated = Date.now();
+    }
+
+    // 🔥 SINGLE FINAL EVENT
+    window.dispatchEvent(new CustomEvent('p2p-file-ready', {
+      detail: {
+        messageId,
+        fileName,
+        status: 'complete'
+      }
+    }));
+
+    await this.clearChunks(messageId);
+  }
 
   /* ---------------------------------------------------- */
   /* ------------------ UTIL ---------------------------- */
@@ -1614,22 +1633,100 @@ private async assembleFile(
     return this.connected;
   }
 
-isRecipientOnline(email: string): boolean {
-  return this.onlinePeers.has(email);
-}
+  isRecipientOnline(email: string): boolean {
+    return this.onlinePeers.has(email);
+  }
 
 
-// ============================================================================
-// FIX 2: Update downloadReceivedFile method
-// ============================================================================
+  // ============================================================================
+  // FIX 2: Update downloadReceivedFile method
+  // ============================================================================
 
-async downloadReceivedFile(messageId: string, fileName: string) {
-  console.log('[P2P] Download requested for:', messageId, fileName);
-  
-  let blob = this.receivedFiles.get(messageId);
+  async downloadReceivedFile(messageId: string, fileName: string) {
+    console.log('[P2P] Download requested for:', messageId, fileName);
 
-  if (!blob) {
-    console.log('[P2P] File not in memory, checking IndexedDB...');
+    let blob = this.receivedFiles.get(messageId);
+
+    if (!blob) {
+      console.log('[P2P] File not in memory, checking IndexedDB...');
+      try {
+        const db = await this.openDB();
+        const tx = db.transaction('files', 'readonly');
+        const store = tx.objectStore('files');
+        const record = await new Promise<any>((resolve, reject) => {
+          const req = store.get(messageId);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+
+        if (record?.blob) {
+          blob = record.blob;
+          this.receivedFiles.set(messageId, blob);
+          console.log('[P2P] File retrieved from IndexedDB:', blob.size, 'bytes');
+        }
+      } catch (error) {
+        console.error('[P2P] Failed to retrieve file from IndexedDB:', error);
+      }
+    }
+
+    if (!blob) {
+      console.error('[P2P] Download failed, blob missing:', messageId);
+
+      window.dispatchEvent(new CustomEvent('p2p-download-failed', {
+        detail: { messageId, fileName, error: 'File not found in storage' }
+      }));
+      return;
+    }
+
+    try {
+      console.log('[P2P] Creating download for:', fileName, blob.size, 'bytes', blob.type);
+
+      // Create download link
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+
+      // Trigger download
+      a.click();
+
+      console.log('[P2P] Download triggered successfully');
+
+      // Cleanup after a delay
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 1000);
+
+      // Notify UI that download succeeded
+      window.dispatchEvent(new CustomEvent('p2p-download-success', {
+        detail: { messageId, fileName, size: blob.size }
+      }));
+
+    } catch (error) {
+      console.error('[P2P] Download error:', error);
+
+      window.dispatchEvent(new CustomEvent('p2p-download-failed', {
+        detail: {
+          messageId,
+          fileName,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        }
+      }));
+    }
+  }
+
+  // ============================================================================
+  // FIX 3: Add method to check if file exists
+  // ============================================================================
+
+  async hasReceivedFile(messageId: string): Promise<boolean> {
+    if (this.receivedFiles.has(messageId)) {
+      return true;
+    }
+
     try {
       const db = await this.openDB();
       const tx = db.transaction('files', 'readonly');
@@ -1639,90 +1736,89 @@ async downloadReceivedFile(messageId: string, fileName: string) {
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       });
-
-      if (record?.blob) {
-        blob = record.blob;
-        this.receivedFiles.set(messageId, blob);
-        console.log('[P2P] File retrieved from IndexedDB:', blob.size, 'bytes');
-      }
+      return !!record?.blob;
     } catch (error) {
-      console.error('[P2P] Failed to retrieve file from IndexedDB:', error);
+      console.error('[P2P] Error checking for file:', error);
+      return false;
+    }
+  }
+  // --- PUBLIC CONTROL METHODS ---
+  public retryTransfer(messageId: string) {
+    const rt = this.receiverTransfers.get(messageId);
+    if (!rt) return;
+
+    rt.failedChunks.clear();
+    rt.status = 'receiving';
+
+    const sender = this.transferSenders.get(messageId);
+    if (sender) {
+      this.send({
+        type: 'resume-request',
+        to: sender,
+        messageId
+      });
     }
   }
 
-  if (!blob) {
-    console.error('[P2P] Download failed, blob missing:', messageId);
-    
-    window.dispatchEvent(new CustomEvent('p2p-download-failed', {
-      detail: { messageId, fileName, error: 'File not found in storage' }
-    }));
-    return;
+  public resumeSending(messageId: string) {
+    const transfer = this.activeTransfers.get(messageId);
+    if (transfer) {
+      transfer.paused = false;
+    }
   }
 
-  try {
-    console.log('[P2P] Creating download for:', fileName, blob.size, 'bytes', blob.type);
-    
-    // Create download link
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    
-    // Trigger download
-    a.click();
-    
-    console.log('[P2P] Download triggered successfully');
-    
-    // Cleanup after a delay
-    setTimeout(() => {
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }, 1000);
+  public async sendFiles(to: string, files: File[]) {
+    if (!this.connected) {
+      console.warn('[P2P] Cannot send files - not connected');
+      return;
+    }
 
-    // Notify UI that download succeeded
-    window.dispatchEvent(new CustomEvent('p2p-download-success', {
-      detail: { messageId, fileName, size: blob.size }
-    }));
+    for (const file of files) {
+      const messageId = crypto.randomUUID();
+      const totalChunks = Math.ceil(file.size / P2P_LIMITS.CHUNK_SIZE);
 
-  } catch (error) {
-    console.error('[P2P] Download error:', error);
-    
-    window.dispatchEvent(new CustomEvent('p2p-download-failed', {
-      detail: { 
-        messageId, 
-        fileName, 
-        error: error instanceof Error ? error.message : 'Unknown error'
-      }
-    }));
-  }
-}
+      this.activeTransfers.set(messageId, {
+        messageId,
+        recipientEmail: to,
+        attachments: [file], // Store file
+        missingChunks: new Set(),
+        totalChunks,
+        progress: 0,
+        bytesSent: 0,
+        paused: false,
+        phase: TransferPhase.OFFERED,
+        retryCount: new Map(),
+        lastSentAt: new Map()
+      });
 
-// ============================================================================
-// FIX 3: Add method to check if file exists
-// ============================================================================
+      console.log('[P2P] Sending file offer:', file.name, 'to', to);
 
-async hasReceivedFile(messageId: string): Promise<boolean> {
-  if (this.receivedFiles.has(messageId)) {
-    return true;
+      // Trigger offer
+      this.send({
+        type: 'p2p-offer',
+        to,
+        from: this.email,
+        messageId,
+        data: {
+          fileName: file.name,
+          mimeType: file.type,
+          size: file.size,
+          totalChunks
+        }
+      });
+
+      // The actual chunk sending starts when 'p2p-offer-ack' is received
+    }
   }
 
-  try {
-    const db = await this.openDB();
-    const tx = db.transaction('files', 'readonly');
-    const store = tx.objectStore('files');
-    const record = await new Promise<any>((resolve, reject) => {
-      const req = store.get(messageId);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+  public sendChat(to: string, content: string) {
+    this.send({
+      type: 'secure-message',
+      to,
+      from: this.email,
+      payload: { content, timestamp: Date.now() }
     });
-    return !!record?.blob;
-  } catch (error) {
-    console.error('[P2P] Error checking for file:', error);
-    return false;
   }
-}
 }
 
 /* ---------------------------------------------------- */
@@ -1737,53 +1833,40 @@ window.addEventListener('beforeunload', () => {
 
 window.addEventListener('p2p-retry-transfer', (e: any) => {
   const { messageId } = e.detail;
-  const rt = p2pService.receiverTransfers.get(messageId);
-  if (!rt) return;
-
-  rt.failedChunks.clear();
-  rt.status = 'receiving';
-
-  const sender = p2pService.transferSenders.get(messageId);
-  if (sender) {
-    p2pService.send({
-      type: 'resume-request',
-      to: sender,
-      messageId
-    });
-  }
+  p2pService.retryTransfer(messageId);
 });
 
 window.addEventListener('p2p-download-file', async (e: any) => {
   const { messageId, fileName } = e.detail;
   console.log('[P2P] Download event received:', messageId, fileName);
-  
+
   // Check single-download policy
   if (enhancedP2PService.hasBeenDownloaded(messageId)) {
     console.warn('[P2P] File already downloaded:', messageId);
     window.dispatchEvent(new CustomEvent('p2p-download-failed', {
-      detail: { 
-        messageId, 
-        fileName, 
+      detail: {
+        messageId,
+        fileName,
         error: 'This file can only be downloaded once for security reasons.'
       }
     }));
     return;
   }
-  
+
   const hasFile = await p2pService.hasReceivedFile(messageId);
-  
+
   if (hasFile) {
     await p2pService.downloadReceivedFile(messageId, fileName);
-    
+
     // Record the download
     const userId = localStorage.getItem('userId') || 'unknown';
     enhancedP2PService.recordDownload(messageId, fileName, userId);
   } else {
     console.error('[P2P] File not found for messageId:', messageId);
     window.dispatchEvent(new CustomEvent('p2p-download-failed', {
-      detail: { 
-        messageId, 
-        fileName, 
+      detail: {
+        messageId,
+        fileName,
         error: 'File not found. It may have been deleted or never received.'
       }
     }));
@@ -1838,9 +1921,6 @@ window.addEventListener('p2p-video-stream-init', (e: any) => {
 });
 window.addEventListener('p2p-accept-file', (e: any) => {
   const { messageId } = e.detail;
-const transfer = p2pService.activeTransfers.get(messageId);
-if (transfer) {
-  transfer.paused = false;
-}
+  p2pService.resumeSending(messageId);
 });
 

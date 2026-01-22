@@ -1,15 +1,18 @@
 import { useState } from 'react';
-import { Mail, HardDrive } from 'lucide-react';
+import { Mail, HardDrive, Video } from 'lucide-react';
 import MailLayout from './MailLayout';
 import JeeDrive from './JeeDrive';
+import CallManager from './CallManager';
+import CallsView from './CallsView';
 
-type View = 'mail' | 'drive';
+type View = 'mail' | 'drive' | 'calls';
 
 export default function MainApp() {
     const [currentView, setCurrentView] = useState<View>('mail');
 
     return (
         <div className="h-screen flex flex-col">
+            <CallManager />
             {/* Top Navigation Bar */}
             <div className="bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 px-4 py-3 flex items-center justify-between shadow-sm">
                 <div className="flex items-center gap-2">
@@ -34,6 +37,16 @@ export default function MainApp() {
                         <span className="text-sm font-medium">Mail</span>
                     </button>
                     <button
+                        onClick={() => setCurrentView('calls')}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200 ${currentView === 'calls'
+                            ? 'bg-white dark:bg-slate-700 text-green-600 dark:text-green-400 shadow-md'
+                            : 'text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white'
+                            }`}
+                    >
+                        <Video className="w-4 h-4" />
+                        <span className="text-sm font-medium">Meet</span>
+                    </button>
+                    <button
                         onClick={() => setCurrentView('drive')}
                         className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200 ${currentView === 'drive'
                             ? 'bg-white dark:bg-slate-700 text-cyan-600 dark:text-cyan-400 shadow-md'
@@ -48,7 +61,13 @@ export default function MainApp() {
 
             {/* Main Content */}
             <div className="flex-1 flex flex-col overflow-hidden">
-                {currentView === 'mail' ? <MailLayout /> : <JeeDrive />}
+                {currentView === 'mail' ? (
+                    <MailLayout />
+                ) : currentView === 'calls' ? (
+                    <CallsView />
+                ) : (
+                    <JeeDrive />
+                )}
             </div>
         </div>
     );
