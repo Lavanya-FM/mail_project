@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { callService, CallSession, CallEvent } from '../lib/callService';
 import { webrtcManager } from '../lib/webrtcManager';
+import { backgroundProcessor } from '../lib/backgroundProcessor';
 import toast from 'react-hot-toast';
 
 export interface UseCallOptions {
@@ -23,6 +24,7 @@ export interface UseCallReturn {
     isRinging: boolean;
     isConnected: boolean;
     isMuted: boolean;
+    isVideoEnabled: boolean;
     isScreenSharing: boolean;
     localStream: MediaStream | null;
     remoteStream: MediaStream | null;
@@ -33,6 +35,7 @@ export interface UseCallReturn {
     rejectCall: () => Promise<void>;
     endCall: () => Promise<void>;
     toggleMute: () => void;
+    toggleVideo: () => void;
     toggleScreenShare: () => Promise<void>;
 
     // Status
@@ -42,6 +45,13 @@ export interface UseCallReturn {
     switchCamera: (deviceId: string) => Promise<void>;
     switchMicrophone: (deviceId: string) => Promise<void>;
     toggleVirtualBackground: (mode: 'blur' | 'image' | 'none') => Promise<void>;
+
+    // Interaction
+    chatMessages: Array<{ sender: string; content: string; timestamp: number }>;
+    sendChat: (message: string) => void;
+    sendReaction: (reaction: string) => void;
+    toggleHand: () => void;
+    remoteHandRaised: boolean;
 }
 
 export function useCall(options: UseCallOptions): UseCallReturn {
@@ -51,12 +61,16 @@ export function useCall(options: UseCallOptions): UseCallReturn {
     const [incomingCall, setIncomingCall] = useState<CallSession | null>(null);
     const [isConnected, setIsConnected] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
+    const [isVideoEnabled, setIsVideoEnabled] = useState(true);
     const [isScreenSharing, setIsScreenSharing] = useState(false);
     const [localStream, setLocalStream] = useState<MediaStream | null>(null);
     const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
     const [callDuration, setCallDuration] = useState(0);
     const [connectionStats, setConnectionStats] = useState({ upload: '0 KB/s', download: '0 KB/s', total: '0 MB' });
     const [availableDevices, setAvailableDevices] = useState<{ audio: MediaDeviceInfo[], video: MediaDeviceInfo[] }>({ audio: [], video: [] });
+    const [chatMessages, setChatMessages] = useState<Array<{ sender: string; content: string; timestamp: number }>>([]);
+    const [remoteHandRaised, setRemoteHandRaised] = useState(false);
+    const [isHandRaised, setIsHandRaised] = useState(false);
 
     const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const deviceId = useRef(`device_${Date.now()}`);
@@ -75,6 +89,7 @@ export function useCall(options: UseCallOptions): UseCallReturn {
             callId: event.callId,
             threadId: event.payload.context?.threadId,
             caller: event.from,
+            callerName: event.payload.callerName,
             callee: userEmail,
             callType: event.payload.mode || 'audio',
             status: 'ringing',
@@ -145,6 +160,14 @@ export function useCall(options: UseCallOptions): UseCallReturn {
         // Cleanup WebRTC
         webrtcManager.closePeerConnection(callId);
 
+        // Stop Virtual Background
+        backgroundProcessor.stopProcessing();
+
+        // Ensure local stream tracks are stopped
+        if (localStream) {
+            localStream.getTracks().forEach(track => track.stop());
+        }
+
         // Clear state
         setActiveCall(null);
         setIncomingCall(null);
@@ -152,6 +175,9 @@ export function useCall(options: UseCallOptions): UseCallReturn {
         setLocalStream(null);
         setRemoteStream(null);
         setCallDuration(0);
+        setChatMessages([]); // Clear chat history
+        setRemoteHandRaised(false); // Reset hand state
+        setIsHandRaised(false); // Reset local hand
         stopRingtone();
 
         // Stop duration timer
@@ -256,6 +282,28 @@ export function useCall(options: UseCallOptions): UseCallReturn {
         if (!activeCall) return;
         await webrtcManager.toggleVirtualBackground(activeCall.callId, mode);
     }, [activeCall]);
+
+
+    /**
+     * Interaction methods
+     */
+    const sendChat = useCallback((message: string) => {
+        if (!activeCall) return;
+        callService.sendChatMessage(activeCall.callId, message);
+        setChatMessages(prev => [...prev, { sender: 'You', content: message, timestamp: Date.now() }]);
+    }, [activeCall]);
+
+    const sendReaction = useCallback((reaction: string) => {
+        if (!activeCall) return;
+        callService.sendReaction(activeCall.callId, reaction);
+    }, [activeCall]);
+
+    const toggleHand = useCallback(() => {
+        if (!activeCall) return;
+        const newState = !isHandRaised;
+        setIsHandRaised(newState);
+        callService.sendHandRaise(activeCall.callId, newState);
+    }, [activeCall, isHandRaised]);
 
 
     /**
@@ -364,6 +412,17 @@ export function useCall(options: UseCallOptions): UseCallReturn {
     }, [activeCall, isMuted]);
 
     /**
+     * Toggle video
+     */
+    const toggleVideo = useCallback(() => {
+        if (!activeCall) return;
+
+        const newState = !isVideoEnabled;
+        webrtcManager.toggleVideo(activeCall.callId, newState);
+        setIsVideoEnabled(newState);
+    }, [activeCall, isVideoEnabled]);
+
+    /**
      * Toggle screen share
      */
     const toggleScreenShare = useCallback(async () => {
@@ -419,6 +478,24 @@ export function useCall(options: UseCallOptions): UseCallReturn {
             }
         };
 
+        const handleCallChat = (event: CallEvent) => {
+
+            setChatMessages(prev => [...prev, { sender: event.from, content: event.payload.message, timestamp: event.timestamp }]);
+        };
+
+        const handleCallHand = (event: CallEvent) => {
+
+            setRemoteHandRaised(event.payload.raised);
+            // Toast handled by ActiveCall floating UI
+        };
+
+        const handleCallReaction = (event: CallEvent) => {
+
+            // Dispatch generic event for UI to pick up because reaction is ephemeral
+            window.dispatchEvent(new CustomEvent('remote-reaction', { detail: event.payload.reaction }));
+            // Toast handled by ActiveCall floating UI
+        };
+
         // Initial check
         handleStateChange();
 
@@ -430,6 +507,9 @@ export function useCall(options: UseCallOptions): UseCallReturn {
         callService.on('RTC_ANSWER', handleRTCAnswer);
         callService.on('RTC_ICE', handleRTCIce);
         callService.on('MEDIA_UPDATE', handleMediaUpdate);
+        callService.on('CALL_CHAT', handleCallChat);
+        callService.on('CALL_HAND', handleCallHand);
+        callService.on('CALL_REACTION', handleCallReaction);
         callService.onStateChange(handleStateChange);
 
         return () => {
@@ -441,6 +521,9 @@ export function useCall(options: UseCallOptions): UseCallReturn {
             callService.off('RTC_ANSWER', handleRTCAnswer);
             callService.off('RTC_ICE', handleRTCIce);
             callService.off('MEDIA_UPDATE', handleMediaUpdate);
+            callService.off('CALL_CHAT', handleCallChat);
+            callService.off('CALL_HAND', handleCallHand);
+            callService.off('CALL_REACTION', handleCallReaction);
             callService.offStateChange(handleStateChange);
         };
     }, [
@@ -487,6 +570,7 @@ export function useCall(options: UseCallOptions): UseCallReturn {
         isRinging,
         isConnected,
         isMuted,
+        isVideoEnabled,
         isScreenSharing,
         localStream,
         remoteStream,
@@ -495,14 +579,39 @@ export function useCall(options: UseCallOptions): UseCallReturn {
         rejectCall,
         endCall,
         toggleMute,
+        toggleVideo,
         toggleScreenShare,
         callDuration,
         connectionStats,
         availableDevices,
         switchCamera,
         switchMicrophone,
-        toggleVirtualBackground
+        toggleVirtualBackground,
+        chatMessages,
+        sendChat,
+        sendReaction,
+        toggleHand,
+        remoteHandRaised
     };
+}
+
+// Shared AudioContext to avoid multiple instances
+let sharedAudioContext: AudioContext | null = null;
+
+/**
+ * Unlock audio context on user interaction
+ */
+export function unlockAudio() {
+    try {
+        if (!sharedAudioContext) {
+            sharedAudioContext = new AudioContext();
+        }
+        if (sharedAudioContext.state === 'suspended') {
+            sharedAudioContext.resume();
+        }
+    } catch (e) {
+        // Ignore errors during unlock
+    }
 }
 
 /**
@@ -511,20 +620,39 @@ export function useCall(options: UseCallOptions): UseCallReturn {
 function playRingtone() {
     // Simple beep using Web Audio API
     try {
-        const audioContext = new AudioContext();
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
+        // Create or reuse AudioContext
+        if (!sharedAudioContext) {
+            sharedAudioContext = new AudioContext();
+        }
 
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
+        // Resume if suspended (browser autoplay policy)
+        if (sharedAudioContext.state === 'suspended') {
+            sharedAudioContext.resume().catch(() => {
+                // Silently fail - user hasn't interacted yet
+            });
+        }
 
-        oscillator.frequency.value = 440; // A4 note
-        gainNode.gain.value = 0.1;
+        // Only play if context is running
+        if (sharedAudioContext.state === 'running') {
+            const oscillator = sharedAudioContext.createOscillator();
+            const gainNode = sharedAudioContext.createGain();
 
-        oscillator.start();
-        setTimeout(() => oscillator.stop(), 200);
+            oscillator.connect(gainNode);
+            gainNode.connect(sharedAudioContext.destination);
+
+            oscillator.frequency.value = 440; // A4 note
+            gainNode.gain.value = 0.1;
+
+            oscillator.start();
+            setTimeout(() => {
+                oscillator.stop();
+                oscillator.disconnect();
+                gainNode.disconnect();
+            }, 200);
+        }
     } catch (error) {
-        console.error('[useCall] Failed to play ringtone:', error);
+        // Silently fail - audio is not critical
+        console.warn('[useCall] Ringtone skipped:', error);
     }
 }
 

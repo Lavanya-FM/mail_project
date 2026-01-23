@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { Send, User, X, Paperclip } from 'lucide-react';
 import { p2pService } from '../lib/p2pService';
 import { authService } from '../lib/authService';
+import { chatStorage } from '../lib/chatStorage';
+import LocalStoragePrompt from './LocalStoragePrompt';
 
 interface ChatInterfaceProps {
     peer: string;
@@ -19,56 +21,83 @@ interface Message {
 export default function ChatInterface({ peer, onClose }: ChatInterfaceProps) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
+    const [showStoragePrompt, setShowStoragePrompt] = useState(false);
+
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const user = authService.getCurrentUser();
 
+    // Check storage preference on mount
     useEffect(() => {
-        const handleP2PMessage = (e: any) => {
-            const msg = e.detail;
-            // Handle secure-message from the peer we are chatting with
-            if (msg.type === 'secure-message' && msg.from === peer) {
-                if (msg.payload && msg.payload.content) {
-                    setMessages(prev => [...prev, {
-                        id: Math.random().toString(),
-                        text: msg.payload.content,
-                        sender: msg.from,
-                        timestamp: msg.payload.timestamp || Date.now(),
-                        isSelf: false
-                    }]);
+        const pref = chatStorage.getPreference();
+        if (pref === null) {
+            setShowStoragePrompt(true);
+        }
+    }, []);
+
+    // Load messages from storage
+    useEffect(() => {
+        if (!user?.email) return;
+
+        const loadMessages = async () => {
+            try {
+                // Try IndexedDB first
+                const dbMessages = await chatStorage.getMessages(peer);
+
+                if (dbMessages && dbMessages.length > 0) {
+                    setMessages(dbMessages.map(m => ({
+                        id: m.id ? m.id.toString() : Math.random().toString(),
+                        text: m.content,
+                        sender: m.sender,
+                        timestamp: m.timestamp,
+                        isSelf: m.sender === user.email
+                    })));
+                } else {
+                    // Fallback to localStorage (legacy support or if DB empty)
+                    // Only if DB preference is NOT disabled explicitly? 
+                    // Or maybe we migrate? For now, we load legacy if DB empty.
+                    const key = `chat_${user.email}_${peer}`;
+                    const stored = localStorage.getItem(key);
+                    if (stored) {
+                        setMessages(JSON.parse(stored));
+                    }
                 }
+            } catch (err) {
+                console.error('Failed to load messages', err);
+            }
+        };
+
+        loadMessages();
+    }, [peer, user]);
+
+    // Handle P2P Incoming
+    useEffect(() => {
+        const handleP2PMessage = async (e: any) => {
+            const msg = e.detail;
+            if (msg.type === 'secure-message' && msg.from === peer && msg.payload?.content) {
+                const newMessage = {
+                    id: Math.random().toString(),
+                    text: msg.payload.content,
+                    sender: msg.from,
+                    timestamp: msg.payload.timestamp || Date.now(),
+                    isSelf: false
+                };
+
+                setMessages(prev => [...prev, newMessage]);
+
+                // Save to storage
+                await chatStorage.saveMessage({
+                    threadId: peer,
+                    sender: msg.from,
+                    content: msg.payload.content,
+                    timestamp: newMessage.timestamp
+                });
             }
         };
 
         window.addEventListener('p2p-message', handleP2PMessage);
         return () => window.removeEventListener('p2p-message', handleP2PMessage);
     }, [peer]);
-
-    useEffect(() => {
-        // Load messages
-        if (user?.email) {
-            const key = `chat_${user.email}_${peer}`;
-            try {
-                const stored = localStorage.getItem(key);
-                if (stored) {
-                    setMessages(JSON.parse(stored));
-                } else {
-                    setMessages([]);
-                }
-            } catch (e) {
-                console.error('Failed to load chat', e);
-                setMessages([]);
-            }
-        }
-    }, [peer, user]);
-
-    useEffect(() => {
-        // Save messages
-        if (user?.email && messages.length > 0) {
-            const key = `chat_${user.email}_${peer}`;
-            localStorage.setItem(key, JSON.stringify(messages));
-        }
-    }, [messages, peer, user]);
 
     // Auto-scroll
     useEffect(() => {
@@ -77,24 +106,32 @@ export default function ChatInterface({ peer, onClose }: ChatInterfaceProps) {
         }
     }, [messages]);
 
-    const handleSend = () => {
+    const handleSend = async () => {
         if (!input.trim() || !user) return;
-
         const text = input.trim();
 
-        // Send via P2P
         try {
             p2pService.sendChat(peer, text);
 
-            // Add locally
-            setMessages(prev => [...prev, {
+            const newMessage = {
                 id: Math.random().toString(),
                 text,
                 sender: user.email,
                 timestamp: Date.now(),
                 isSelf: true
-            }]);
+            };
+
+            setMessages(prev => [...prev, newMessage]);
             setInput('');
+
+            // Save locally
+            await chatStorage.saveMessage({
+                threadId: peer,
+                sender: user.email,
+                content: text,
+                timestamp: newMessage.timestamp
+            });
+
         } catch (err) {
             console.error('Failed to send chat', err);
         }
@@ -110,13 +147,20 @@ export default function ChatInterface({ peer, onClose }: ChatInterfaceProps) {
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files.length > 0) {
             p2pService.sendFiles(peer, Array.from(e.target.files));
-            // Reset input
             e.target.value = '';
         }
     };
 
     return (
-        <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-3xl shadow-xl overflow-hidden border border-gray-200 dark:border-slate-800">
+        <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-3xl shadow-xl overflow-hidden border border-gray-200 dark:border-slate-800 relative">
+            {/* Storage Prompt Modal */}
+            {showStoragePrompt && (
+                <LocalStoragePrompt
+                    onComplete={() => setShowStoragePrompt(false)}
+                    onClose={() => setShowStoragePrompt(false)}
+                />
+            )}
+
             {/* Header */}
             <div className="p-4 bg-gray-50 dark:bg-slate-800 border-b border-gray-100 dark:border-slate-700 flex items-center justify-between">
                 <div className="flex items-center gap-3">

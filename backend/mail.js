@@ -10,6 +10,7 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const nodemailer = require("nodemailer");
+const jwt = require("jsonwebtoken");
 
 const db = require("./db"); // expects exported promise-based query/getConnection interface
 const { sanitizeBody, normalizeEmail, isValidEmailFormat } = require("./utils");
@@ -53,14 +54,14 @@ router.post("/register", async (req, res) => {
   try {
     // ✅ CRITICAL: Log the raw request body to debug data corruption
     console.log('REGISTER: Raw request body', JSON.stringify(req.body, null, 2));
-    
+
     // ✅ CRITICAL: Extract raw values from request body
     const rawName = req.body?.name;
     const rawEmail = req.body?.email;
     const password = req.body.password;
     const dateOfBirth = req.body.dateOfBirth;
     const gender = req.body.gender;
-    
+
     // ✅ CRITICAL: Log raw input values
     console.log('REGISTER: Raw input values', {
       rawName: rawName || 'MISSING',
@@ -69,23 +70,23 @@ router.post("/register", async (req, res) => {
       dateOfBirth: dateOfBirth || 'MISSING',
       gender: gender || 'MISSING'
     });
-    
+
     // ✅ CRITICAL: Validate email is required
     if (!rawEmail) {
       return res.status(400).json({ error: "Email is required" });
     }
-    
+
     // ✅ CRITICAL: Normalize email
     const email = normalizeEmail(String(rawEmail).trim());
-    
+
     // ✅ CRITICAL: Extract email username (part before @)
     const emailUsername = email.split('@')[0] || '';
-    
+
     // 🔒 SAFETY FIX: Handle malformed input where name contains email pattern or equals email
     // This is a defensive backend fix only - does not change existing functionality
     let name = rawName ? String(rawName).trim() : '';
     const originalName = name;
-    
+
     // ✅ CRITICAL: If name contains @ symbol, strip it (recover from corrupted data)
     if (name.includes('@')) {
       // Remove @jeemail.in pattern if present
@@ -96,7 +97,7 @@ router.post("/register", async (req, res) => {
       }
       // Silently recover - no logging needed as this is expected behavior
     }
-    
+
     // If name is missing OR equals email (data corruption), recover safely
     if (!name || name === rawEmail || name === email) {
       // Extract username from email as fallback
@@ -113,7 +114,7 @@ router.post("/register", async (req, res) => {
         return res.status(400).json({ error: "Name is required" });
       }
     }
-    
+
     // ✅ CRITICAL: Final validation - name cannot contain @ symbol (should never happen after recovery)
     if (name.includes('@')) {
       console.error('REGISTER ERROR: Name still contains @ symbol after recovery - severe data corruption!', {
@@ -123,11 +124,11 @@ router.post("/register", async (req, res) => {
         emailUsername: emailUsername,
         password: password ? `*** (length: ${password.length})` : 'MISSING'
       });
-      return res.status(400).json({ 
-        error: "Name cannot contain @ symbol. Please enter your actual name, not your email address." 
+      return res.status(400).json({
+        error: "Name cannot contain @ symbol. Please enter your actual name, not your email address."
       });
     }
-    
+
     // ✅ CRITICAL: Log extracted and processed values
     console.log('REGISTER: Extracted and processed values', {
       originalRawName: rawName || 'MISSING',
@@ -144,7 +145,7 @@ router.post("/register", async (req, res) => {
 
     if (!password)
       return res.status(400).json({ error: "Password is required" });
-    
+
     // ✅ CRITICAL: Validate that email IS an email address and NOT a password
     if (!email.includes('@')) {
       console.error('REGISTER ERROR: Email does not contain @ symbol - data corruption detected!', {
@@ -154,7 +155,7 @@ router.post("/register", async (req, res) => {
       });
       return res.status(400).json({ error: "Invalid email format. Email must contain @ symbol." });
     }
-    
+
     // ✅ CRITICAL: Validate that email is NOT actually a password (password might contain @)
     // If email looks like a password (contains @ but doesn't have a valid domain), reject it
     if (email.includes('@') && !email.includes('.')) {
@@ -165,7 +166,7 @@ router.post("/register", async (req, res) => {
       });
       return res.status(400).json({ error: "Invalid email format. Email must have a valid domain." });
     }
-    
+
     // ✅ CRITICAL: Validate that password is NOT being used as email
     // If email matches password pattern (contains @ but not a proper email domain), reject
     if (password && email === password) {
@@ -176,7 +177,7 @@ router.post("/register", async (req, res) => {
       });
       return res.status(400).json({ error: "Email cannot be the same as password." });
     }
-    
+
     // ✅ CRITICAL: Check if email looks like a password (has @ but domain is not jeemail.in or is invalid)
     const emailParts = email.split('@');
     if (emailParts.length === 2) {
@@ -205,32 +206,32 @@ router.post("/register", async (req, res) => {
           email: email,
           name: name
         });
-        return res.status(400).json({ 
-          error: "Invalid email format. Email username cannot be only numbers. Please include at least one letter." 
+        return res.status(400).json({
+          error: "Invalid email format. Email username cannot be only numbers. Please include at least one letter."
         });
       }
     }
-    
+
     // ✅ CRITICAL: Validate email format first
     if (!isValidEmailFormat(email)) {
-      return res.status(400).json({ 
-        error: "Invalid email format. Please enter a valid email address." 
+      return res.status(400).json({
+        error: "Invalid email format. Please enter a valid email address."
       });
     }
-    
+
     const normalizedEmail = normalizeEmail(email);
-    
+
     // ✅ FIX: Add logging to debug registration
-    console.log('REGISTER ATTEMPT:', { 
-      originalEmail: email, 
+    console.log('REGISTER ATTEMPT:', {
+      originalEmail: email,
       normalizedEmail: normalizedEmail,
-      name: name 
+      name: name
     });
 
     // ✅ CRITICAL: Validate domain (must be jeemail.in)
     if (!isValidDomain(normalizedEmail)) {
-      return res.status(400).json({ 
-        error: `Email must be under ${ALLOWED_DOMAIN}` 
+      return res.status(400).json({
+        error: `Email must be under ${ALLOWED_DOMAIN}`
       });
     }
 
@@ -241,17 +242,17 @@ router.post("/register", async (req, res) => {
       "SELECT id, email FROM users WHERE LOWER(TRIM(email)) = LOWER(TRIM(?)) OR email = ? LIMIT 1",
       [normalizedEmail, normalizedEmail]
     );
-    
-    console.log('REGISTER CHECK:', { 
+
+    console.log('REGISTER CHECK:', {
       normalizedEmail: normalizedEmail,
       alreadyExists: exists.length > 0,
       existingUserId: exists[0]?.id,
       existingEmail: exists[0]?.email
     });
-    
+
     if (exists.length) {
-      return res.status(409).json({ 
-        error: "This email address is already registered. Please use a different email or sign in." 
+      return res.status(409).json({
+        error: "This email address is already registered. Please use a different email or sign in."
       });
     }
 
@@ -259,7 +260,7 @@ router.post("/register", async (req, res) => {
     if (!password || typeof password !== 'string') {
       return res.status(400).json({ error: "Password is required" });
     }
-    
+
     // ✅ CRITICAL: Detect if password looks like a name (data swap detection)
     // Password should not be a common name (4-5 chars, all lowercase letters)
     if (password.length <= 5 && /^[a-z]+$/.test(password.toLowerCase())) {
@@ -271,12 +272,12 @@ router.post("/register", async (req, res) => {
           email: email,
           emailUsername: emailUsername
         });
-        return res.status(400).json({ 
-          error: "Password appears to be invalid. Please use a stronger password (at least 6 characters with letters, numbers, or special characters)." 
+        return res.status(400).json({
+          error: "Password appears to be invalid. Please use a stronger password (at least 6 characters with letters, numbers, or special characters)."
         });
       }
     }
-    
+
     // ✅ CRITICAL: Validate password length (minimum 6 characters, maximum 128)
     if (password.length < 6) {
       return res.status(400).json({ error: "Password must be at least 6 characters long" });
@@ -284,11 +285,11 @@ router.post("/register", async (req, res) => {
     if (password.length > 128) {
       return res.status(400).json({ error: "Password is too long (maximum 128 characters)" });
     }
-    
+
     // ✅ CRITICAL: Don't trim password - user might have intentionally added spaces
     // But ensure it's a valid string
     const passwordString = String(password);
-    
+
     let dobString = null;
     if (dateOfBirth?.year) {
       dobString = `${dateOfBirth.year}-${String(dateOfBirth.month).padStart(
@@ -302,7 +303,7 @@ router.post("/register", async (req, res) => {
     let hash;
     try {
       hash = await bcrypt.hash(passwordString, 10);
-      console.log('REGISTER: Password hashed successfully', { 
+      console.log('REGISTER: Password hashed successfully', {
         hashLength: hash.length,
         hashPrefix: hash.substring(0, 10) + '...' // Log first 10 chars for debugging
       });
@@ -310,7 +311,7 @@ router.post("/register", async (req, res) => {
       console.error('REGISTER ERROR: Password hashing failed', hashError);
       return res.status(500).json({ error: "Password encryption failed" });
     }
-    
+
     // ✅ CRITICAL: Verify hash was created (should be 60 characters for bcrypt)
     if (!hash || hash.length < 50) {
       console.error('REGISTER ERROR: Invalid hash generated', { hashLength: hash?.length });
@@ -325,7 +326,7 @@ router.post("/register", async (req, res) => {
       dateOfBirth: dobString || 'NULL',
       gender: gender || 'NULL'
     });
-    
+
     // ✅ CRITICAL: Verify values are in correct order before INSERT
     if (name.includes('@')) {
       console.error('REGISTER CRITICAL ERROR: Name contains @ before INSERT! Aborting.', {
@@ -334,7 +335,7 @@ router.post("/register", async (req, res) => {
       });
       return res.status(500).json({ error: "Data validation failed: name contains email format" });
     }
-    
+
     if (!normalizedEmail.includes('@')) {
       console.error('REGISTER CRITICAL ERROR: Email does not contain @ before INSERT! Aborting.', {
         name,
@@ -342,23 +343,23 @@ router.post("/register", async (req, res) => {
       });
       return res.status(500).json({ error: "Data validation failed: email is invalid" });
     }
-    
+
     // ✅ CRITICAL: Extract email username from normalized email for storage
     // emailUsername was already extracted earlier, but we need to ensure it matches normalizedEmail
     const finalEmailUsername = normalizedEmail.split('@')[0] || emailUsername || '';
-    
+
     const [insert] = await db.query(
       `INSERT INTO users (full_name, email, email_username, password, date_of_birth, gender)
        VALUES (?, ?, ?, ?, ?, ?)`,
       [name, normalizedEmail, finalEmailUsername, hash, dobString, gender]
     );
-    
+
     // ✅ CRITICAL: Verify what was actually inserted
     const [verifyInsert] = await db.query(
       "SELECT full_name, email, LENGTH(password) as pwd_length FROM users WHERE id = ? LIMIT 1",
       [insert.insertId]
     );
-    
+
     if (verifyInsert.length > 0) {
       const inserted = verifyInsert[0];
       console.log('REGISTER: Verification of inserted data', {
@@ -366,7 +367,7 @@ router.post("/register", async (req, res) => {
         insertedEmail: inserted.email ? `${inserted.email.substring(0, 30)}...` : 'NULL',
         passwordLength: inserted.pwd_length
       });
-      
+
       // ✅ CRITICAL: Check if data corruption occurred
       if (inserted.full_name && inserted.full_name.includes('@')) {
         console.error('REGISTER CRITICAL ERROR: Name field contains @ after INSERT! Data corruption detected!', {
@@ -382,7 +383,7 @@ router.post("/register", async (req, res) => {
         );
         console.log('REGISTER: Attempted to fix corrupted data');
       }
-      
+
       if (inserted.email && !inserted.email.includes('@')) {
         console.error('REGISTER CRITICAL ERROR: Email field does not contain @ after INSERT! Data corruption detected!', {
           insertedName: inserted.full_name,
@@ -398,53 +399,53 @@ router.post("/register", async (req, res) => {
         console.log('REGISTER: Attempted to fix corrupted data');
       }
     }
-    
+
     const userId = insert.insertId;
-    
+
     // ✅ CRITICAL: Verify user was created and can be retrieved for login
     const [verifyUser] = await db.query(
       "SELECT id, email, full_name, LENGTH(password) as pwd_length FROM users WHERE id = ? LIMIT 1",
       [userId]
     );
-    
+
     if (verifyUser.length === 0) {
       console.error('REGISTER ERROR: User was not created in database!', { userId });
       return res.status(500).json({ error: "Failed to create user account" });
     }
-    
-    console.log('REGISTER: User created and verified in database', { 
+
+    console.log('REGISTER: User created and verified in database', {
       userId: verifyUser[0].id,
       email: verifyUser[0].email,
       name: verifyUser[0].full_name,
-      storedHashLength: verifyUser[0].pwd_length 
+      storedHashLength: verifyUser[0].pwd_length
     });
-    
+
     // ✅ CRITICAL: Test that the user can be found with login query (same query as login uses)
     const [loginTest] = await db.query(
       "SELECT id, email FROM users WHERE LOWER(TRIM(email)) = LOWER(TRIM(?)) LIMIT 1",
       [normalizedEmail]
     );
-    
+
     if (loginTest.length === 0) {
-      console.error('REGISTER ERROR: User cannot be found with login query!', { 
+      console.error('REGISTER ERROR: User cannot be found with login query!', {
         normalizedEmail,
-        userId 
+        userId
       });
       return res.status(500).json({ error: "User created but login query failed" });
     }
-    
-    console.log('REGISTER: Login query test passed', { 
+
+    console.log('REGISTER: Login query test passed', {
       userId: loginTest[0].id,
-      email: loginTest[0].email 
+      email: loginTest[0].email
     });
 
     await createSystemFolders(userId);
-    
+
     // ✅ FIX: Log successful registration
-    console.log('REGISTER SUCCESS:', { 
+    console.log('REGISTER SUCCESS:', {
       userId: userId,
       name: name,
-      normalizedEmail: normalizedEmail 
+      normalizedEmail: normalizedEmail
     });
 
     // ✅ FIX: Explicitly map fields to ensure correct data structure
@@ -457,30 +458,36 @@ router.post("/register", async (req, res) => {
       date_of_birth: dobString || null,
       gender: gender || null,
     };
-    
+
     // ✅ CRITICAL: Validate response doesn't contain password
     if ('password' in responseUser) {
       console.error('REGISTER ERROR: Password accidentally included in response!');
       delete responseUser.password;
     }
-    
+
     // ✅ CRITICAL: Validate name is not an email and email is valid
     if (responseUser.name.includes('@')) {
-      console.error('REGISTER ERROR: Name field contains email address!', { 
-        name: responseUser.name, 
-        email: responseUser.email 
+      console.error('REGISTER ERROR: Name field contains email address!', {
+        name: responseUser.name,
+        email: responseUser.email
       });
       return res.status(500).json({ error: "Data corruption detected" });
     }
-    
+
     if (!responseUser.email.includes('@') || responseUser.email.length > 100) {
-      console.error('REGISTER ERROR: Invalid email in response!', { 
-        email: responseUser.email 
+      console.error('REGISTER ERROR: Invalid email in response!', {
+        email: responseUser.email
       });
       return res.status(500).json({ error: "Data corruption detected" });
     }
-    
-    return res.json({ user: responseUser });
+
+    const token = jwt.sign(
+      { user: { id: userId, email: normalizedEmail } },
+      process.env.JWT_SECRET || "your_jwt_secret",
+      { expiresIn: "7d" }
+    );
+
+    return res.json({ user: responseUser, token });
   } catch (err) {
     // ✅ CRITICAL: Map database/validation errors to meaningful HTTP responses
     console.error("REGISTER ERROR:", err);
@@ -504,20 +511,20 @@ router.post("/login", async (req, res) => {
 
     // ✅ CRITICAL: Validate email format first
     if (!isValidEmailFormat(email || "")) {
-      return res.status(400).json({ 
-        error: "Invalid email format. Please enter a valid email address." 
+      return res.status(400).json({
+        error: "Invalid email format. Please enter a valid email address."
       });
     }
-    
+
     const normalized = normalizeEmail(email || "");
-    
+
     // ✅ FIX: Add logging to debug login issues
-    console.log('LOGIN ATTEMPT:', { 
-      originalEmail: email, 
+    console.log('LOGIN ATTEMPT:', {
+      originalEmail: email,
       normalizedEmail: normalized,
-      hasPassword: !!password 
+      hasPassword: !!password
     });
-    
+
     // ✅ CRITICAL: Use case-insensitive email lookup (like Gmail)
     // Since we store emails in lowercase, we can compare directly, but use LOWER() for safety
     // This ensures emails stored as "user@jeemail.in" match queries for "User@Jeemail.In"
@@ -536,7 +543,7 @@ router.post("/login", async (req, res) => {
       [normalized]
     );
 
-    console.log('LOGIN QUERY RESULT:', { 
+    console.log('LOGIN QUERY RESULT:', {
       normalizedEmail: normalized,
       foundUsers: rows.length,
       userId: rows[0]?.id,
@@ -550,11 +557,11 @@ router.post("/login", async (req, res) => {
         "SELECT id, full_name,email_username, email, password, date_of_birth, gender FROM users WHERE email = ? LIMIT 1",
         [normalized]
       );
-      
+
       if (altRows.length > 0) {
-        console.log('LOGIN: Found user with alternative query (exact match)', { 
+        console.log('LOGIN: Found user with alternative query (exact match)', {
           userId: altRows[0].id,
-          email: altRows[0].email 
+          email: altRows[0].email
         });
         rows.push(...altRows);
       } else {
@@ -563,15 +570,15 @@ router.post("/login", async (req, res) => {
           "SELECT id, full_name, email_username,email, password, date_of_birth, gender FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1",
           [normalized]
         );
-        
+
         if (lowerRows.length > 0) {
-          console.log('LOGIN: Found user with LOWER() only query', { 
+          console.log('LOGIN: Found user with LOWER() only query', {
             userId: lowerRows[0].id,
-            email: lowerRows[0].email 
+            email: lowerRows[0].email
           });
           rows.push(...lowerRows);
         } else {
-          console.error('LOGIN FAILED: User not found with any query', { 
+          console.error('LOGIN FAILED: User not found with any query', {
             normalizedEmail: normalized,
             triedQueries: [
               'LOWER(TRIM(email)) = LOWER(TRIM(?))',
@@ -585,42 +592,42 @@ router.post("/login", async (req, res) => {
     }
 
     const user = rows[0];
-    
+
     // ✅ FIX: Validate that we got the expected columns
     if (!user.id || !user.email || !user.password) {
-      console.error("LOGIN ERROR: Invalid user data structure", { 
-        hasId: !!user.id, 
-        hasEmail: !!user.email, 
+      console.error("LOGIN ERROR: Invalid user data structure", {
+        hasId: !!user.id,
+        hasEmail: !!user.email,
         hasPassword: !!user.password,
         keys: Object.keys(user)
       });
       return res.status(500).json({ error: "Database structure error" });
     }
-    
+
     // ✅ CRITICAL: Validate password input
     if (!password || typeof password !== 'string') {
       console.error('LOGIN ERROR: Invalid password provided', { hasPassword: !!password, passwordType: typeof password });
       return res.status(400).json({ error: "Password is required" });
     }
-    
+
     // ✅ CRITICAL: Don't trim password - must match exactly what was stored
     const passwordString = String(password);
-    
+
     // ✅ CRITICAL: Verify stored password hash format (bcrypt hashes are 60 chars)
     if (!user.password || user.password.length < 50) {
-      console.error('LOGIN ERROR: Invalid password hash in database', { 
+      console.error('LOGIN ERROR: Invalid password hash in database', {
         hashLength: user.password?.length,
-        userId: user.id 
+        userId: user.id
       });
       return res.status(500).json({ error: "Database password format error" });
     }
-    
+
     // ✅ CRITICAL: Compare password using bcrypt.compare
     // This securely compares the plain password with the stored hash
     let match;
     try {
       match = await bcrypt.compare(passwordString, user.password);
-      console.log('LOGIN: Password comparison result', { 
+      console.log('LOGIN: Password comparison result', {
         userId: user.id,
         email: user.email,
         match: match,
@@ -631,11 +638,11 @@ router.post("/login", async (req, res) => {
       console.error('LOGIN ERROR: Password comparison failed', compareError);
       return res.status(500).json({ error: "Password verification failed" });
     }
-    
+
     if (!match) {
-      console.warn('LOGIN FAILED: Incorrect password', { 
+      console.warn('LOGIN FAILED: Incorrect password', {
         userId: user.id,
-        email: user.email 
+        email: user.email
       });
       return res.status(401).json({ error: "Incorrect password" });
     }
@@ -652,32 +659,38 @@ router.post("/login", async (req, res) => {
       date_of_birth: user.date_of_birth || null,
       gender: user.gender || null,
     };
-    
+
     // ✅ CRITICAL: Validate response doesn't contain password
     if ('password' in responseUser) {
       console.error('LOGIN ERROR: Password accidentally included in response!');
       delete responseUser.password;
     }
-    
+
     // ✅ CRITICAL: Validate name is not an email and email is valid
     if (responseUser.name.includes('@')) {
-      console.error('LOGIN ERROR: Name field contains email address!', { 
-        name: responseUser.name, 
+      console.error('LOGIN ERROR: Name field contains email address!', {
+        name: responseUser.name,
         email: responseUser.email,
-        dbUser: user 
+        dbUser: user
       });
       return res.status(500).json({ error: "Data corruption detected" });
     }
-    
+
     if (!responseUser.email.includes('@') || responseUser.email.length > 100) {
-      console.error('LOGIN ERROR: Invalid email in response!', { 
+      console.error('LOGIN ERROR: Invalid email in response!', {
         email: responseUser.email,
-        dbUser: user 
+        dbUser: user
       });
       return res.status(500).json({ error: "Data corruption detected" });
     }
-    
-    return res.json({ user: responseUser });
+
+    const token = jwt.sign(
+      { user: { id: user.id, email: user.email } },
+      process.env.JWT_SECRET || "your_jwt_secret",
+      { expiresIn: "7d" }
+    );
+
+    return res.json({ user: responseUser, token });
   } catch (err) {
     console.error("LOGIN ERROR:", err);
     res.status(500).json({ error: "Login failed" });
@@ -720,14 +733,14 @@ router.get("/email/:emailId/attachment/:attachmentId", async (req, res) => {
       row.mime_type === "image/svg+xml" ||
       row.mime_type?.startsWith("video/");
 
-const forceDownload = req.query.download === "1";
-const forceInline = req.query.inline === "1";
+    const forceDownload = req.query.download === "1";
+    const forceInline = req.query.inline === "1";
 
-let disposition = `attachment; filename="${row.filename}"`;
+    let disposition = `attachment; filename="${row.filename}"`;
 
-if (!forceDownload && (forceInline || inlinePreviewable)) {
-  disposition = `inline; filename="${row.filename}"`;
-}
+    if (!forceDownload && (forceInline || inlinePreviewable)) {
+      disposition = `inline; filename="${row.filename}"`;
+    }
 
     res.setHeader("Content-Type", row.mime_type || "application/octet-stream");
     res.setHeader("Accept-Ranges", "bytes");
@@ -874,9 +887,9 @@ router.get("/emails/:userId/:folder", async (req, res) => {
 
     // fetch recipients + attachments for each email
     for (const email of emails) {
-// fetch attachment metadata including P2P fields (NO base64)
-const [atts] = await db.query(
-  `
+      // fetch attachment metadata including P2P fields (NO base64)
+      const [atts] = await db.query(
+        `
   SELECT
     id,
     filename,
@@ -888,17 +901,17 @@ const [atts] = await db.query(
   FROM email_attachments
   WHERE email_id = ?
   `,
-  [email.id]
-);
+        [email.id]
+      );
 
-// Mark P2P attachments with is_p2p flag for frontend
-email.attachments = atts.map(att => ({
-  ...att,
-  is_p2p: att.delivery_mode === 'P2P',
-  p2p_pending: att.delivery_mode === 'P2P' && !att.delivered
-}));
-email.has_attachments = atts.length > 0;
-email.attachment_count = atts.length;
+      // Mark P2P attachments with is_p2p flag for frontend
+      email.attachments = atts.map(att => ({
+        ...att,
+        is_p2p: att.delivery_mode === 'P2P',
+        p2p_pending: att.delivery_mode === 'P2P' && !att.delivered
+      }));
+      email.has_attachments = atts.length > 0;
+      email.attachment_count = atts.length;
 
       const [rcp] = await db.query(
         "SELECT address, type FROM email_recipients WHERE email_id = ?",
@@ -909,10 +922,10 @@ email.attachment_count = atts.length;
       email.cc_emails = rcp.filter((x) => x.type === "cc").map((x) => x.address);
       email.bcc_emails = rcp.filter((x) => x.type === "bcc").map((x) => x.address);
 
-      console.log(`Email ${email.id} has ${email.attachments.length} attachments:`, 
+      console.log(`Email ${email.id} has ${email.attachments.length} attachments:`,
         email.attachments.map(a => ({ filename: a.filename, mime: a.mime_type }))
       );
-      
+
       email.body = sanitizeBody(email.body);
     }
 
@@ -966,8 +979,8 @@ router.post("/email/create", async (req, res) => {
   const extractEmails = arr =>
     (arr || []).map(v =>
       typeof v === "string" ? v.toLowerCase() :
-      typeof v === "object" && v.email ? v.email.toLowerCase() :
-      null
+        typeof v === "object" && v.email ? v.email.toLowerCase() :
+          null
     ).filter(Boolean);
 
   const toList = extractEmails(to_emails || to);
@@ -995,7 +1008,7 @@ router.post("/email/create", async (req, res) => {
       contentPreview: attachmentsList[0].content ? attachmentsList[0].content.substring(0, 50) + "..." : "NO CONTENT"
     }, null, 2));
   }
-  
+
   const conn = await db.getConnection();
   await conn.beginTransaction();
 
@@ -1010,18 +1023,18 @@ router.post("/email/create", async (req, res) => {
     );
 
     // resolve folder
-const box = is_draft ? "drafts" : "sent";
+    const box = is_draft ? "drafts" : "sent";
 
-const [[mailbox]] = await conn.query(
-  "SELECT id FROM mailboxes WHERE user_id = ? AND system_box = ? LIMIT 1",
-  [user_id, box]
-);
+    const [[mailbox]] = await conn.query(
+      "SELECT id FROM mailboxes WHERE user_id = ? AND system_box = ? LIMIT 1",
+      [user_id, box]
+    );
 
-if (!mailbox) {
-  throw new Error(`Mailbox '${box}' not found for user ${user_id}`);
-}
+    if (!mailbox) {
+      throw new Error(`Mailbox '${box}' not found for user ${user_id}`);
+    }
 
-const resolvedFolderId = mailbox.id;
+    const resolvedFolderId = mailbox.id;
 
 
     // -------------------- THREAD RESOLUTION --------------------
@@ -1036,8 +1049,8 @@ const resolvedFolderId = mailbox.id;
     }
     const crypto = require("crypto");
 
-const generatedMessageId =
-  `<${crypto.randomUUID()}@jeemail.in>`;
+    const generatedMessageId =
+      `<${crypto.randomUUID()}@jeemail.in>`;
 
 
     // 2. INSERT email with P2P flags
@@ -1046,7 +1059,7 @@ const generatedMessageId =
        (user_id, thread_id, message_id, from_name, from_email, subject, body, is_html, in_reply_to,
         to_header, cc_header, bcc_header, folder_id, is_draft, p2p_enabled, p2p_delivered)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-    
+
     const insertValues = [
       user_id,
       resolvedThreadId,
@@ -1065,12 +1078,12 @@ const generatedMessageId =
       resolvedP2PEnabled,
       resolvedP2PDelivered
     ];
-    
+
     // ✅ DEBUG: Log the exact SQL and values being used
     console.log('EMAIL INSERT SQL:', insertSql);
     console.log('EMAIL INSERT VALUES COUNT:', insertValues.length);
     console.log('EMAIL INSERT VALUES:', insertValues.map((v, i) => `${i + 1}. ${typeof v === 'string' && v.length > 50 ? v.substring(0, 50) + '...' : v}`));
-    
+
     const [insert] = await conn.query(insertSql, insertValues);
 
     const emailId = insert.insertId;
@@ -1084,7 +1097,7 @@ const generatedMessageId =
         [emailId, emailId]
       );
     }
-    
+
     // recipients
     for (const addr of toList)
       await conn.query("INSERT INTO email_recipients (email_id, address, type) VALUES (?, ?, 'to')", [emailId, addr]);
@@ -1094,8 +1107,8 @@ const generatedMessageId =
       await conn.query("INSERT INTO email_recipients (email_id, address, type) VALUES (?, ?, 'bcc')", [emailId, addr]);
 
     // add to sender's mailbox
-await conn.query(
-  `
+    await conn.query(
+      `
   INSERT INTO email_mailbox
     (user_id, email_id, mailbox_id, is_read)
   VALUES (?, ?, ?, ?)
@@ -1103,8 +1116,8 @@ await conn.query(
     mailbox_id = VALUES(mailbox_id),
     is_read = VALUES(is_read)
   `,
-  [user_id, emailId, resolvedFolderId, 1]
-);
+      [user_id, emailId, resolvedFolderId, 1]
+    );
 
     // store attachments into DB (base64) - only if not sent via P2P
     if (attachmentsList.length) {
@@ -1112,38 +1125,38 @@ await conn.query(
         const filename = a.filename || "attachment.bin";
         const mime_type = a.mime_type || a.contentType || null;
         const size_bytes = Number(a.size || a.size_bytes || 0);
-const content_base64 =
-  typeof a.content_base64 === 'string'
-    ? a.content_base64
-    : typeof a.content === 'string'
-      ? a.content
-      : null;
+        const content_base64 =
+          typeof a.content_base64 === 'string'
+            ? a.content_base64
+            : typeof a.content === 'string'
+              ? a.content
+              : null;
 
-      const isP2P =
-      typeof a.p2p_message_id === 'string' &&
-      a.p2p_message_id.length > 0;
-    
+        const isP2P =
+          typeof a.p2p_message_id === 'string' &&
+          a.p2p_message_id.length > 0;
 
-    // For P2P: store content_base64 as FALLBACK (like torrent seeder)
-    // This allows download even if direct P2P transfer fails
-    await conn.query(
-      `INSERT INTO email_attachments
+
+        // For P2P: store content_base64 as FALLBACK (like torrent seeder)
+        // This allows download even if direct P2P transfer fails
+        await conn.query(
+          `INSERT INTO email_attachments
        (email_id, filename, mime_type, size_bytes,
         content_base64, delivery_mode, delivered, p2p_message_id, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-       [
-       emailId,
-       filename,
-       mime_type,
-       size_bytes,
-       content_base64, // Always store content as fallback
-       isP2P ? 'P2P' : 'EMAIL',
-       isP2P ? 0 : 1,
-       a.p2p_message_id || null
-       ]
-      );
-   }
-}
+          [
+            emailId,
+            filename,
+            mime_type,
+            size_bytes,
+            content_base64, // Always store content as fallback
+            isP2P ? 'P2P' : 'EMAIL',
+            isP2P ? 0 : 1,
+            a.p2p_message_id || null
+          ]
+        );
+      }
+    }
 
     // compute size_kb and has_attachments
     const attachmentsTotalBytes = attachmentsList.reduce(
@@ -1153,20 +1166,20 @@ const content_base64 =
     const rawBytes = Buffer.byteLength(cleanBody || '', 'utf8') + attachmentsTotalBytes;
     const size_kb = Math.max(1, Math.round((rawBytes || 0) / 1024));
 
-await conn.query(
-  `
+    await conn.query(
+      `
   UPDATE emails
   SET
     has_attachments = ?,
     attachment_count = ?
   WHERE id = ?
   `,
-  [
-    attachmentsList.length > 0 ? 1 : 0,
-    attachmentsList.length,
-    emailId
-  ]
-);
+      [
+        attachmentsList.length > 0 ? 1 : 0,
+        attachmentsList.length,
+        emailId
+      ]
+    );
 
     // send SMTP if not draft and not P2P delivered
     if (!is_draft && !p2p_enabled) {
@@ -1248,21 +1261,21 @@ await conn.query(
 router.post("/email/update", async (req, res) => {
   try {
     console.log("UPDATE REQUEST BODY:", JSON.stringify(req.body, null, 2));
-    
+
     const body = req.body || {};
-    
+
     const email_id = body.email_id || body.emailId || body.id;
     const user_id = body.user_id || body.userId;
-    
+
     if (!email_id || !user_id) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: "Missing required fields: email_id and user_id",
-        received: body 
+        received: body
       });
     }
 
     const updatesObj = body.updates || body;
-    
+
     const allowed = new Set(["is_read", "is_starred", "is_deleted", "isRead", "isStarred", "isDeleted"]);
     const updateFields = [];
     const updateValues = [];
@@ -1275,11 +1288,11 @@ router.post("/email/update", async (req, res) => {
 
     for (const key of Object.keys(updatesObj)) {
       const dbField = fieldMap[key] || key;
-      
+
       if (!allowed.has(key) && !allowed.has(dbField)) continue;
-      
+
       if (['email_id', 'emailId', 'id', 'user_id', 'userId', 'updates'].includes(key)) continue;
-      
+
       updateFields.push(`${dbField} = ?`);
       updateValues.push(updatesObj[key] ? 1 : 0);
     }
@@ -1289,7 +1302,7 @@ router.post("/email/update", async (req, res) => {
     }
 
     if (updateFields.length === 0) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: "No valid update fields provided. Allowed: is_read, is_starred, is_deleted",
         received: body
       });
@@ -1297,15 +1310,15 @@ router.post("/email/update", async (req, res) => {
 
     updateValues.push(email_id, user_id);
     const sql = `UPDATE email_mailbox SET ${updateFields.join(", ")} WHERE email_id = ? AND user_id = ?`;
-    
+
     const [result] = await db.query(sql, updateValues);
-    
+
     console.log("UPDATE SUCCESS:", { email_id, user_id, affectedRows: result.affectedRows });
 
-    return res.json({ 
-      success: true, 
+    return res.json({
+      success: true,
       message: "Email flags updated",
-      affectedRows: result.affectedRows 
+      affectedRows: result.affectedRows
     });
   } catch (err) {
     console.error("EMAIL UPDATE ERROR:", err);
@@ -1317,7 +1330,7 @@ router.post("/email/update", async (req, res) => {
 router.post("/p2p/delivered", async (req, res) => {
   try {
     const { p2p_message_id } = req.body;
-    
+
     if (!p2p_message_id) {
       return res.status(400).json({ error: "Missing p2p_message_id" });
     }
@@ -1340,7 +1353,7 @@ router.post("/p2p/delivered", async (req, res) => {
     console.log("[P2P] Marked as delivered:", p2p_message_id, "affected:", result.affectedRows);
 
     // Debug logging removed to prevent connection errors
-    
+
     return res.json({ success: true, affectedRows: result.affectedRows });
   } catch (err) {
     console.error("P2P DELIVERED ERROR:", err);
@@ -1352,16 +1365,16 @@ router.post("/p2p/delivered", async (req, res) => {
 router.post("/email/move", async (req, res) => {
   try {
     console.log("MOVE REQUEST BODY:", JSON.stringify(req.body, null, 2));
-    
+
     const body = req.body || {};
-    
+
     const email_id = body.email_id || body.emailId || body.id || body.messageId;
     const user_id = body.user_id || body.userId;
     const folder_id = body.folder_id || body.folderId || body.mailbox_id || body.mailboxId || body.labelId || body.destination || body.target_folder || body.targetFolder;
     const folder_name = body.folder_name || body.folderName || body.folder || body.label || body.to;
 
     if (!email_id || !user_id) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: "Missing required fields: email_id and user_id",
         received: body
       });
@@ -1375,48 +1388,48 @@ router.post("/email/move", async (req, res) => {
         [user_id, folder_name, folder_name]
       );
       if (!folder) {
-        return res.status(404).json({ 
-          error: `Folder '${folder_name}' not found for user ${user_id}` 
+        return res.status(404).json({
+          error: `Folder '${folder_name}' not found for user ${user_id}`
         });
       }
       targetFolderId = folder.id;
     }
 
     if (!targetFolderId) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: "Target folder not specified. Provide folder_id or folder_name",
         received: body
       });
     }
 
     const [[folderCheck]] = await db.query(
-      "SELECT id FROM mailboxes WHERE id = ? AND user_id = ? LIMIT 1", 
+      "SELECT id FROM mailboxes WHERE id = ? AND user_id = ? LIMIT 1",
       [targetFolderId, user_id]
     );
-    
+
     if (!folderCheck) {
       return res.status(403).json({ error: "Invalid folder or access denied" });
     }
 
     const [[exists]] = await db.query(
-      "SELECT * FROM email_mailbox WHERE email_id = ? AND user_id = ? LIMIT 1", 
+      "SELECT * FROM email_mailbox WHERE email_id = ? AND user_id = ? LIMIT 1",
       [email_id, user_id]
     );
-    
+
     if (!exists) {
       return res.status(404).json({ error: "Email not found in user's mailboxes" });
     }
 
     const [result] = await db.query(
-      "UPDATE email_mailbox SET mailbox_id = ? WHERE email_id = ? AND user_id = ?", 
+      "UPDATE email_mailbox SET mailbox_id = ? WHERE email_id = ? AND user_id = ?",
       [targetFolderId, email_id, user_id]
     );
 
     console.log("MOVE SUCCESS:", { email_id, user_id, targetFolderId, affectedRows: result.affectedRows });
 
-    return res.json({ 
-      success: true, 
-      message: "Email moved", 
+    return res.json({
+      success: true,
+      message: "Email moved",
       folder_id: targetFolderId,
       affectedRows: result.affectedRows
     });
@@ -1531,7 +1544,7 @@ router.get("/storage/quota", async (req, res) => {
     );
 
     const usedBytes = Number(fileStats[0]?.used_bytes || 0);
-    
+
     // Set quota to 1 GB (1073741824 bytes)
     const quotaBytes = 1073741824; // 1 GB
     const bonusBytes = 0;
@@ -1744,7 +1757,7 @@ router.get("/storage/duplicates", async (req, res) => {
       const ids = dup.file_ids.split(',').map(Number);
       const folderIds = dup.folder_ids.split(',').map((id) => id === 'NULL' ? null : Number(id));
       const dates = dup.created_dates.split(',');
-      
+
       const files = ids.map((id, index) => ({
         id: id,
         name: dup.filename,
@@ -1802,8 +1815,8 @@ router.get("/storage/suggestions", async (req, res) => {
       const totalSavings = duplicates.reduce((sum, dup) => {
         return sum + (Number(dup.size || 0) * (Number(dup.count) - 1));
       }, 0);
-      
-      const fileIds = duplicates.flatMap(dup => 
+
+      const fileIds = duplicates.flatMap(dup =>
         dup.file_ids.split(',').map(Number)
       );
 

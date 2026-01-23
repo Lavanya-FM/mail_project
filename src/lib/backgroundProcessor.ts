@@ -35,30 +35,28 @@ export class VideoBackgroundProcessor {
     }
 
     private onResults(results: any) {
-        if (!this.ctx || !this.canvas) return;
+        if (!this.ctx || !this.canvas || !results.image) return;
 
         this.ctx.save();
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // Use segmentation mask to define person vs background
         this.ctx.drawImage(results.segmentationMask, 0, 0, this.canvas.width, this.canvas.height);
 
-        // Draw background
+        // 1. Draw the background outside the mask
         this.ctx.globalCompositeOperation = 'source-out';
-
         if (this.mode === 'blur') {
-            this.ctx.filter = 'blur(10px)';
+            this.ctx.filter = 'blur(15px)';
             this.ctx.drawImage(results.image, 0, 0, this.canvas.width, this.canvas.height);
             this.ctx.filter = 'none';
         } else if (this.mode === 'image' && this.backgroundImage) {
             this.ctx.drawImage(this.backgroundImage, 0, 0, this.canvas.width, this.canvas.height);
-        } else {
-            // Fallback/Clear
-            this.ctx.fillStyle = '#000';
-            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
         }
 
-        // Draw person
+        // 2. Draw the original frame (person) where mask is opaque
         this.ctx.globalCompositeOperation = 'destination-over';
         this.ctx.drawImage(results.image, 0, 0, this.canvas.width, this.canvas.height);
+
         this.ctx.restore();
     }
 

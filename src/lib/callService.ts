@@ -17,7 +17,9 @@ export interface CallSession {
     callId: string;
     threadId?: string;
     caller: string;
+    callerName?: string;
     callee: string;
+    calleeName?: string;
     callType: 'audio' | 'video';
     status: 'ringing' | 'connecting' | 'connected' | 'ended' | 'missed' | 'rejected';
     startedAt: Date;
@@ -36,6 +38,9 @@ export type CallEventType =
     | 'RTC_ICE'
     | 'CALL_STATE'
     | 'MEDIA_UPDATE'
+    | 'CALL_REACTION'
+    | 'CALL_HAND'
+    | 'CALL_CHAT'
     | 'CALL_END';
 
 export interface CallEvent {
@@ -57,6 +62,15 @@ function getUserEmail(): string {
     try {
         const u = localStorage.getItem('user');
         return u ? JSON.parse(u).email || '' : '';
+    } catch {
+        return '';
+    }
+}
+
+function getUserName(): string {
+    try {
+        const u = localStorage.getItem('user');
+        return u ? JSON.parse(u).full_name || JSON.parse(u).name || '' : '';
     } catch {
         return '';
     }
@@ -113,8 +127,10 @@ class CallService {
      */
     private handleP2PMessage(event: any) {
         const msg = event.detail;
+        console.log('[CallService] Received P2P message:', msg.type, msg.event);
 
         if (msg.type === 'CALL_EVENT') {
+            console.log('[CallService] Processing CALL_EVENT:', msg.event, msg);
             this.handleCallEvent(msg);
         }
     }
@@ -131,6 +147,7 @@ class CallService {
                 callId: event.callId,
                 threadId: event.payload.context?.threadId,
                 caller: event.from,
+                callerName: event.payload.callerName,
                 callee: event.to[0],
                 callType: event.payload.mode || 'audio',
                 status: 'ringing',
@@ -143,6 +160,9 @@ class CallService {
             if (call) {
                 call.status = 'connecting';
                 call.connectedAt = new Date();
+                if (event.payload.calleeName) {
+                    call.calleeName = event.payload.calleeName;
+                }
                 this.notifyStateChange();
             }
         } else if (event.event === 'CALL_END') {
@@ -210,6 +230,7 @@ class CallService {
             timestamp: Date.now(),
             payload: {
                 mode: callType,
+                callerName: getUserName(),
                 context: {
                     threadId
                 },
@@ -230,6 +251,7 @@ class CallService {
             callId,
             threadId,
             caller: userEmail,
+            callerName: getUserName(),
             callee,
             callType,
             status: 'ringing',
@@ -263,7 +285,8 @@ class CallService {
             timestamp: Date.now(),
             payload: {
                 deviceId,
-                preferredMode: call.callType
+                preferredMode: call.callType,
+                calleeName: getUserName()
             }
         };
 
@@ -362,19 +385,8 @@ class CallService {
 
         this.sendCallEvent(event);
 
-        call.status = 'ended';
-        call.endedAt = new Date();
-        call.duration = duration;
-        this.saveCallToHistory(call);
-        this.notifyStateChange();
-
-        console.log(`[CallService] Ended call ${callId}, duration: ${duration}s`);
-
-        // Remove from active calls
-        setTimeout(() => {
-            this.activeCalls.delete(callId);
-            this.notifyStateChange();
-        }, 3000);
+        // Handle locally to trigger listeners and cleanup
+        this.handleCallEvent(event);
     }
 
     /**
@@ -462,17 +474,62 @@ class CallService {
     }
 
     /**
+     * Send reaction
+     */
+    async sendReaction(callId: string, reaction: string): Promise<void> {
+        const call = this.activeCalls.get(callId);
+        if (!call) return;
+        const userEmail = getUserEmail();
+        const to = call.caller === userEmail ? call.callee : call.caller;
+        const event: CallEvent = {
+            v: 1, type: 'CALL_EVENT', event: 'CALL_REACTION',
+            callId, from: userEmail, to: [to], timestamp: Date.now(),
+            payload: { reaction }
+        };
+        this.sendCallEvent(event);
+    }
+
+    /**
+     * Send hand raise
+     */
+    async sendHandRaise(callId: string, raised: boolean): Promise<void> {
+        const call = this.activeCalls.get(callId);
+        if (!call) return;
+        const userEmail = getUserEmail();
+        const to = call.caller === userEmail ? call.callee : call.caller;
+        const event: CallEvent = {
+            v: 1, type: 'CALL_EVENT', event: 'CALL_HAND',
+            callId, from: userEmail, to: [to], timestamp: Date.now(),
+            payload: { raised }
+        };
+        this.sendCallEvent(event);
+    }
+
+    /**
+     * Send chat message
+     */
+    async sendChatMessage(callId: string, message: string): Promise<void> {
+        const call = this.activeCalls.get(callId);
+        if (!call) return;
+        const userEmail = getUserEmail();
+        const to = call.caller === userEmail ? call.callee : call.caller;
+        const event: CallEvent = {
+            v: 1, type: 'CALL_EVENT', event: 'CALL_CHAT',
+            callId, from: userEmail, to: [to], timestamp: Date.now(),
+            payload: { message }
+        };
+        this.sendCallEvent(event);
+        // Also trigger local event so sender sees it? No, sender handles UI locally usually.
+    }
+
+    /**
      * Send call event via P2P WebSocket
      */
     private sendCallEvent(event: CallEvent) {
-        // Use existing P2P service WebSocket
-        const socket = (p2pService as any).ws;
-        if (socket && socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify(event));
-        } else {
-            console.error('[CallService] WebSocket not connected');
-        }
+        // Use exposed method
+        p2pService.sendCallEvent(event);
     }
+
 
     /**
      * Register event handler

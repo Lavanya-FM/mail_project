@@ -6,8 +6,8 @@ import {
   exportPublicKey,
   exportKeyPair,
   importStoredKeyPair,
-  importPublicKey,
-  deriveSharedKey,
+  // importPublicKey,
+  // deriveSharedKey,
   encrypt,
   decrypt
 } from './p2pCrypto';
@@ -23,11 +23,12 @@ import {
 } from './p2pCrypto';
 
 import {
-  saveChunk,
-  getChunk,
+  // saveChunk,
+  // getChunk,
   getReceivedChunkIndexes,
   getMeta
 } from './p2pStorage';
+import { authService } from './authService';
 
 /* ---------------------------------------------------- */
 /* -------------------- CONSTANTS --------------------- */
@@ -61,8 +62,8 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-const MAX_RETRIES_PER_CHUNK = 5;
-const chunkRetries = new Map<string, number>();
+// const MAX_RETRIES_PER_CHUNK = 5;
+// const chunkRetries = new Map<string, number>();
 
 // Maximum parallel lanes for fastest transfer
 const PARALLEL_LANES = navigator.hardwareConcurrency >= 4 ? 16 : 12;
@@ -105,7 +106,16 @@ interface StrictMessage {
   | 'transfer-complete'
   | 'error'
   | 'ping'
-  | 'pong';
+  | 'pong'
+  | 'signal'
+  | 'room-joined'
+  | 'peer-joined-room'
+  | 'peer-left-room'
+  | 'room-broadcast'
+  | 'email-initiate'
+  | 'join-room'
+  | 'leave-room'
+  | 'CALL_EVENT';
   from?: string;
   to?: string;
   publicKey?: number[];
@@ -162,12 +172,12 @@ class StrictP2PService {
   private userId: string | number = '';
   private connected = false;
   private isRegistering = false;
-  private congestion = {
-    rtt: 0,
-    loss: 0,
-    window: 4,
-    lastAck: performance.now()
-  };
+  // private congestion = {
+  //   rtt: 0,
+  //   loss: 0,
+  //   window: 4,
+  //   lastAck: performance.now()
+  // };
 
   private keyPair!: CryptoKeyPair;
   private myPublicKeyBytes: Uint8Array | null = null;
@@ -176,21 +186,21 @@ class StrictP2PService {
   private sessionKeys = new Map<string, CryptoKey>();
   private ephemeralKeys = new Map<string, CryptoKeyPair>();
 
-  private async verifyFile(messageId: string, fileBuffer: ArrayBuffer): Promise<boolean> {
-    const meta = await getMeta(messageId);
-    if (!meta?.checksum) return true;
-
-    const hash = await sha256(fileBuffer);
-    return hash === meta.checksum;
-  }
+  // private async verifyFile(messageId: string, fileBuffer: ArrayBuffer): Promise<boolean> {
+  //   const meta = await getMeta(messageId);
+  //   if (!meta?.checksum) return true;
+  // 
+  //   const hash = await sha256(fileBuffer);
+  //   return hash === meta.checksum;
+  // }
 
   private activeTransfers = new Map<string, TransferState>();
   private transferSenders = new Map<string, string>();
   private receivedFiles = new Map<string, Blob>();
 
-  private mediaSources = new Map<string, MediaSource>();
-  private sourceBuffers = new Map<string, SourceBuffer>();
-  private videoQueues = new Map<string, Uint8Array[]>();
+  // private mediaSources = new Map<string, MediaSource>();
+  // private sourceBuffers = new Map<string, SourceBuffer>();
+  // private videoQueues = new Map<string, Uint8Array[]>();
 
   // --- ACK-driven throttling ---
   private currentKBPS = P2P_LIMITS.BASE_KBPS;
@@ -234,6 +244,31 @@ class StrictP2PService {
     return this.onlinePeers.has(email);
   }
 
+  joinRoom(meetingId: string) {
+    this.send({
+      type: 'join-room',
+      meetingId,
+      userId: this.userId,
+      email: this.email
+    });
+  }
+
+  leaveRoom(meetingId: string) {
+    this.send({
+      type: 'leave-room',
+      meetingId
+    });
+  }
+
+  public sendSignal(to: string, payload: any) {
+    this.send({
+      type: 'signal',
+      to,
+      from: this.email,
+      payload
+    });
+  }
+
   public getOnlinePeers(): string[] {
     return Array.from(this.onlinePeers);
   }
@@ -265,16 +300,18 @@ class StrictP2PService {
       percentage,
       received,
       total,
-      status: rt.status
+      status: rt.status as any
     };
   }
 
   pauseTransfer(messageId: string) {
     const transfer = this.activeTransfers.get(messageId);
     if (transfer) {
-      console.log('[P2P] Transfer paused:', messageId);
+      transfer.paused = true;
     }
+    console.log('[P2P] Transfer paused:', messageId);
   }
+
 
   resumeTransfer(messageId: string) {
     const t = this.activeTransfers.get(messageId);
@@ -458,6 +495,14 @@ class StrictP2PService {
     if (this.connected || this.isRegistering) return;
     this.isRegistering = true;
 
+    const token = authService.getToken();
+    if (!token) {
+      console.warn('[P2P] Legacy session detected (No token). Logging out to force refresh.');
+      authService.logout();
+      window.location.reload();
+      return;
+    }
+
     this.email = email;
     this.userId = userId;
 
@@ -485,6 +530,7 @@ class StrictP2PService {
         from: this.email,
         email: this.email,
         userId: this.userId,
+        token: authService.getToken() || '',
         publicKey: Array.from(new Uint8Array(pub)),
         timestamp: Date.now()
       });
@@ -546,6 +592,8 @@ class StrictP2PService {
             mimeType: 'application/octet-stream',
             totalChunks: persisted.size,
             receivedChunks: new Set(persisted.keys()),
+            verifiedChunks: new Set(),
+            failedChunks: new Set(),
             status: 'paused',
             reason: 'NETWORK_DROP',
             lastUpdated: Date.now()
@@ -603,12 +651,12 @@ class StrictP2PService {
   /* ------------------ THROTTLING --------------------- */
   /* ---------------------------------------------------- */
 
-  private async throttle(bytes: number) {
-    // No throttling - maximum speed
-    return;
-  }
+  // private async throttle(_bytes: number) {
+  //   // No throttling - maximum speed
+  //   return;
+  // }
 
-  private async carbonAwareThrottle(bytes: number) {
+  private async carbonAwareThrottle(_bytes: number) {
     // No throttling - send at maximum speed
     return;
   }
@@ -639,6 +687,35 @@ class StrictP2PService {
         this.connected = true;
         this.isRegistering = false;
         console.log('[P2P] Successfully registered');
+        break;
+
+      case 'error':
+        console.error('[P2P] Server error:', msg.message);
+        if (msg.message === 'Auth token required' || msg.message === 'Invalid auth token') {
+          authService.logout();
+          window.location.reload();
+        } else if (msg.message?.includes('not found')) {
+          this.disconnect();
+          window.dispatchEvent(new CustomEvent('p2p-auth-error', {
+            detail: { message: msg.message }
+          }));
+        }
+        break;
+
+      case 'signal':
+        window.dispatchEvent(new CustomEvent('p2p-signal', { detail: msg }));
+        break;
+
+      case 'room-joined':
+        window.dispatchEvent(new CustomEvent('p2p-room-joined', { detail: msg }));
+        break;
+
+      case 'peer-joined-room':
+        window.dispatchEvent(new CustomEvent('p2p-peer-joined-room', { detail: msg }));
+        break;
+
+      case 'peer-left-room':
+        window.dispatchEvent(new CustomEvent('p2p-peer-left-room', { detail: msg }));
         break;
 
       case 'p2p-offer': {
@@ -738,23 +815,19 @@ class StrictP2PService {
         }
         break;
 
-      case 'error':
-        console.error('[P2P] Server error:', msg.message);
-        if (msg.message?.includes('not found')) {
-          // User doesn't exist, disconnect
-          this.disconnect();
-          window.dispatchEvent(new CustomEvent('p2p-auth-error', {
-            detail: { message: msg.message }
-          }));
-        }
+      case 'CALL_EVENT':
+        window.dispatchEvent(new CustomEvent('p2p-message', { detail: msg }));
         break;
+
+      // Duplicate error case removed
+
 
       case 'peer-online': {
         const peerEmail = msg.from;
         if (peerEmail) this.onlinePeers.add(peerEmail);
 
         // 🔐 initiate key exchange if not already done
-        if (!this.sessionKeys.has(peerEmail)) {
+        if (peerEmail && !this.sessionKeys.has(peerEmail)) {
           const eph = await crypto.subtle.generateKey(
             { name: 'ECDH', namedCurve: 'P-256' },
             true,// MUST be extractable (public key only)
@@ -807,7 +880,7 @@ class StrictP2PService {
             detail: { peers: Array.from(this.onlinePeers) }
           }));
         }
-        for (const [id, rt] of this.receiverTransfers) {
+        for (const [id, _rt] of this.receiverTransfers) {
           if (this.transferSenders.get(id) === msg.from) {
             this.markReceiverPaused(id, 'SENDER_OFFLINE');
           }
@@ -1009,8 +1082,8 @@ class StrictP2PService {
         const c = cursor.result;
         if (!c) return resolve(result);
 
-        if (c.key[0] === messageId) {
-          result.set(c.key[1], c.value.data);
+        if ((c.key as any)[0] === messageId) {
+          result.set((c.key as any)[1], c.value.data);
         }
         c.continue();
       };
@@ -1026,7 +1099,7 @@ class StrictP2PService {
     cursor.onsuccess = () => {
       const c = cursor.result;
       if (!c) return;
-      if (c.key[0] === messageId) store.delete(c.key);
+      if ((c.key as any)[0] === messageId) store.delete(c.key);
       c.continue();
     };
   }
@@ -1035,12 +1108,12 @@ class StrictP2PService {
   /* ------------------ KEY EXCHANGE ------------------- */
   /* ---------------------------------------------------- */
 
-  private async establishKey(peer: string, pub: number[]) {
-    if (this.sessionKeys.has(peer)) return;
-    const their = await importPublicKey(new Uint8Array(pub).buffer);
-    const shared = await deriveSharedKey(this.keyPair.privateKey, their);
-    this.sessionKeys.set(peer, shared);
-  }
+  // private async establishKey(peer: string, pub: number[]) {
+  //   if (this.sessionKeys.has(peer)) return;
+  //   const their = await importPublicKey(new Uint8Array(pub).buffer);
+  //   const shared = await deriveSharedKey(this.keyPair.privateKey, their);
+  //   this.sessionKeys.set(peer, shared);
+  // }
 
   /* ---------------------------------------------------- */
   /* ----------- ACK-DRIVEN RATE CONTROL ---------------- */
@@ -1168,13 +1241,13 @@ class StrictP2PService {
           this.resumeReceive(e.data.messageId);
         }
       });
-      self.addEventListener('sync', event => {
+      self.addEventListener('sync', (event: any) => {
         if (event.tag.startsWith('p2p-resume-')) {
           const messageId = event.tag.replace('p2p-resume-', '');
 
-          event.waitUntil(
-            self.clients.matchAll().then(clients => {
-              clients.forEach(client =>
+          (event as any).waitUntil(
+            (self as any).clients.matchAll().then((clients: any) => {
+              clients.forEach((client: any) =>
                 client.postMessage({
                   type: 'P2P_RESUME_REQUEST',
                   messageId
@@ -1407,7 +1480,7 @@ class StrictP2PService {
     }
 
     const raw = rawChunk.buffer;
-    const verify = await sha256(raw);
+    const verify = await sha256(raw as ArrayBuffer);
 
     if (verify !== checksum) {
       let rt = this.receiverTransfers.get(messageId);
@@ -1574,7 +1647,7 @@ class StrictP2PService {
       .sort((a, b) => a[0] - b[0])
       .map(([, data]) => data);
 
-    const blob = new Blob(ordered, {
+    const blob = new Blob(ordered as any[], {
       type: mimeType || 'application/octet-stream'
     });
 
@@ -1660,7 +1733,7 @@ class StrictP2PService {
         });
 
         if (record?.blob) {
-          blob = record.blob;
+          blob = record.blob as Blob;
           this.receivedFiles.set(messageId, blob);
           console.log('[P2P] File retrieved from IndexedDB:', blob.size, 'bytes');
         }
@@ -1818,6 +1891,10 @@ class StrictP2PService {
       from: this.email,
       payload: { content, timestamp: Date.now() }
     });
+  }
+
+  public sendCallEvent(event: any) {
+    this.send(event);
   }
 }
 

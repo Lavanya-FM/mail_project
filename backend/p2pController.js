@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const redis = require('redis');
 const db = require('./db'); // Promise pool
 const { handleCallSignaling } = require('./callSignaling');
+const jwt = require('jsonwebtoken');
 
 /* ---------------- SAFETY GUARD ---------------- */
 
@@ -50,8 +51,13 @@ const TEMP_STORAGE_TTL = 3600;
 
 /* ---------------- STATE ---------------- */
 
+/* ---------------- STATE ---------------- */
+
 const peerConnections = new Map();
 // connectionId → { ws, userId, email, lastSeen }
+
+const rooms = new Map();
+// meetingId → Set<connectionId>
 
 /* ---------------- WEBSOCKET SETUP ---------------- */
 
@@ -60,6 +66,7 @@ function setupP2PWebSocket(server) {
 
   wss.on('connection', (ws) => {
     const connectionId = crypto.randomUUID();
+    ws.connectionId = connectionId; // Attach ID directly to WS
     ws.isAlive = true;
 
     ws.on('pong', () => {
@@ -69,12 +76,36 @@ function setupP2PWebSocket(server) {
     });
 
     ws.on('message', async raw => {
+      let msg;
       try {
-        const msg = JSON.parse(raw.toString());
+        msg = JSON.parse(raw.toString());
+      } catch (e) {
+        console.error('[P2P] Invalid JSON received');
+        return;
+      }
+
+      try {
+        if (!msg.type) {
+          console.warn('[P2P] Missing message type');
+          return;
+        }
 
         switch (msg.type) {
           case 'register':
             await handleRegister(ws, connectionId, msg, wss);
+            break;
+
+          case 'join-room':
+            await handleJoinRoom(ws, msg);
+            break;
+
+          case 'leave-room':
+            await handleLeaveRoom(ws, msg);
+            break;
+
+          case 'room-broadcast':
+            // Send to everyone in room EXCEPT sender
+            await handleRoomBroadcast(ws, msg);
             break;
 
           case 'email-initiate':
@@ -92,6 +123,7 @@ function setupP2PWebSocket(server) {
           case 'chunk-ack':
           case 'key-exchange':
           case 'resume-request':
+          case 'signal':
             // Forward these directly to recipient
             if (msg.to) {
               forwardToRecipient(msg.to, msg);
@@ -110,9 +142,13 @@ function setupP2PWebSocket(server) {
           case 'ping':
             ws.send(JSON.stringify({ type: 'pong' }));
             break;
+
+          default:
+            console.warn('[P2P] Unknown message type:', msg.type);
         }
       } catch (err) {
-        console.error('[P2P] Message error:', err);
+        console.error('[P2P] Message processing error:', err);
+        ws.send(JSON.stringify({ type: 'error', message: 'Internal server error processing message' }));
       }
     });
 
@@ -133,22 +169,42 @@ function setupP2PWebSocket(server) {
     }
   }, 30000);
 
-  console.log('[P2P] WebSocket initialized');
+  console.log('[P2P] WebSocket initialized with Room support');
 }
 
 /* ---------------- HANDLERS ---------------- */
 
 async function handleRegister(ws, connectionId, msg, wss) {
-  const { userId, email, publicKey } = msg;
+  const { token, publicKey } = msg;
 
-  if (!email || !userId) {
+  if (!token) {
     ws.send(JSON.stringify({
       type: 'error',
-      message: 'Missing email or userId'
+      message: 'Auth token required'
     }));
     return;
   }
 
+  let user;
+  try {
+    const payload = jwt.verify(
+      token,
+      process.env.JWT_SECRET || "your_jwt_secret"
+    );
+    user = payload.user || payload;
+  } catch (e) {
+    console.error('[P2P] Token verification failed:', e.message);
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: 'Invalid auth token'
+    }));
+    ws.close();
+    return;
+  }
+
+  const { id: userId, email } = user;
+
+  // Implicitly valid because token is valid
   try {
     // ✅ VERIFY USER EXISTS IN DATABASE
     const [userCheck] = await db.query(
@@ -346,6 +402,27 @@ async function handleDisconnect(connectionId, wss) {
   if (!peer) return;
 
   peerConnections.delete(connectionId);
+
+  // Cleanup Rooms
+  if (peer.ws.rooms) {
+    for (const meetingId of peer.ws.rooms) {
+      if (rooms.has(meetingId)) {
+        rooms.get(meetingId).delete(connectionId);
+        // Notify others
+        broadcastToRoom(meetingId, {
+          type: 'peer-left-room',
+          meetingId,
+          connectionId,
+          email: peer.email
+        }, peer.ws);
+
+        if (rooms.get(meetingId).size === 0) {
+          rooms.delete(meetingId);
+        }
+      }
+    }
+  }
+
   broadcastPresence();
 
   await db.query(
@@ -375,6 +452,97 @@ async function handleDisconnect(connectionId, wss) {
     type: 'peer-offline',
     from: peer.email
   }, peer.ws);
+}
+
+/* ---------------- ROOM HANDLERS ---------------- */
+
+async function handleJoinRoom(ws, msg) {
+  const { meetingId, userId, email, role = 'participant' } = msg; // TODO: Validate role
+  if (!meetingId) return;
+
+  if (!rooms.has(meetingId)) {
+    rooms.set(meetingId, new Set());
+  }
+  rooms.get(meetingId).add(ws.connectionId);
+  if (!ws.rooms) ws.rooms = new Set();
+  ws.rooms.add(meetingId);
+
+  // Notify others in room
+  broadcastToRoom(meetingId, {
+    type: 'peer-joined-room',
+    meetingId,
+    peer: {
+      connectionId: ws.connectionId,
+      email,
+      userId,
+      role
+    }
+  }, ws);
+
+  // Send list of existing participants to the new joiner
+  const participants = [];
+  for (const cid of rooms.get(meetingId)) {
+    if (cid === ws.connectionId) continue;
+    const p = peerConnections.get(cid);
+    if (p) {
+      participants.push({
+        connectionId: cid,
+        email: p.email,
+        userId: p.userId
+      });
+    }
+  }
+
+  ws.send(JSON.stringify({
+    type: 'room-joined',
+    meetingId,
+    participants,
+    role
+  }));
+
+  console.log(`[Room] ${email} joined ${meetingId} as ${role}`);
+}
+
+async function handleLeaveRoom(ws, msg) {
+  const { meetingId } = msg;
+  if (rooms.has(meetingId)) {
+    rooms.get(meetingId).delete(ws.connectionId);
+    broadcastToRoom(meetingId, {
+      type: 'peer-left-room',
+      meetingId,
+      connectionId: ws.connectionId
+    }, ws);
+
+    if (rooms.get(meetingId).size === 0) {
+      rooms.delete(meetingId);
+    }
+  }
+  if (ws.rooms) ws.rooms.delete(meetingId);
+}
+
+async function handleRoomBroadcast(ws, msg) {
+  const { meetingId, payload } = msg;
+  if (!rooms.has(meetingId)) return;
+
+  // Validate user is in room
+  if (!rooms.get(meetingId).has(ws.connectionId)) return;
+
+  broadcastToRoom(meetingId, {
+    type: 'room-message',
+    meetingId,
+    from: ws.connectionId,
+    payload
+  }, ws);
+}
+
+function broadcastToRoom(meetingId, msg, excludeWs) {
+  if (!rooms.has(meetingId)) return;
+  for (const cid of rooms.get(meetingId)) {
+    const peer = peerConnections.get(cid);
+    if (peer && peer.ws !== excludeWs && peer.ws.readyState === 1) { // WebSocket.OPEN
+      peer.ws.send(JSON.stringify(msg));
+    }
+  }
 }
 
 /* ---------------- HELPERS ---------------- */

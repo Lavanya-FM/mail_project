@@ -6,7 +6,7 @@
 
 import { useEffect, useRef } from 'react';
 import { toast } from 'react-hot-toast';
-import { useCall } from '../hooks/useCall';
+import { useCall, unlockAudio } from '../hooks/useCall';
 import { authService } from '../lib/authService';
 import { callService } from '../lib/callService';
 import IncomingCall from './IncomingCall';
@@ -15,26 +15,32 @@ import ActiveCall from './ActiveCall';
 export default function CallManager() {
     const user = authService.getCurrentUser();
     const notifiedCalls = useRef(new Set<string>());
+    const notificationIdRef = useRef<string | null>(null);
 
     const {
         activeCall,
         incomingCall,
         isConnected,
         isMuted,
+        isVideoEnabled,
         localStream,
         remoteStream,
         acceptCall,
         rejectCall,
         endCall,
         toggleMute,
+        toggleVideo,
         toggleScreenShare,
         isScreenSharing,
-        callDuration,
-        connectionStats,
         availableDevices,
         switchCamera,
         switchMicrophone,
-        toggleVirtualBackground
+        toggleVirtualBackground,
+        chatMessages,
+        sendChat,
+        sendReaction,
+        toggleHand,
+        remoteHandRaised,
     } = useCall({
         userEmail: user?.email || '',
         userId: user?.id || 0,
@@ -43,7 +49,8 @@ export default function CallManager() {
             notifiedCalls.current.add(callId);
 
             console.log(`[CallManager] Incoming call from ${caller}`);
-            toast(`Incoming call from ${caller}`, { icon: '📞', duration: 10000 });
+            console.log(`[CallManager] Incoming call from ${caller}`);
+            notificationIdRef.current = toast(`Incoming call from ${caller}`, { icon: '📞', duration: 10000 });
 
             // Could show browser notification here
             if ('Notification' in window && Notification.permission === 'granted') {
@@ -62,6 +69,16 @@ export default function CallManager() {
     useEffect(() => {
         console.log('[CallManager] Debug:', { user, activeCall, incomingCall });
     }, [user, activeCall, incomingCall]);
+
+    // Dismiss notification when call accepted or ended
+    useEffect(() => {
+        if (activeCall || !incomingCall) {
+            if (notificationIdRef.current) {
+                toast.dismiss(notificationIdRef.current);
+                notificationIdRef.current = null;
+            }
+        }
+    }, [activeCall, incomingCall]);
 
     // Initialize call service
     useEffect(() => {
@@ -91,7 +108,25 @@ export default function CallManager() {
         };
         window.addEventListener('p2p-message', handleP2PMessage);
         return () => window.removeEventListener('p2p-message', handleP2PMessage);
+        return () => window.removeEventListener('p2p-message', handleP2PMessage);
     }, [user]);
+
+    // Unlock audio context on first interaction
+    useEffect(() => {
+        const handleInteraction = () => {
+            unlockAudio();
+            window.removeEventListener('click', handleInteraction);
+            window.removeEventListener('keydown', handleInteraction);
+        };
+
+        window.addEventListener('click', handleInteraction);
+        window.addEventListener('keydown', handleInteraction);
+
+        return () => {
+            window.removeEventListener('click', handleInteraction);
+            window.removeEventListener('keydown', handleInteraction);
+        };
+    }, []);
 
     if (!user) return null;
 
@@ -100,7 +135,7 @@ export default function CallManager() {
             {/* Incoming call notification */}
             {incomingCall && !activeCall && (
                 <IncomingCall
-                    caller={incomingCall.caller}
+                    caller={incomingCall.callerName || incomingCall.caller}
                     onAccept={acceptCall}
                     onReject={rejectCall}
                 />
@@ -110,22 +145,28 @@ export default function CallManager() {
             {activeCall && activeCall.status !== 'ended' && (
                 <ActiveCall
                     remotePeer={activeCall.caller === user.email ? activeCall.callee : activeCall.caller}
+                    remotePeerName={activeCall.caller === user.email ? (activeCall.calleeName || activeCall.callee) : (activeCall.callerName || activeCall.caller)}
                     isConnected={isConnected}
                     isMuted={isMuted}
-                    duration={callDuration}
+                    isVideoEnabled={isVideoEnabled}
                     localStream={localStream}
                     remoteStream={remoteStream}
                     onToggleMute={toggleMute}
                     onEndCall={endCall}
+                    onToggleVideo={toggleVideo}
                     isOutbound={activeCall.caller === user.email}
                     isVideo={activeCall.callType === 'video'}
                     isScreenSharing={isScreenSharing}
                     onToggleScreenShare={toggleScreenShare}
-                    connectionStats={connectionStats}
                     availableDevices={availableDevices}
                     onSwitchCamera={switchCamera}
                     onSwitchMicrophone={switchMicrophone}
                     onToggleVirtualBackground={toggleVirtualBackground}
+                    chatMessages={chatMessages}
+                    onSendChat={sendChat}
+                    onSendReaction={sendReaction}
+                    onToggleHand={toggleHand}
+                    remoteHandRaised={remoteHandRaised}
                 />
             )}
         </>

@@ -13,22 +13,22 @@ function saveUser(user: any) {
     console.error('saveUser: Invalid user object', user);
     return;
   }
-  
+
   // ✅ FIX: Explicitly extract name and email, validate they're not passwords
   const name = user.name || user.full_name || '';
   const email = user.email || '';
-  
+
   // ✅ FIX: Safety check - if name looks like an email or email looks like a password hash, log warning
   if (name.includes('@') && !email.includes('@')) {
-    console.error('saveUser: Data mapping issue detected!', { 
-      receivedName: name, 
+    console.error('saveUser: Data mapping issue detected!', {
+      receivedName: name,
       receivedEmail: email,
-      fullUser: user 
+      fullUser: user
     });
     // Don't save corrupted data
     return;
   }
-  
+
   const normalized = {
     id: user.id,
     full_name: name,
@@ -48,9 +48,13 @@ export function getCurrentUser() {
   }
 }
 
+export function getToken() {
+  return localStorage.getItem("user_token");
+}
+
 export async function login(email: string, password: string) {
   try {
-      const res = await fetch(`${API}/login`, {
+    const res = await fetch(`${API}/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
@@ -62,8 +66,10 @@ export async function login(email: string, password: string) {
       return { success: false, error: data.error || "Login failed" };
     }
 
-    // backend returns: { user: { id, name, email } }
+    // backend returns: { user: { id, name, email }, token: "..." }
     saveUser(data.user);
+    if (data.token) localStorage.setItem("user_token", data.token);
+
     return { success: true, user: getCurrentUser() };
   } catch (err) {
     return { success: false, error: "Network error" };
@@ -123,6 +129,7 @@ export async function register(
     }
 
     if (data.user) saveUser(data.user);
+    if (data.token) localStorage.setItem("user_token", data.token);
 
     return { success: true, user: getCurrentUser() };
 
@@ -131,8 +138,12 @@ export async function register(
   }
 }
 
-export function logout() {
+import { chatStorage } from './chatStorage';
+
+export async function logout() {
+  await chatStorage.handleLogout();
   localStorage.removeItem("user");
+  localStorage.removeItem("user_token");
 }
 
 export function isAuthenticated() {
@@ -167,6 +178,7 @@ export async function getRecentActivity(): Promise<ActivityLog[]> {
 // convenience object used elsewhere in the app
 export const authService = {
   getCurrentUser,
+  getToken,
   login,
   register,
   logout,

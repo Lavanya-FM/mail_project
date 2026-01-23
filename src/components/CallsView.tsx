@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Video, Phone, User, Users, Clock, Search, MessageSquare, X, Link, Copy, ArrowUpRight, ArrowDownLeft, XCircle } from 'lucide-react';
+import { Video, Phone, Users, Clock, Search, MessageSquare, X, Copy, ArrowUpRight, ArrowDownLeft, XCircle } from 'lucide-react';
 import { authService } from '../lib/authService';
 import { callService } from '../lib/callService';
 import { p2pService } from '../lib/p2pService';
 import toast from 'react-hot-toast';
 import ChatInterface from './ChatInterface';
+import MeetingPage from './MeetingPage';
 
 export default function CallsView() {
     const [onlinePeers, setOnlinePeers] = useState<string[]>([]);
@@ -14,6 +15,7 @@ export default function CallsView() {
     const [showNewMeeting, setShowNewMeeting] = useState(false);
     const [showJoin, setShowJoin] = useState(false);
     const [joinCode, setJoinCode] = useState('');
+    const [activeMeetingId, setActiveMeetingId] = useState<string | null>(null);
     const user = authService.getCurrentUser();
 
     useEffect(() => {
@@ -49,6 +51,13 @@ export default function CallsView() {
     const filteredPeers = onlinePeers
         .filter(peer => peer !== user?.email)
         .filter(peer => peer.toLowerCase().includes(searchTerm.toLowerCase()));
+
+    if (activeMeetingId) {
+        return <MeetingPage meetingId={activeMeetingId} onLeave={() => {
+            setActiveMeetingId(null);
+            window.history.pushState({}, '', '/');
+        }} />;
+    }
 
     return (
         <div className="flex bg-gray-50 dark:bg-slate-950 h-full">
@@ -229,25 +238,41 @@ export default function CallsView() {
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
                         <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 w-full max-w-md shadow-2xl border border-gray-200 dark:border-slate-800">
                             <div className="flex justify-between items-center mb-6">
-                                <h3 className="text-xl font-bold text-gray-900 dark:text-white">Your Meeting Ready</h3>
+                                <h3 className="text-xl font-bold text-gray-900 dark:text-white">New Meeting</h3>
                                 <button onClick={() => setShowNewMeeting(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg">
                                     <X className="w-5 h-5" />
                                 </button>
                             </div>
-                            <p className="text-gray-600 dark:text-gray-400 mb-4">Share this code with others you want to meet with.</p>
-                            <div className="bg-gray-100 dark:bg-slate-800 p-4 rounded-xl flex items-center justify-between mb-6">
-                                <code className="text-indigo-600 dark:text-indigo-400 font-mono font-bold">{user?.email}</code>
-                                <button
-                                    onClick={() => {
-                                        navigator.clipboard.writeText(user?.email || '');
-                                        toast.success('Code copied!');
-                                    }}
-                                    className="p-2 hover:bg-white dark:hover:bg-slate-700 rounded-lg transition"
-                                >
-                                    <Copy className="w-5 h-5 text-gray-500" />
-                                </button>
+                            <p className="text-gray-600 dark:text-gray-400 mb-6">Start a new instant meeting.</p>
+
+                            <button
+                                onClick={() => {
+                                    const id = crypto.randomUUID();
+                                    setActiveMeetingId(id);
+                                    setShowNewMeeting(false);
+                                    window.history.pushState({}, '', `/meet/${id}`);
+                                    toast.success('Meeting Started');
+                                }}
+                                className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-xl transition shadow-lg flex items-center justify-center gap-2 mb-4"
+                            >
+                                <Video className="w-5 h-5" /> Start Instant Meeting
+                            </button>
+
+                            <div className="bg-gray-100 dark:bg-slate-800 p-4 rounded-xl flex items-center justify-between">
+                                <span className="text-gray-500 text-sm">Your Personal Code:</span>
+                                <div className="flex items-center gap-2">
+                                    <code className="text-indigo-600 dark:text-indigo-400 font-mono font-bold text-sm">{user?.email}</code>
+                                    <button
+                                        onClick={() => {
+                                            navigator.clipboard.writeText(user?.email || '');
+                                            toast.success('Copied!');
+                                        }}
+                                        className="p-1 hover:bg-white dark:hover:bg-slate-700 rounded transition"
+                                    >
+                                        <Copy className="w-4 h-4 text-gray-500" />
+                                    </button>
+                                </div>
                             </div>
-                            <p className="text-xs text-center text-gray-500">People can enter this code in the "Join" box to call you.</p>
                         </div>
                     </div>
                 )
@@ -275,7 +300,8 @@ export default function CallsView() {
                                 onClick={() => {
                                     if (!joinCode.trim()) return;
                                     setShowJoin(false);
-                                    handleCall(joinCode.trim(), 'video');
+                                    setActiveMeetingId(joinCode.trim());
+                                    window.history.pushState({}, '', `/meet/${joinCode.trim()}`);
                                 }}
                                 className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-xl transition shadow-lg shadow-green-600/20"
                             >

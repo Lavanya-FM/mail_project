@@ -201,7 +201,7 @@ async function handleCallReject(ws, msg, peerConnections) {
     forwardToParticipants(to, msg, peerConnections);
 
     // Apply rejection cooldown
-    await applyRejectionCooldown(ws.userId);
+    // await applyRejectionCooldown(ws.userId);
 }
 
 /**
@@ -350,12 +350,12 @@ async function checkRateLimit(userId) {
     }
 
     // Check cooldown
-    if (limits.cooldown_until && new Date(limits.cooldown_until) > new Date()) {
-        return false;
-    }
+    // if (limits.cooldown_until && new Date(limits.cooldown_until) > new Date()) {
+    //     return false;
+    // }
 
     // Check hourly limit
-    if (limits.hourly_count >= 20) {
+    if (limits.hourly_count >= 200) {
         return false;
     }
 
