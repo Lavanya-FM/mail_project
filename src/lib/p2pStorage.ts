@@ -1,10 +1,10 @@
 // src/lib/p2pStorage.ts
 const DB_NAME = 'jeemail-p2p';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Incremented version to add 'files' store
 
 let db: IDBDatabase | null = null;
 
-function openDB(): Promise<IDBDatabase> {
+export function openDB(): Promise<IDBDatabase> {
   if (db) return Promise.resolve(db);
 
   return new Promise((resolve, reject) => {
@@ -17,6 +17,9 @@ function openDB(): Promise<IDBDatabase> {
       }
       if (!d.objectStoreNames.contains('meta')) {
         d.createObjectStore('meta', { keyPath: 'messageId' });
+      }
+      if (!d.objectStoreNames.contains('files')) {
+        d.createObjectStore('files', { keyPath: 'messageId' });
       }
     };
 
@@ -39,10 +42,12 @@ export async function saveChunk(
   tx.objectStore('chunks').put({
     messageId,
     chunkIndex,
-    iv,
-    encryptedData
+    data
   });
-  return tx.complete;
+  return new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
 }
 
 export async function getChunk(
@@ -53,7 +58,11 @@ export async function getChunk(
   const tx = d.transaction('chunks', 'readonly');
   const req = tx.objectStore('chunks').get([messageId, chunkIndex]);
   return new Promise(res => {
-    req.onsuccess = () => res(req.result ?? null);
+    req.onsuccess = () => {
+      const result = req.result;
+      res(result ? result.data : null);
+    };
+    req.onerror = () => res(null);
   });
 }
 
@@ -63,26 +72,34 @@ export async function getReceivedChunkIndexes(messageId: string): Promise<number
   const store = tx.objectStore('chunks');
   const indexes: number[] = [];
 
-  store.openCursor().onsuccess = e => {
-    const cursor = (e.target as IDBRequest).result;
-    if (!cursor) return;
-    if (cursor.key[0] === messageId) {
-      indexes.push(cursor.key[1]);
-    }
-    cursor.continue();
-  };
-
-  return new Promise(res => (tx.oncomplete = () => res(indexes)));
+  return new Promise(res => {
+    const request = store.openCursor();
+    request.onsuccess = (e: any) => {
+      const cursor = e.target.result;
+      if (cursor) {
+        if (cursor.key[0] === messageId) {
+          indexes.push(cursor.key[1]);
+        }
+        cursor.continue();
+      } else {
+        res(indexes);
+      }
+    };
+    request.onerror = () => res(indexes);
+  });
 }
 
 export async function saveMeta(
   messageId: string,
-  meta: { totalChunks: number; checksum?: string }
+  meta: any
 ) {
   const d = await openDB();
   const tx = d.transaction('meta', 'readwrite');
   tx.objectStore('meta').put({ messageId, ...meta });
-  return tx.complete;
+  return new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
 }
 
 export async function getMeta(messageId: string) {
@@ -91,5 +108,26 @@ export async function getMeta(messageId: string) {
   const req = tx.objectStore('meta').get(messageId);
   return new Promise<any>(res => {
     req.onsuccess = () => res(req.result ?? null);
+    req.onerror = () => res(null);
+  });
+}
+
+export async function saveFile(messageId: string, fileData: any) {
+  const d = await openDB();
+  const tx = d.transaction('files', 'readwrite');
+  tx.objectStore('files').put({ messageId, ...fileData });
+  return new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function getFile(messageId: string) {
+  const d = await openDB();
+  const tx = d.transaction('files', 'readonly');
+  const req = tx.objectStore('files').get(messageId);
+  return new Promise<any>(res => {
+    req.onsuccess = () => res(req.result ?? null);
+    req.onerror = () => res(null);
   });
 }

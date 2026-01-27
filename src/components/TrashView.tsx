@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Trash2, RotateCcw, X, AlertTriangle, Clock, File, Image, FileText, Music, Video, Archive } from 'lucide-react';
+import { Trash2, RotateCcw, X, AlertTriangle, File, Image, FileText, Music, Video, Archive } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import * as driveService from "../lib/driveService";
+import { DriveFile } from "../lib/driveService";
 import { authService } from '../lib/authService';
-import { getTrashFiles } from '../lib/driveService';
 
 interface TrashItem extends DriveFile {
     deleted_at: string;
@@ -21,41 +21,43 @@ export default function TrashView() {
         loadTrashItems();
     }, []);
 
-const loadTrashItems = async () => {
-  setLoading(true);
-  try {
-    const files = await driveService.getTrashFiles(user?.id || 1);
-    setTrashItems(files);
-  } catch (error) {
-    console.error('Error loading trash items:', error);
-  } finally {
-    setLoading(false);
-  }
-};
+    const loadTrashItems = async () => {
+        setLoading(true);
+        try {
+            const files = await driveService.getTrashFiles();
+            setTrashItems(files);
+        } catch (error) {
+            console.error('Error loading trash items:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const handleRestore = async () => {
         if (selectedItems.size === 0) return;
-
         if (confirm(`Restore ${selectedItems.size} item(s)?`)) {
-            // Mock restore
-            setTrashItems(prev => prev.filter(item => !selectedItems.has(item.id)));
+            const userId = user?.id || 1;
+            await Promise.all(Array.from(selectedItems).map(id => driveService.restoreFromTrash(id, userId)));
+            loadTrashItems();
             setSelectedItems(new Set());
         }
     };
 
     const handlePermanentDelete = async () => {
         if (selectedItems.size === 0) return;
-
         if (confirm(`Permanently delete ${selectedItems.size} item(s)? This cannot be undone.`)) {
-            // Mock delete
-            setTrashItems(prev => prev.filter(item => !selectedItems.has(item.id)));
+            const userId = user?.id || 1;
+            await Promise.all(Array.from(selectedItems).map(id => driveService.deletePermanently(id, userId)));
+            loadTrashItems();
             setSelectedItems(new Set());
         }
     };
 
     const handleEmptyTrash = async () => {
         if (confirm('Are you sure you want to empty the trash? All items will be permanently deleted.')) {
-            setTrashItems([]);
+            const userId = user?.id || 1;
+            await driveService.emptyTrash(userId);
+            loadTrashItems();
             setSelectedItems(new Set());
         }
     };

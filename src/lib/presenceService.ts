@@ -1,40 +1,21 @@
-type PresenceHandler = (online: string[]) => void;
+// src/lib/presenceService.ts
+// Thin wrapper around P2PService to satisfy existing imports.
+import { p2pService } from './p2pService';
 
 class PresenceService {
-  private ws: WebSocket | null = null;
-  private online = new Set<string>();
-  private listeners: ((online: Set<string>) => void)[] = [];
-
-  connect(email: string, userId: string) {
-    if (this.ws) return;
-
-    const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-    this.ws = new WebSocket(`${protocol}://${location.host}/api/p2p`);
-
-    this.ws.onopen = () => {
-      this.ws?.send(JSON.stringify({
-        type: 'register',
-        email,
-        userId,
-      }));
-    };
-
-    this.ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-
-      if (msg.type === 'presence-update') {
-        this.online = new Set(msg.online);
-        this.listeners.forEach(fn => fn(this.online));
-      }
-    };
+  connect(email: string, userId: string | number) {
+    p2pService.connect(userId, email);
   }
 
   onUpdate(fn: (online: Set<string>) => void) {
-    this.listeners.push(fn);
+    // Convert array to Set for compatibility
+    p2pService.onPeersUpdate((peers) => {
+      fn(new Set(peers));
+    });
   }
 
-  isOnline(email: string) {
-    return this.online.has(email);
+  isOnline(email: string): boolean {
+    return p2pService.isPeerOnline(email);
   }
 }
 

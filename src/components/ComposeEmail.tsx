@@ -1,4 +1,4 @@
-// ComposeEmail.tsx - Complete implementation with two send modes
+// ComposeEmail.tsx - Complete implementation with both Regular and P2P send modes
 import { useState, useEffect, useRef } from 'react';
 import { emailService } from '../lib/emailService';
 import { authService } from '../lib/authService';
@@ -10,7 +10,6 @@ import ComposeUI from './compose/ComposeUI';
 import { presenceService } from '../lib/presenceService';
 import { filesToBase64 } from '../lib/fileUtils';
 import { MAX_EMAIL_ATTACHMENT_BYTES } from '../constants/attachmentLimits';
-import { useDraft } from '../hooks/useDraft';
 
 const getFolderIdByName = (name: string) => {
   const folders = JSON.parse(localStorage.getItem("folders") || "[]");
@@ -21,7 +20,7 @@ const getFolderIdByName = (name: string) => {
 interface ComposeEmailProps {
   onClose: () => void;
   onSent: () => void;
-  onDraftSaved: () => void;
+  onDraftSaved?: () => void;
   prefilledData?: any;
 }
 
@@ -48,7 +47,6 @@ export default function ComposeEmail(props: ComposeEmailProps) {
   const [sending, setSending] = useState(false);
   const [draftStatus, setDraftStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const uuid = () => window.crypto.randomUUID();
-
 
   // Attachments
   const [attachments, setAttachments] = useState<File[]>([]);
@@ -101,6 +99,7 @@ export default function ComposeEmail(props: ComposeEmailProps) {
         folder_id: getFolderIdByName('draft'),
       });
       setDraftStatus('saved');
+      onDraftSaved?.();
       setTimeout(() => setDraftStatus('idle'), 2000);
     } catch (err) {
       console.error('Draft save failed:', err);
@@ -314,22 +313,11 @@ export default function ComposeEmail(props: ComposeEmailProps) {
   // MODE 1: Regular Email Send
   const handleRegularSend = async () => {
     if (sending) return;
-
-    if (!profile) {
-      toast.error('Please log in to send email');
-      return;
-    }
-
-    if (!to.trim()) {
-      toast.error('Please enter a recipient');
-      return;
-    }
+    if (!profile) { toast.error('Please log in to send email'); return; }
+    if (!to.trim()) { toast.error('Please enter a recipient'); return; }
 
     setSending(true);
-
     try {
-      console.log('[REGULAR SEND] Sending email with attachments via server');
-
       const emailData: any = {
         user_id: profile.id,
         from_email: profile.email,
@@ -352,20 +340,16 @@ export default function ComposeEmail(props: ComposeEmailProps) {
         return;
       }
 
-      // Always send full attachments for regular email
       if (attachments.length > 0) {
-        const encoded = await filesToBase64(attachments);
-        emailData.attachments = encoded;
+        emailData.attachments = await filesToBase64(attachments);
       } else {
         emailData.attachments = [];
       }
 
       await emailService.createEmail(emailData);
-
       toast.success('✓ Email sent successfully');
       onSent?.();
       onClose();
-
     } catch (err: any) {
       console.error('[REGULAR SEND FAILED]', err);
       toast.error(err?.message || 'Failed to send email');
@@ -377,33 +361,13 @@ export default function ComposeEmail(props: ComposeEmailProps) {
   // MODE 2: P2P Transfer Send
   const handleP2PSend = async () => {
     if (sending) return;
-
-    if (!profile) {
-      toast.error('Please log in to send email');
-      return;
-    }
-
-    if (!to.trim()) {
-      toast.error('Please enter a recipient');
-      return;
-    }
-
-    if (!canUseP2P) {
-      toast.error('P2P transfer not available. Recipient must be online.');
-      return;
-    }
-
-    if (attachments.length === 0) {
-      toast.error('No attachments to transfer via P2P');
-      return;
-    }
+    if (!profile) { toast.error('Please log in to send email'); return; }
+    if (!to.trim()) { toast.error('Please enter a recipient'); return; }
+    if (!canUseP2P) { toast.error('P2P transfer not available. Recipient must be online.'); return; }
+    if (attachments.length === 0) { toast.error('No attachments to transfer via P2P'); return; }
 
     setSending(true);
-
     try {
-      console.log('[P2P SEND] Starting P2P transfer to:', recipientEmail);
-
-      // STEP 1: generate stable P2P IDs with P2P flags
       const p2pAttachments = attachments.map(file => ({
         filename: file.name,
         mime_type: file.type,
@@ -413,7 +377,6 @@ export default function ComposeEmail(props: ComposeEmailProps) {
         is_p2p: true,
       }));
 
-      // STEP 2: create email + attachment metadata ONCE
       await emailService.createEmail({
         user_id: profile.id,
         from_email: profile.email,
@@ -424,10 +387,8 @@ export default function ComposeEmail(props: ComposeEmailProps) {
         is_draft: false,
         folder_id: getFolderIdByName('sent'),
         thread_id: threadId ?? null,
-
         p2p_enabled: true,
         p2p_delivered: false,
-
         attachments: p2pAttachments.map(a => ({
           ...a,
           content_base64: null,
@@ -436,43 +397,28 @@ export default function ComposeEmail(props: ComposeEmailProps) {
         }))
       });
 
-      // STEP 3: UI state
-      setP2pFiles(
-        p2pAttachments.map(a => ({
-          name: a.filename,
-          size: a.size_bytes,
-          progress: 0,
-          status: 'pending',
-          messageId: a.p2p_message_id
-        }))
-      );
+      setP2pFiles(p2pAttachments.map(a => ({
+        name: a.filename,
+        size: a.size_bytes,
+        progress: 0,
+        status: 'pending',
+        messageId: a.p2p_message_id
+      })));
 
       setShowP2PProgress(true);
-
-      // STEP 4: start P2P transfer
-      // Support multiple recipients (comma-separated)
       const recipients = to.split(',').map(e => e.trim()).filter(Boolean);
-
-      // Show toast for each file
-      attachments.forEach((file: File) => {
-        p2pToast.started(file.name);
-      });
+      attachments.forEach((file: File) => { p2pToast.started(file.name); });
 
       await p2pService.startTransfer(
-        recipients, // Use recipients array instead of single recipientEmail
+        recipients,
         attachments,
         p2pAttachments.map(a => a.p2p_message_id)
       );
 
-
       toast.success('✓ Email sent, transferring files via P2P');
-
-      // Don't close - wait for P2P progress modal
-
     } catch (err: any) {
       console.error('[P2P SEND FAILED]', err);
       toast.error(err?.message || 'Failed to send via P2P');
-
       setP2pFiles(prev => prev.map(f => ({ ...f, status: 'failed' as const })));
     } finally {
       setSending(false);
@@ -485,62 +431,44 @@ export default function ComposeEmail(props: ComposeEmailProps) {
       cc={cc}
       bcc={bcc}
       subject={subject}
-
       setTo={setTo}
       setCc={setCc}
       setBcc={setBcc}
       setSubject={setSubject}
-
       showCc={showCc}
       showBcc={showBcc}
       setShowCc={setShowCc}
       setShowBcc={setShowBcc}
-
       sending={sending}
       liveRecipientStatus={recipientStatus}
       draftStatus={draftStatus}
-
       attachments={attachments}
       isImageFile={isImageFile}
       removeAttachment={removeAttachment}
       formatFileSize={formatFileSize}
-
       onRegularSend={handleRegularSend}
       onP2PSend={handleP2PSend}
       onClose={onClose}
       onLocalAttach={handleFileSelect}
       onDriveAttach={(files) => setAttachments(prev => [...prev, ...files])}
-
       onInsertEmoji={(emoji) => {
         textareaRef.current?.focus();
         document.execCommand('insertText', false, emoji);
       }}
-
       onInsertLink={(url) => {
         if (!url) return;
         textareaRef.current?.focus();
         document.execCommand('createLink', false, url);
       }}
-
-      onScheduleSend={(min) => {
-        toast(`Scheduled in ${min} minutes`);
-      }}
-
-      onBodyInput={(html) => {
-        setBody(html);
-      }}
-
+      onScheduleSend={(min) => { toast(`Scheduled in ${min} minutes`); }}
+      onBodyInput={(html) => { setBody(html); }}
       onBodyKeyDown={handleKeyDown}
-
       bodyRef={textareaRef}
       fileInputRef={fileInputRef}
-
       p2pFiles={p2pFiles}
       showP2PProgress={showP2PProgress}
       setShowP2PProgress={setShowP2PProgress}
       recipientEmail={recipientEmail}
-      deliveryMode={canUseP2P ? 'P2P' : 'EMAIL'}
-
       p2pConnected={p2pConnected}
       canUseP2P={canUseP2P}
       hasLargeAttachments={hasLargeAttachments}

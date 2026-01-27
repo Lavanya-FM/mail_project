@@ -54,6 +54,13 @@ class WebRTCManager {
     private config: WebRTCConfig = DEFAULT_CONFIG;
 
     /**
+     * Get active peer connection
+     */
+    getPeerConnection(callId: string): RTCPeerConnection | undefined {
+        return this.peerConnections.get(callId);
+    }
+
+    /**
      * Create peer connection for a call
      */
     async createPeerConnection(
@@ -123,8 +130,28 @@ class WebRTCManager {
             };
         };
 
+        // Handle negotiation needed (for 2-way upgrades)
+        pc.onnegotiationneeded = async () => {
+            console.log(`[WebRTC] Negotiation needed for ${callId}`);
+            try {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                callService.sendOffer(callId, offer.sdp!, remotePeer);
+            } catch (err) {
+                console.error('[WebRTC] Negotiation failed:', err);
+            }
+        };
+
         // If initiator, create and send offer
         if (isInitiator) {
+            // Trigger by negotiationneeded or manual? 
+            // Manual is safer for first offer to ensure constraints
+            // But if we add tracks above, negotiationneeded might fire.
+            // Let's rely on manual createOffer inside createPeerConnection to respect enableVideo flag logic
+            // But wait, if we added tracks, negotiationneeded WILL fire async.
+            // To avoid double offer, we can just let negotiationneeded handle it?
+            // "nested negotiation" is complex. 
+            // Sticking to manual offer for Initial Setup, but listener handles future upgrades.
             await this.createOffer(callId, remotePeer, enableVideo);
         }
 
@@ -291,15 +318,42 @@ class WebRTCManager {
     /**
      * Mute/unmute video
      */
-    toggleVideo(callId: string, enabled: boolean): void {
+    /**
+     * Mute/unmute video
+     */
+    async toggleVideo(callId: string, enabled: boolean): Promise<void> {
         const stream = this.localStreams.get(callId);
-        if (!stream) return;
+        const pc = this.peerConnections.get(callId);
+        if (!stream || !pc) return;
 
-        stream.getVideoTracks().forEach(track => {
-            track.enabled = enabled;
-        });
+        const videoTracks = stream.getVideoTracks();
 
-        console.log(`[WebRTC] Video ${enabled ? 'enabled' : 'disabled'}`);
+        if (videoTracks.length > 0) {
+            // Track exists, just toggle
+            videoTracks.forEach(track => {
+                track.enabled = enabled;
+            });
+            console.log(`[WebRTC] Video ${enabled ? 'enabled' : 'disabled'}`);
+        } else if (enabled) {
+            // No video track, need to add one (Upgrade)
+            try {
+                console.log('[WebRTC] Upgrading to video...');
+                const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                const newTrack = newStream.getVideoTracks()[0];
+
+                // Add to local stream
+                stream.addTrack(newTrack);
+
+                // Add to peer connection
+                pc.addTrack(newTrack, stream);
+
+                // Notify via data/signaling
+                console.log('[WebRTC] Added new video track');
+            } catch (error) {
+                console.error('[WebRTC] Failed to add video track:', error);
+            }
+        }
+
         callService.updateMedia(callId, undefined, enabled);
     }
 

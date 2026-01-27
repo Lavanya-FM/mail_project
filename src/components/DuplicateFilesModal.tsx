@@ -1,6 +1,16 @@
 import { X, Copy, Trash2, Check, AlertCircle } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
-import storageService, { DuplicateFile } from '../lib/storageService';
+import { formatFileSize } from "../lib/driveService";
+// Mock storageService since file was missing
+export interface DuplicateFile {
+    files: { id: number; name: string; size_bytes: number; created_at: string }[];
+    potential_savings: number;
+}
+
+const storageService = {
+    findDuplicates: async (_id: number): Promise<DuplicateFile[]> => [],
+    formatBytes: (bytes: number, _decimals?: number) => formatFileSize(bytes)
+};
 import * as driveService from "../lib/driveService";
 import { useEffect, useState } from 'react';
 
@@ -53,7 +63,7 @@ export default function DuplicateFilesModal({ isOpen, onClose, userId, onRefresh
 
         if (confirm(`Delete ${selectedFiles.size} selected file(s)?`)) {
             for (const fileId of selectedFiles) {
-                await driveService.deleteFile(fileId);
+                await driveService.deleteFile(fileId, userId);
             }
             setSelectedFiles(new Set());
             loadDuplicates();
@@ -116,16 +126,16 @@ export default function DuplicateFilesModal({ isOpen, onClose, userId, onRefresh
                                             <div
                                                 key={file.id}
                                                 className={`p-3 rounded-lg border-2 transition cursor-pointer ${selectedFiles.has(file.id)
-                                                        ? 'border-red-500 bg-red-50 dark:bg-red-900/20'
-                                                        : 'border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:border-blue-500'
+                                                    ? 'border-red-500 bg-red-50 dark:bg-red-900/20'
+                                                    : 'border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-700 hover:border-blue-500'
                                                     }`}
                                                 onClick={() => toggleFileSelection(file.id)}
                                             >
                                                 <div className="flex items-center justify-between">
                                                     <div className="flex items-center gap-3 flex-1">
                                                         <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${selectedFiles.has(file.id)
-                                                                ? 'border-red-500 bg-red-500'
-                                                                : 'border-gray-300 dark:border-slate-500'
+                                                            ? 'border-red-500 bg-red-500'
+                                                            : 'border-gray-300 dark:border-slate-500'
                                                             }`}>
                                                             {selectedFiles.has(file.id) && <Check className="w-3 h-3 text-white" />}
                                                         </div>

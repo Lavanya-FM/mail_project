@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, HardDrive, Folder, File, Check } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import * as driveService from "../lib/driveService";
@@ -21,16 +21,17 @@ export default function AttachFromDriveModal({ isOpen, onClose, onAttach }: Atta
     const [loading, setLoading] = useState(false);
     const [shareAsLink, setShareAsLink] = useState(true);
 
-    useState(() => {
+    useEffect(() => {
         if (isOpen && user) {
             loadFiles();
         }
-    });
+    }, [isOpen, user, currentFolder]);
 
     const loadFiles = async () => {
         setLoading(true);
         try {
-            const contents = await driveService.getFolderContents(currentFolder);
+            const userId = user?.id || 1;
+            const contents = await driveService.getFolderContents(currentFolder, userId);
             setFiles(contents.files);
             setFolders(contents.folders);
         } catch (error) {
@@ -152,8 +153,8 @@ export default function AttachFromDriveModal({ isOpen, onClose, onAttach }: Atta
                                         key={`file-${file.id}`}
                                         onClick={() => toggleFileSelection(file.id)}
                                         className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition ${isSelected
-                                                ? 'bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500'
-                                                : 'bg-white dark:bg-slate-800 border-2 border-gray-200 dark:border-slate-700 hover:border-blue-500'
+                                            ? 'bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500'
+                                            : 'bg-white dark:bg-slate-800 border-2 border-gray-200 dark:border-slate-700 hover:border-blue-500'
                                             }`}
                                     >
                                         <div className="flex-shrink-0">

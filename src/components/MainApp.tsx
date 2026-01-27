@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Mail, HardDrive, Video } from 'lucide-react';
 import MailLayout from './MailLayout';
 import JeeDrive from './JeeDrive';
@@ -7,8 +7,49 @@ import CallsView from './CallsView';
 
 type View = 'mail' | 'drive' | 'calls';
 
+import { authService } from '../lib/authService';
+import { p2pService } from '../lib/p2pService';
+
 export default function MainApp() {
     const [currentView, setCurrentView] = useState<View>('mail');
+
+    useEffect(() => {
+        const user = authService.getCurrentUser();
+        if (user && user.email) {
+            p2pService.connect(user.id || user.email, user.email);
+        }
+
+        const handlePathChange = () => {
+            const path = window.location.pathname;
+            if (path.startsWith('/meet/') || path === '/meet') {
+                setCurrentView('calls');
+            } else if (path.startsWith('/drive')) {
+                setCurrentView('drive');
+            } else {
+                setCurrentView('mail');
+            }
+        };
+
+        // Initial check
+        handlePathChange();
+
+        // Listen for custom navigation events
+        const handleNavigate = (e: CustomEvent) => {
+            const path = e.detail.path;
+            if (window.location.pathname !== path) {
+                window.history.pushState({}, '', path);
+            }
+            handlePathChange();
+        };
+
+        window.addEventListener('app-navigate', handleNavigate as EventListener);
+        window.addEventListener('popstate', handlePathChange);
+
+        return () => {
+            window.removeEventListener('app-navigate', handleNavigate as EventListener);
+            window.removeEventListener('popstate', handlePathChange);
+        };
+    }, []);
 
     return (
         <div className="h-screen flex flex-col">

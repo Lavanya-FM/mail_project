@@ -1,5 +1,34 @@
 const API = "/api/drive";
 
+export interface DriveFolder {
+    id: number;
+    user_id: number;
+    parent_folder_id: number | null;
+    name: string;
+    created_at: string;
+    updated_at: string;
+    color?: string;
+    file_count?: number;
+}
+
+export interface DriveFile {
+    id: number;
+    user_id: number;
+    folder_id: number | null;
+    filename: string;
+    name: string;
+    path: string;
+    size_bytes: number;
+    file_type: string;
+    mime_type: string;
+    created_at: string;
+    updated_at: string;
+    is_starred: boolean;
+    is_trashed: boolean;
+    tags?: string[];
+    previewUrl?: string;
+}
+
 /* ===============================
    UPLOAD FILE
 ================================ */
@@ -193,15 +222,15 @@ export async function emptyTrash(userId: number) {
 
 // Fetch trashed files
 export async function getTrashFiles() {
-  const res = await fetch('/api/drive/trash', {
-    credentials: 'include',
-  });
+    const res = await fetch('/api/drive/trash', {
+        credentials: 'include',
+    });
 
-  if (!res.ok) {
-    throw new Error('Failed to fetch trash files');
-  }
+    if (!res.ok) {
+        throw new Error('Failed to fetch trash files');
+    }
 
-  return res.json();
+    return res.json();
 }
 
 /* ===============================
@@ -226,36 +255,36 @@ export async function getRecentFiles(userId: number, limit = 20) {
    UI helpers
 ================================ */
 export function getFileColor(type?: string) {
-  if (!type) return "#9CA3AF";
-  const t = String(type).toLowerCase().trim();
-  if (["jpg","jpeg","png","gif","webp","svg","bmp","ico","tiff","image"].includes(t)) return "#3B82F6";
-  if (["mp4","mov","avi","mkv","webm","video"].includes(t)) return "#8B5CF6";
-  if (["pdf","txt","doc","docx","document"].includes(t)) return "#10B981";
-  if (["zip","rar","7z","tar","gz","archive"].includes(t)) return "#F59E0B";
-  if (["mp3","wav","flac","ogg","audio"].includes(t)) return "#EF4444";
-  return "#9CA3AF";
+    if (!type) return "#9CA3AF";
+    const t = String(type).toLowerCase().trim();
+    if (["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "tiff", "image"].includes(t)) return "#3B82F6";
+    if (["mp4", "mov", "avi", "mkv", "webm", "video"].includes(t)) return "#8B5CF6";
+    if (["pdf", "txt", "doc", "docx", "document"].includes(t)) return "#10B981";
+    if (["zip", "rar", "7z", "tar", "gz", "archive"].includes(t)) return "#F59E0B";
+    if (["mp3", "wav", "flac", "ogg", "audio"].includes(t)) return "#EF4444";
+    return "#9CA3AF";
 }
 
 export function formatFileSize(bytes: number) {
-  if (!bytes && bytes !== 0) return "0 B";
-  const units = ["B","KB","MB","GB","TB"];
-  let i = 0;
-  let val = Number(bytes);
-  while (val >= 1024 && i < units.length - 1) {
-    val /= 1024;
-    i++;
-  }
-  return `${Math.round(val * 10) / 10} ${units[i]}`;
+    if (!bytes && bytes !== 0) return "0 B";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0;
+    let val = Number(bytes);
+    while (val >= 1024 && i < units.length - 1) {
+        val /= 1024;
+        i++;
+    }
+    return `${Math.round(val * 10) / 10} ${units[i]}`;
 }
 
 // --- Safety helpers injected by dev-assistant ---
-export async function getTrash(userId:number) {
-  try {
-    const res = await fetch(`/api/drive/trash?user_id=${userId}`);
-    const data = await res.json();
-    return { files: Array.isArray(data?.files) ? data.files : [] };
-  } catch(e) {
-    console.error('driveService.getTrash ERROR', e);
-    return { files: [] };
-  }
+export async function getTrash(userId: number) {
+    try {
+        const res = await fetch(`/api/drive/trash?user_id=${userId}`);
+        const data = await res.json();
+        return { files: Array.isArray(data?.files) ? data.files : [] };
+    } catch (e) {
+        console.error('driveService.getTrash ERROR', e);
+        return { files: [] };
+    }
 }

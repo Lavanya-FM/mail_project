@@ -1,5 +1,5 @@
 // src/components/EmailView.tsx
-import { Star, Reply, ReplyAll, Forward, Trash2, Archive, MoreVertical, Paperclip, X, Flag, FileEdit, Tag, Check, FileText, Download, Eye, Lock, Share2, CheckCircle, AlertCircle, Shield, Smile, HardDrive, Image as ImageIcon } from 'lucide-react';
+import { Star, Reply, ReplyAll, Forward, Trash2, Archive, MoreVertical, Paperclip, X, Flag, Tag, Check, FileText, Download, Eye, Lock, CheckCircle, Smile, HardDrive, Image as ImageIcon, Phone } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { emailService } from '../lib/emailService';
 import { authService } from '../lib/authService';
@@ -7,7 +7,7 @@ import { Email } from '../types/email';
 import { normalizeEmailBody } from '../utils/email';
 import { collapseForwarded } from '../lib/collapseForwarded';
 import { p2pService } from '../lib/p2pService';
-import { enhancedP2PService } from '../lib/enhancedP2PService';
+import { callService } from '../lib/callService';
 import toast from 'react-hot-toast';
 
 
@@ -42,7 +42,7 @@ interface ConfirmDialogState {
   onConfirm?: () => Promise<void> | void;
 }
 
-export default function EmailView({ email, onClose, onRefresh, onCompose, labels = [] }: EmailViewProps) {
+export default function EmailView({ email, onClose, onRefresh, onCompose: _onCompose, labels = [] }: EmailViewProps) {
   console.log("EMAIL JSON >>>", email);
 
   const [starred, setStarred] = useState(false);
@@ -52,10 +52,10 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
   const currentUser = authService.getCurrentUser();
   const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const [downloadedMap, setDownloadedMap] = useState<Record<string, boolean>>({});
+
 
   const myEmail = currentUser.email.toLowerCase();
-  const senderEmail = (email.from_email || '').toLowerCase();
+  const senderEmail = (email?.from_email || '').toLowerCase();
   const isSender = myEmail === senderEmail;
   const isReceiver = !isSender;
 
@@ -241,18 +241,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
     return () => window.removeEventListener('p2p-incoming-file', handler);
   }, []);
 
-  useEffect(() => {
-    if (!email?.attachments) return;
 
-    const map: Record<string, boolean> = {};
-    for (const a of email.attachments) {
-      if (a.p2p_message_id) {
-        map[a.p2p_message_id] =
-          enhancedP2PService.hasBeenDownloaded(a.p2p_message_id);
-      }
-    }
-    setDownloadedMap(map);
-  }, [email?.id]);
 
   useEffect(() => {
     if (!email?.attachments) return;
@@ -294,7 +283,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
 
         // File not complete, try to resume
         // ✅ FIX: Pass sender email from email's from_email field
-        const senderEmail = email?.from_email ? email.from_email.toLowerCase() : null;
+        const senderEmail = email?.from_email ? email.from_email.toLowerCase() : undefined;
         console.log('[EmailView] Resuming P2P receive for', a.filename, 'sender:', senderEmail);
         p2pService.resumeReceive(a.p2p_message_id, senderEmail);
 
@@ -386,7 +375,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
   useEffect(() => {
     if (!email?.attachments) return;
 
-    email.attachments.forEach(a => {
+    email.attachments.forEach((a: any) => {
       if (a.p2p_message_id) {
         console.log('[UI] Auto resume receive:', a.p2p_message_id);
         p2pService.resumeReceive(a.p2p_message_id);
@@ -414,7 +403,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
   }, [showActions, showLabelDropdown]);
 
   const openConfirmDialog = (opts: Partial<ConfirmDialogState>) => {
-    setConfirmDialog(prev => ({ ...initialConfirmState, ...opts, open: true }));
+    setConfirmDialog(() => ({ ...initialConfirmState, ...opts, open: true }));
   };
 
   const closeConfirmDialog = () => setConfirmDialog(initialConfirmState);
@@ -549,7 +538,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose, labels
     }
   };
 
-  const attachments = Array.isArray(email.attachments)
+  const attachments = Array.isArray(email?.attachments)
     ? email.attachments.map(a => ({
       id: a.id,
       filename: a.filename,
@@ -712,7 +701,7 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
     if (!email) return;
 
     const me = currentUser.email;
-    let toEmails: string[] = [];
+    let toEmails: any[] = [];
     let emailSubject = '';
     let emailBody = '';
 
@@ -748,7 +737,7 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
         return;
       }
       if (email.from_email !== me) {
-        toEmails = [email.from_email];
+        toEmails = [email.from_email || ''];
       } else {
         toEmails = (email.to_emails || []).filter(e => e !== me);
       }
@@ -764,7 +753,7 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
       return;
     }
 
-    const references = buildReferencesHeader(email);
+
 
     await emailService.createEmail({
       user_id: currentUser.id,
@@ -805,26 +794,7 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
     onRefresh?.();
   };
 
-  const handleEditDraft = async () => {
-    if (!email || !onCompose || !currentUser) return;
-    const toEmails = email.to_emails?.map((to: any) => (typeof to === 'string' ? to : (to?.email || ""))).join(', ') || '';
-    const ccEmails = email.cc_emails?.map((cc: any) => (typeof cc === 'string' ? cc : (cc?.email || ""))).join(', ') || '';
-    try {
-      // delete the draft so compose opens a fresh draft (your previous logic did this)
-      await emailService.deleteEmail(Number(email.id), currentUser.id);
-      onRefresh?.();
-    } catch (error) {
-      console.error('Error deleting draft:', error);
-    }
 
-    onCompose({
-      to: toEmails,
-      cc: ccEmails,
-      subject: email.subject || '',
-      body: normalizeEmailBody(email.body ?? email.text_preview ?? '') || ''
-    });
-    onClose?.();
-  };
 
   const handleToggleLabel = async (label: { id: number; name: string; color: string }) => {
     if (!email || !currentUser) return;
@@ -893,7 +863,7 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
     );
   }
 
-  const resolvedThreadId = email.thread_id ?? String(email.id);
+
 
   // prepare HTML safely
   const normalizedBody = normalizeEmailBody(email.body ?? email.text_preview ?? "");
@@ -923,10 +893,7 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
 
   const { main: mainHtml, quoted: quotedHtml } = splitQuotedHtml(collapsedHtml);
 
-  const googleDocPreview = (url: string) =>
-    `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(
-      window.location.origin + url
-    )}`;
+
 
 
 
@@ -948,6 +915,24 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
         </button>
 
         <div className="flex items-center gap-1">
+          {!isSender && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                const targetEmail = email.from_email || '';
+                if (!targetEmail) {
+                  toast.error("Cannot call: No email address");
+                  return;
+                }
+                callService.initiateCall(targetEmail, 'audio');
+                toast.success(`Calling ${email.from_name || targetEmail}...`);
+              }}
+              className="p-2 text-gray-600 dark:text-slate-400 hover:text-green-600 dark:hover:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-full transition"
+              title="Voice Call"
+            >
+              <Phone className="w-4 h-4" />
+            </button>
+          )}
 
 
           <button onClick={handleArchive} className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full transition" title="Archive">
@@ -1095,9 +1080,7 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
                       const isP2PAttachment = !!(a.delivery_mode === 'P2P' || a.is_p2p || a.p2p_message_id || isP2PEmail);
                       const hasP2PId = !!a.p2p_message_id;
 
-                      const hasBeenDownloaded = a.p2p_message_id
-                        ? downloadedMap[a.p2p_message_id]
-                        : false;
+
 
                       const downloadUrl = `/api/email/${email.id}/attachment/${a.id}?download=1&user_id=${currentUser.id}`;
                       const previewUrl = `/api/email/${email.id}/attachment/${a.id}?inline=1&user_id=${currentUser.id}`;
@@ -1123,7 +1106,7 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
 
                       const isTransferInProgress = hasP2PId && p2pProgress && p2pProgress.percentage > 0 && p2pProgress.percentage < 100;
                       const transferPercentage = p2pProgress?.percentage || 0;
-                      const etaSeconds = p2pProgress?.etaSeconds;
+
 
                       return (
                         <div
@@ -1393,6 +1376,24 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
                     <span className="text-xs lg:text-sm text-gray-500 dark:text-slate-400 whitespace-nowrap">
                       {formatShortDate(email.sent_at || email.created_at || '')}
                     </span>
+                    {!isSender && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const targetEmail = email.from_email || '';
+                          if (!targetEmail) {
+                            toast.error("Cannot call: No email address");
+                            return;
+                          }
+                          callService.initiateCall(targetEmail, 'audio');
+                          toast.success(`Calling ${email.from_name || targetEmail}...`);
+                        }}
+                        className="ml-2 p-1.5 text-gray-500 hover:text-green-600 hover:bg-green-50 dark:text-slate-400 dark:hover:text-green-400 dark:hover:bg-green-900/20 rounded-lg transition-colors"
+                        title="Voice Call"
+                      >
+                        <Phone className="w-5 h-5" />
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1696,6 +1697,6 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
           )}
         </div>
       </div>
-    </div>
+    </div >
   );
 }

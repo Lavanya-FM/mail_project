@@ -508,7 +508,7 @@ class CallService {
     /**
      * Send chat message
      */
-    async sendChatMessage(callId: string, message: string): Promise<void> {
+    async sendChatMessage(callId: string, message: string, attachment?: { type: 'text' | 'file'; fileUrl?: string; fileName?: string; size?: number }): Promise<void> {
         const call = this.activeCalls.get(callId);
         if (!call) return;
         const userEmail = getUserEmail();
@@ -516,10 +516,9 @@ class CallService {
         const event: CallEvent = {
             v: 1, type: 'CALL_EVENT', event: 'CALL_CHAT',
             callId, from: userEmail, to: [to], timestamp: Date.now(),
-            payload: { message }
+            payload: { message, ...attachment }
         };
         this.sendCallEvent(event);
-        // Also trigger local event so sender sees it? No, sender handles UI locally usually.
     }
 
     /**

@@ -47,7 +47,7 @@ export interface UseCallReturn {
     toggleVirtualBackground: (mode: 'blur' | 'image' | 'none') => Promise<void>;
 
     // Interaction
-    chatMessages: Array<{ sender: string; content: string; timestamp: number }>;
+    chatMessages: Array<{ sender: string; content: string; timestamp: number; type?: string; fileUrl?: string; fileName?: string }>;
     sendChat: (message: string) => void;
     sendReaction: (reaction: string) => void;
     toggleHand: () => void;
@@ -61,14 +61,14 @@ export function useCall(options: UseCallOptions): UseCallReturn {
     const [incomingCall, setIncomingCall] = useState<CallSession | null>(null);
     const [isConnected, setIsConnected] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
-    const [isVideoEnabled, setIsVideoEnabled] = useState(true);
+    const [isVideoEnabled, setIsVideoEnabled] = useState(false); // Default to false, will be updated on call start
     const [isScreenSharing, setIsScreenSharing] = useState(false);
     const [localStream, setLocalStream] = useState<MediaStream | null>(null);
     const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
     const [callDuration, setCallDuration] = useState(0);
     const [connectionStats, setConnectionStats] = useState({ upload: '0 KB/s', download: '0 KB/s', total: '0 MB' });
     const [availableDevices, setAvailableDevices] = useState<{ audio: MediaDeviceInfo[], video: MediaDeviceInfo[] }>({ audio: [], video: [] });
-    const [chatMessages, setChatMessages] = useState<Array<{ sender: string; content: string; timestamp: number }>>([]);
+    const [chatMessages, setChatMessages] = useState<Array<{ sender: string; content: string; timestamp: number; type?: string; fileUrl?: string; fileName?: string }>>([]);
     const [remoteHandRaised, setRemoteHandRaised] = useState(false);
     const [isHandRaised, setIsHandRaised] = useState(false);
 
@@ -98,6 +98,7 @@ export function useCall(options: UseCallOptions): UseCallReturn {
         };
 
         setIncomingCall(call);
+        setIsVideoEnabled(call.callType === 'video');
         onIncomingCall?.(event.callId, event.from);
 
         // Play ringtone
@@ -115,6 +116,7 @@ export function useCall(options: UseCallOptions): UseCallReturn {
 
         setActiveCall(call);
         setIncomingCall(null);
+        setIsVideoEnabled(call.callType === 'video');
         stopRingtone();
 
         try {
@@ -205,21 +207,25 @@ export function useCall(options: UseCallOptions): UseCallReturn {
         if (!call) return;
 
         try {
-            // Create peer connection (as answerer)
-            const enableVideo = call.callType === 'video';
-            await webrtcManager.createPeerConnection(event.callId, event.from, false, enableVideo);
+            // Check if PC exists
+            let pc = webrtcManager.getPeerConnection(event.callId);
+
+            if (!pc) {
+                // Create peer connection (as answerer) if new
+                const enableVideo = call.callType === 'video';
+                await webrtcManager.createPeerConnection(event.callId, event.from, false, enableVideo);
+            }
 
             // Handle the offer
             await webrtcManager.handleOffer(event.callId, event.payload.sdp, event.from);
 
-            // Get local stream
+            // Get local stream (if changed/added)
             const stream = webrtcManager.getLocalStreamForCall(event.callId);
             if (stream) {
                 setLocalStream(stream);
             }
         } catch (error: any) {
             console.error('[useCall] Offer handling failed:', error);
-            // Attempt to recover or notify
         }
     }, [incomingCall, activeCall]);
 
@@ -323,6 +329,7 @@ export function useCall(options: UseCallOptions): UseCallReturn {
             const call = callService.getCall(callId);
             if (call) {
                 setActiveCall(call);
+                setIsVideoEnabled(type === 'video');
             }
 
             toast(`Calling ${callee}...`);
@@ -349,6 +356,7 @@ export function useCall(options: UseCallOptions): UseCallReturn {
             await callService.acceptCall(incomingCall.callId, deviceId.current);
             setActiveCall(incomingCall);
             setIncomingCall(null);
+            setIsVideoEnabled(incomingCall.callType === 'video');
             stopRingtone();
 
             toast.success('Call connected');
@@ -479,8 +487,14 @@ export function useCall(options: UseCallOptions): UseCallReturn {
         };
 
         const handleCallChat = (event: CallEvent) => {
-
-            setChatMessages(prev => [...prev, { sender: event.from, content: event.payload.message, timestamp: event.timestamp }]);
+            setChatMessages(prev => [...prev, {
+                sender: event.from,
+                content: event.payload.message,
+                timestamp: event.timestamp,
+                type: event.payload.type,
+                fileUrl: event.payload.fileUrl,
+                fileName: event.payload.fileName
+            }]);
         };
 
         const handleCallHand = (event: CallEvent) => {
@@ -547,7 +561,8 @@ export function useCall(options: UseCallOptions): UseCallReturn {
         const handleRemoteStream = (event: any) => {
             const { callId, stream } = event.detail;
             if (activeCall?.callId === callId) {
-                setRemoteStream(stream);
+                // Force new reference to trigger React updates
+                setRemoteStream(new MediaStream(stream.getTracks()));
                 setIsConnected(true);
 
                 // Start duration timer

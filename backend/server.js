@@ -33,6 +33,26 @@ app.use('/api', require('./draftController')); // Gmail-style draft management
 app.use('/api/drive', require('./drive'));
 app.use('/api/carbon', require('./carbonService'));
 
+// Chat Routes
+const chatController = require('./chatController');
+const multer = require('multer');
+const upload = multer({ dest: path.join(__dirname, 'uploads/') });
+
+app.get('/api/chat/:peerEmail', chatController.getMessages);
+app.post('/api/chat/send', upload.single('file'), chatController.sendMessage);
+
+// -------------------------
+// STATIC FILES (Frontend)
+// -------------------------
+// Serve static files from the React app (ONE level up in dist)
+const clientBuildPath = path.join(__dirname, '../dist');
+app.use(express.static(clientBuildPath));
+
+// Handle SPA fallback - send index.html for any other requests
+app.get(/(.*)/, (req, res) => {
+  res.sendFile(path.join(clientBuildPath, 'index.html'));
+});
+
 // -------------------------
 // HTTP SERVER
 // -------------------------

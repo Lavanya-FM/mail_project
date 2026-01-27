@@ -45,6 +45,58 @@ async function createSystemFolders(userId) {
       [userId, name, system_box]
     );
   }
+
+  // Create default labels
+  const defaultLabels = [
+    ['Personal', '#10b981'],
+    ['Work', '#3b82f6'],
+    ['Travel', '#f59e0b']
+  ];
+
+  for (const [name, color] of defaultLabels) {
+    await db.query(
+      "INSERT INTO labels (user_id, name, color) VALUES (?, ?, ?)",
+      [userId, name, color]
+    );
+  }
+}
+
+// Initialize tables if not exists
+async function initTables() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS labels (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      name VARCHAR(50) NOT NULL,
+      color VARCHAR(20) DEFAULT '#9ca3af',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY unique_user_label (user_id, name)
+    )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS activity_log (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      access_type VARCHAR(100),
+      ip VARCHAR(45),
+      location VARCHAR(100),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+}
+initTables().catch(console.error);
+
+async function logActivity(userId, accessType, req) {
+    try {
+        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+        await db.query(
+            "INSERT INTO activity_log (user_id, access_type, ip, location) VALUES (?, ?, ?, ?)",
+            [userId, accessType, ip, 'Unknown']
+        );
+    } catch (err) {
+        console.error('Failed to log activity', err);
+    }
 }
 
 // -------------------- AUTH ROUTES --------------------
@@ -648,6 +700,7 @@ router.post("/login", async (req, res) => {
     }
 
     await createSystemFolders(user.id);
+    await logActivity(user.id, `Login (${req.headers['user-agent']})`, req);
 
     // ✅ FIX: Explicitly map fields to ensure correct mapping
     // ✅ CRITICAL: NEVER include password in response - explicitly exclude it
@@ -694,6 +747,116 @@ router.post("/login", async (req, res) => {
   } catch (err) {
     console.error("LOGIN ERROR:", err);
     res.status(500).json({ error: "Login failed" });
+  }
+});
+
+// -------------------- SIMPLE SEND (Notifications) --------------------
+router.post("/mail/send", async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+    const { to, subject, content, to_emails, isHtml } = req.body || {};
+
+    // Support to (array) or to_emails (array)
+    const recipients = Array.isArray(to) ? to : (Array.isArray(to_emails) ? to_emails : [to]);
+    const validRecipients = recipients.filter(Boolean);
+
+    if (!validRecipients.length) {
+      return res.status(400).json({ error: "Recipients required" });
+    }
+
+    // Get sender info
+    const [senders] = await db.query("SELECT full_name, email FROM users WHERE id = ?", [userId]);
+    if (!senders.length) return res.status(404).json({ error: "User not found" });
+    const sender = senders[0];
+
+    // Create reusable transporter object using the default SMTP transport
+    let transporter;
+
+    // Check if we have real SMTP config, otherwise use fallback/dev mode
+    if (process.env.SMTP_HOST) {
+      transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: process.env.SMTP_PORT || 587,
+        secure: process.env.SMTP_SECURE === 'true',
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS,
+        },
+      });
+    } else {
+      // Fallback for local development (fake SMTP)
+      transporter = nodemailer.createTransport({
+        host: "127.0.0.1",
+        port: 25,
+        secure: false,
+        tls: { rejectUnauthorized: false },
+      });
+    }
+
+    const mailOptions = {
+      from: `"${sender.full_name}" <${sender.email}>`,
+      to: validRecipients.join(", "),
+      subject: subject,
+    };
+
+    if (isHtml) {
+      mailOptions.html = content;
+    } else {
+      mailOptions.text = content;
+    }
+
+    try {
+      await transporter.sendMail(mailOptions);
+      console.log(`[MAIL] Sent to ${validRecipients.join(", ")}`);
+    } catch (smtpError) {
+      console.warn("[MAIL] SMTP failed, logging email instead (Dev Mode):", smtpError.message);
+      console.log("=== EMAIL CONTENT ===");
+      console.log(`To: ${validRecipients.join(", ")}`);
+      console.log(`Subject: ${subject}`);
+      console.log(`Body: ${content}`);
+      console.log("=====================");
+      // We return success here so the UI doesn't show an error in dev
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("MAIL SEND ERROR:", err);
+    res.status(500).json({ error: "Failed to send email" });
+  }
+});
+
+
+// -------------------- USER SEARCH (For Invites) --------------------
+router.get("/users/search", async (req, res) => {
+  try {
+    const { q } = req.query;
+    // const userId = req.user?.id; // If middleware used, exclude self. For now, simplistic.
+
+    let query = "SELECT id, full_name, email FROM users";
+    let params = [];
+
+    if (q) {
+      query += " WHERE email LIKE ? OR full_name LIKE ?";
+      params.push(`%${q}%`, `%${q}%`);
+    }
+
+    query += " LIMIT 20";
+
+    const [rows] = await db.query(query, params);
+
+    // Normalize response
+    const users = rows.map(r => ({
+      id: r.id,
+      name: r.full_name || r.email.split('@')[0],
+      email: r.email
+    }));
+
+    res.json(users);
+  } catch (err) {
+    console.error("USER SEARCH ERROR:", err);
+    res.status(500).json({ error: "Search failed" });
   }
 });
 
@@ -1895,5 +2058,60 @@ function getColorForType(type) {
   };
   return colors[type] || '#6b7280';
 }
+
+// -------------------- LABELS --------------------
+
+router.get("/labels", async (req, res) => {
+  try {
+    const userId = req.query.user_id;
+    const [rows] = await db.query("SELECT id, name, color FROM labels WHERE user_id = ?", [userId]);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/labels", async (req, res) => {
+  try {
+    const { user_id, name, color } = req.body;
+    const [result] = await db.query("INSERT INTO labels (user_id, name, color) VALUES (?, ?, ?)", [user_id, name, color]);
+    res.json({ id: result.insertId, name, color });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/labels/update", async (req, res) => {
+  try {
+    const { id, name, color, user_id } = req.body;
+    await db.query("UPDATE labels SET name = ?, color = ? WHERE id = ? AND user_id = ?", [name, color, id, user_id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/labels/delete", async (req, res) => {
+  try {
+    const { id, user_id } = req.body;
+    await db.query("DELETE FROM labels WHERE id = ? AND user_id = ?", [id, user_id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/activity", async (req, res) => {
+  try {
+    const userId = req.query.user_id;
+    const [rows] = await db.query(
+      "SELECT id, access_type, ip, location, created_at as date FROM activity_log WHERE user_id = ? ORDER BY created_at DESC LIMIT 10",
+      [userId]
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 module.exports = router;

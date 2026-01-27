@@ -138,6 +138,24 @@ export async function register(
   }
 }
 
+export async function fetchWithAuth(url: string, options: RequestInit = {}) {
+  const token = getToken();
+  const headers = {
+    ...options.headers,
+    'Authorization': token ? `Bearer ${token}` : '',
+    'Content-Type': 'application/json'
+  };
+
+  const res = await fetch(url, { ...options, headers });
+  if (res.status === 401) {
+    await chatStorage.handleLogout(); // Use imported handler instead of direct logout call to avoid circular dependency issues if any
+    localStorage.removeItem("user");
+    localStorage.removeItem("user_token");
+    window.location.reload();
+  }
+  return res;
+}
+
 import { chatStorage } from './chatStorage';
 
 export async function logout() {
@@ -183,7 +201,8 @@ export const authService = {
   register,
   logout,
   isAuthenticated,
-  getRecentActivity
+  getRecentActivity,
+  fetchWithAuth
 };
 
 export default authService;

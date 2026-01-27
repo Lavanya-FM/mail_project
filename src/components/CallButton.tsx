@@ -3,7 +3,6 @@
  * Button to initiate a call from email thread
  */
 
-import React from 'react';
 import { Phone } from 'lucide-react';
 
 interface CallButtonProps {

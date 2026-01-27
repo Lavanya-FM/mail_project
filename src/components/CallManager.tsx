@@ -4,18 +4,42 @@
  * Handles incoming calls and active call UI
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
 import { useCall, unlockAudio } from '../hooks/useCall';
 import { authService } from '../lib/authService';
 import { callService } from '../lib/callService';
 import IncomingCall from './IncomingCall';
 import ActiveCall from './ActiveCall';
+import PostCallScreen from './PostCallScreen';
+import { Video } from 'lucide-react';
 
 export default function CallManager() {
     const user = authService.getCurrentUser();
+    const [showPostCall, setShowPostCall] = useState(false);
+    const lastCallRef = useRef<any>(null);
     const notifiedCalls = useRef(new Set<string>());
     const notificationIdRef = useRef<string | null>(null);
+    const [allContacts, setAllContacts] = useState<any[]>([]);
+
+    useEffect(() => {
+        const fetchAllUsers = async () => {
+            try {
+                const res = await authService.fetchWithAuth('/api/users/search');
+                if (res.ok) {
+                    const data = await res.json();
+                    setAllContacts(data.map((u: any) => ({
+                        id: u.id,
+                        name: u.name || u.full_name,
+                        email: u.email
+                    })));
+                }
+            } catch (err) {
+                console.error("Failed to fetch users", err);
+            }
+        };
+        if (user) fetchAllUsers();
+    }, [user]);
 
     const {
         activeCall,
@@ -28,6 +52,7 @@ export default function CallManager() {
         acceptCall,
         rejectCall,
         endCall,
+        initiateCall,
         toggleMute,
         toggleVideo,
         toggleScreenShare,
@@ -49,7 +74,6 @@ export default function CallManager() {
             notifiedCalls.current.add(callId);
 
             console.log(`[CallManager] Incoming call from ${caller}`);
-            console.log(`[CallManager] Incoming call from ${caller}`);
             notificationIdRef.current = toast(`Incoming call from ${caller}`, { icon: '📞', duration: 10000 });
 
             // Could show browser notification here
@@ -63,8 +87,36 @@ export default function CallManager() {
         },
         onCallEnded: (callId) => {
             console.log(`[CallManager] Call ${callId} ended`);
+            setShowPostCall(true);
         }
     });
+
+    // Track last active call for rejoin functionality
+    useEffect(() => {
+        if (activeCall) {
+            lastCallRef.current = activeCall;
+        }
+    }, [activeCall]);
+
+    const handleRejoin = () => {
+        if (lastCallRef.current && user) {
+            const lastCall = lastCallRef.current;
+            // Determine remote peer (if I was caller, it's callee; if I was callee, it's caller)
+            const remotePeer = lastCall.caller === user.email ? lastCall.callee : lastCall.caller;
+            const callType = lastCall.callType || 'audio';
+
+            setShowPostCall(false);
+            initiateCall(remotePeer, callType);
+        } else {
+            setShowPostCall(false);
+            toast.error('Could not find meeting details to rejoin');
+        }
+    };
+
+    const handleReturnHome = () => {
+        setShowPostCall(false);
+        // Maybe navigate to home if using router, currently just closes the screen
+    };
 
     useEffect(() => {
         console.log('[CallManager] Debug:', { user, activeCall, incomingCall });
@@ -94,21 +146,62 @@ export default function CallManager() {
         }
     }, []);
 
-    // Listen for incoming chat messages
+    // Listen for incoming chat messages & files
     useEffect(() => {
         const handleP2PMessage = (e: any) => {
             const msg = e.detail;
-            if (msg.type === 'secure-message' && msg.payload?.content) {
-                // Determine if we should show notification
-                // Only show if it's not from self (obviously)
-                if (msg.from !== user?.email) {
-                    toast(`New message from ${msg.from}`, { icon: '💬', duration: 4000 });
+            if (msg.type === 'secure-message') {
+                const sender = msg.from;
+                const payload = msg.payload || {};
+
+                if (payload.type === 'meeting-invite') {
+                    // Handle meeting invitation
+                    toast((t) => (
+                        <div className="flex flex-col gap-2">
+                            <span className="font-bold flex items-center gap-2"><Video size={16} /> Meeting Invitation</span>
+                            <span className="text-sm">{payload.inviteFrom || sender} invited you to a meeting.</span>
+                            <div className="flex gap-2 mt-1">
+                                <button
+                                    onClick={() => {
+                                        toast.dismiss(t.id);
+                                        window.dispatchEvent(new CustomEvent('app-navigate', { detail: { path: `/meet/${payload.meetingId}` } }));
+                                    }}
+                                    className="px-3 py-1.5 bg-green-600 text-white text-xs font-bold rounded-lg hover:bg-green-700"
+                                >
+                                    Join Now
+                                </button>
+                                <button
+                                    onClick={() => toast.dismiss(t.id)}
+                                    className="px-3 py-1.5 bg-gray-200 text-gray-700 text-xs font-bold rounded-lg hover:bg-gray-300"
+                                >
+                                    Dismiss
+                                </button>
+                            </div>
+                        </div>
+                    ), { duration: 15000, position: 'top-center' });
+                    return;
+                }
+
+                if (sender !== user?.email) {
+                    const content = payload.content || 'New message';
+                    toast(`Message from ${sender.split('@')[0]}: ${content}`, { icon: '💬', duration: 4000 });
                 }
             }
         };
+
+        const handleIncomingFile = (e: any) => {
+            const { from, fileName } = e.detail;
+            if (from !== user?.email) {
+                toast(`Incoming file from ${from.split('@')[0]}: ${fileName}`, { icon: '📂', duration: 5000 });
+            }
+        };
+
         window.addEventListener('p2p-message', handleP2PMessage);
-        return () => window.removeEventListener('p2p-message', handleP2PMessage);
-        return () => window.removeEventListener('p2p-message', handleP2PMessage);
+        window.addEventListener('p2p-incoming-file', handleIncomingFile);
+        return () => {
+            window.removeEventListener('p2p-message', handleP2PMessage);
+            window.removeEventListener('p2p-incoming-file', handleIncomingFile);
+        };
     }, [user]);
 
     // Unlock audio context on first interaction
@@ -167,6 +260,15 @@ export default function CallManager() {
                     onSendReaction={sendReaction}
                     onToggleHand={toggleHand}
                     remoteHandRaised={remoteHandRaised}
+                    allContacts={allContacts}
+                />
+            )}
+
+            {/* Post Call Screen */}
+            {showPostCall && (!activeCall || activeCall.status === 'ended') && !incomingCall && (
+                <PostCallScreen
+                    onRejoin={handleRejoin}
+                    onReturnToHome={handleReturnHome}
                 />
             )}
         </>

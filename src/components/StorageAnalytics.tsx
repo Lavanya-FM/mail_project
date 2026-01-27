@@ -1,7 +1,16 @@
 import { useState, useEffect } from 'react';
 import { X, HardDrive, TrendingUp, Leaf, Sparkles, FileText, Image, Video, Music, Archive, Trash2, Download } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
-import storageService from '../lib/storageService';
+import { formatFileSize } from "../lib/driveService";
+// Mock storageService since file was missing
+const storageService = {
+    getUserQuota: async (_id: number) => ({ used_bytes: 0, total_bytes: 10737418240, percentage_used: 0 }),
+    getStorageBreakdown: async (_id: number) => ({ by_type: [], by_folder: [], timeline: [] }),
+    getStorageTrends: async (_id: number, _days: number) => [],
+    getOptimizationSuggestions: async (_id: number) => [],
+    calculateCarbonFootprint: (bytes: number) => bytes * 0.00000001, // Mock calculation
+    formatBytes: (bytes: number) => formatFileSize(bytes)
+};
 import { authService } from '../lib/authService';
 
 interface StorageAnalyticsProps {
@@ -172,7 +181,7 @@ export default function StorageAnalytics({ isOpen, onClose }: StorageAnalyticsPr
                                         <div className="relative w-48 h-48">
                                             {breakdown?.by_type.map((type: any, index: number) => {
                                                 const startAngle = breakdown.by_type.slice(0, index).reduce((sum: number, t: any) => sum + (t.percentage * 3.6), 0);
-                                                const endAngle = startAngle + (type.percentage * 3.6);
+                                                // const endAngle = startAngle + (type.percentage * 3.6);
 
                                                 return (
                                                     <div

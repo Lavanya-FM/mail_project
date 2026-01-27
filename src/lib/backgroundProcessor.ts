@@ -4,7 +4,6 @@ export class VideoBackgroundProcessor {
     private selfieSegmentation: SelfieSegmentation | null = null;
     private canvas: HTMLCanvasElement;
     private ctx: CanvasRenderingContext2D;
-    private activeStream: MediaStream | null = null;
     private processedStream: MediaStream | null = null;
     private videoElement: HTMLVideoElement;
     private mode: 'blur' | 'image' | 'none' = 'none';
@@ -40,29 +39,34 @@ export class VideoBackgroundProcessor {
         this.ctx.save();
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-        // Use segmentation mask to define person vs background
+        // 1. Draw the mask
         this.ctx.drawImage(results.segmentationMask, 0, 0, this.canvas.width, this.canvas.height);
 
-        // 1. Draw the background outside the mask
-        this.ctx.globalCompositeOperation = 'source-out';
+        // 2. Draw the person only where the mask is (source-in)
+        // This keeps the person but discards the original background from this layer
+        this.ctx.globalCompositeOperation = 'source-in';
+        this.ctx.drawImage(results.image, 0, 0, this.canvas.width, this.canvas.height);
+
+        // 3. Draw the background behind the person (destination-over)
+        this.ctx.globalCompositeOperation = 'destination-over';
+
         if (this.mode === 'blur') {
-            this.ctx.filter = 'blur(15px)';
+            this.ctx.filter = 'blur(20px)';
             this.ctx.drawImage(results.image, 0, 0, this.canvas.width, this.canvas.height);
             this.ctx.filter = 'none';
         } else if (this.mode === 'image' && this.backgroundImage) {
             this.ctx.drawImage(this.backgroundImage, 0, 0, this.canvas.width, this.canvas.height);
+        } else {
+            // Default background if none
+            this.ctx.fillStyle = '#202124';
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
         }
-
-        // 2. Draw the original frame (person) where mask is opaque
-        this.ctx.globalCompositeOperation = 'destination-over';
-        this.ctx.drawImage(results.image, 0, 0, this.canvas.width, this.canvas.height);
 
         this.ctx.restore();
     }
 
     async startProcessing(stream: MediaStream): Promise<MediaStream> {
         await this.init();
-        this.activeStream = stream;
         this.videoElement.srcObject = stream;
 
         await new Promise<void>((resolve) => {
@@ -99,7 +103,6 @@ export class VideoBackgroundProcessor {
             this.processedStream.getTracks().forEach(t => t.stop());
             this.processedStream = null;
         }
-        this.activeStream = null;
     }
 
     setMode(mode: 'blur' | 'image' | 'none', imageUrl?: string) {

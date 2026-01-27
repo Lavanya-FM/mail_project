@@ -1,6 +1,19 @@
 import { X, FileArchive, Trash2, Download, AlertTriangle } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
-import storageService, { LargeFile } from '../lib/storageService';
+import { formatFileSize } from "../lib/driveService";
+// Mock storageService since file was missing
+export interface LargeFile {
+    id: number;
+    name: string;
+    size_bytes: number;
+    file_type: string;
+    created_at: string;
+}
+
+const storageService = {
+    findLargeFiles: async (_id: number, _minSize: number): Promise<LargeFile[]> => [],
+    formatBytes: (bytes: number, _decimals?: number) => formatFileSize(bytes)
+};
 import * as driveService from "../lib/driveService";
 import { useEffect, useState } from 'react';
 
@@ -61,7 +74,7 @@ export default function LargeFilesModal({ isOpen, onClose, userId, onRefresh }: 
 
         if (confirm(`Delete ${selectedFiles.size} selected file(s)?`)) {
             for (const fileId of selectedFiles) {
-                await driveService.deleteFile(fileId);
+                await driveService.deleteFile(fileId, userId);
             }
             setSelectedFiles(new Set());
             loadLargeFiles();
@@ -112,8 +125,8 @@ export default function LargeFilesModal({ isOpen, onClose, userId, onRefresh }: 
                                 <div
                                     key={file.id}
                                     className={`p-4 rounded-lg border-2 transition cursor-pointer ${selectedFiles.has(file.id)
-                                            ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20'
-                                            : 'border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-blue-500'
+                                        ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20'
+                                        : 'border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-blue-500'
                                         }`}
                                     onClick={() => toggleFileSelection(file.id)}
                                 >

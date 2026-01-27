@@ -1,9 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { Send, User, X, Paperclip } from 'lucide-react';
+import { Send, X, Paperclip, File } from 'lucide-react';
 import { p2pService } from '../lib/p2pService';
-import { authService } from '../lib/authService';
-import { chatStorage } from '../lib/chatStorage';
-import LocalStoragePrompt from './LocalStoragePrompt';
+import { authService, getToken } from '../lib/authService';
 
 interface ChatInterfaceProps {
     peer: string;
@@ -16,51 +14,44 @@ interface Message {
     sender: string;
     timestamp: number;
     isSelf: boolean;
+    type: 'text' | 'file';
+    fileUrl?: string;
+    fileName?: string;
 }
 
 export default function ChatInterface({ peer, onClose }: ChatInterfaceProps) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
-    const [showStoragePrompt, setShowStoragePrompt] = useState(false);
+    const [isUploading, setIsUploading] = useState(false);
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const user = authService.getCurrentUser();
 
-    // Check storage preference on mount
-    useEffect(() => {
-        const pref = chatStorage.getPreference();
-        if (pref === null) {
-            setShowStoragePrompt(true);
-        }
-    }, []);
-
-    // Load messages from storage
+    // Load messages from DB
     useEffect(() => {
         if (!user?.email) return;
 
         const loadMessages = async () => {
             try {
-                // Try IndexedDB first
-                const dbMessages = await chatStorage.getMessages(peer);
+                const token = getToken();
+                const res = await fetch(`/api/chat/${peer}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
 
-                if (dbMessages && dbMessages.length > 0) {
-                    setMessages(dbMessages.map(m => ({
-                        id: m.id ? m.id.toString() : Math.random().toString(),
-                        text: m.content,
-                        sender: m.sender,
-                        timestamp: m.timestamp,
-                        isSelf: m.sender === user.email
+                if (res.ok) {
+                    const data = await res.json();
+                    // Map DB rows to Message interface
+                    setMessages(data.map((row: any) => ({
+                        id: row.id.toString(),
+                        text: row.content || '',
+                        sender: row.sender_email,
+                        timestamp: new Date(row.created_at).getTime(),
+                        isSelf: row.sender_email === user.email,
+                        type: row.type || 'text',
+                        fileUrl: row.file_url,
+                        fileName: row.file_name // Load from DB
                     })));
-                } else {
-                    // Fallback to localStorage (legacy support or if DB empty)
-                    // Only if DB preference is NOT disabled explicitly? 
-                    // Or maybe we migrate? For now, we load legacy if DB empty.
-                    const key = `chat_${user.email}_${peer}`;
-                    const stored = localStorage.getItem(key);
-                    if (stored) {
-                        setMessages(JSON.parse(stored));
-                    }
                 }
             } catch (err) {
                 console.error('Failed to load messages', err);
@@ -70,28 +61,25 @@ export default function ChatInterface({ peer, onClose }: ChatInterfaceProps) {
         loadMessages();
     }, [peer, user]);
 
-    // Handle P2P Incoming
+    // Handle P2P Incoming (Instant Updates)
     useEffect(() => {
-        const handleP2PMessage = async (e: any) => {
+        const handleP2PMessage = (e: any) => {
             const msg = e.detail;
             if (msg.type === 'secure-message' && msg.from === peer && msg.payload?.content) {
-                const newMessage = {
-                    id: Math.random().toString(),
+                // To avoid duplication, we could rely solely on DB, but P2P is faster.
+                // We'll append it. If we reload, DB will be source of truth.
+                const newMessage: Message = {
+                    id: 'temp-' + Math.random(),
                     text: msg.payload.content,
                     sender: msg.from,
                     timestamp: msg.payload.timestamp || Date.now(),
-                    isSelf: false
+                    isSelf: false,
+                    type: msg.payload.type || 'text',
+                    fileUrl: msg.payload.fileUrl,
+                    fileName: msg.payload.fileName
                 };
 
                 setMessages(prev => [...prev, newMessage]);
-
-                // Save to storage
-                await chatStorage.saveMessage({
-                    threadId: peer,
-                    sender: msg.from,
-                    content: msg.payload.content,
-                    timestamp: newMessage.timestamp
-                });
             }
         };
 
@@ -107,93 +95,146 @@ export default function ChatInterface({ peer, onClose }: ChatInterfaceProps) {
     }, [messages]);
 
     const handleSend = async () => {
-        if (!input.trim() || !user) return;
-        const text = input.trim();
+        if ((!input.trim()) || !user) return;
+
+        await sendMessage(input.trim(), 'text');
+        setInput('');
+    };
+
+    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files.length > 0) {
+            const file = e.target.files[0];
+            await sendMessage('', 'file', file);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+    };
+
+    const sendMessage = async (content: string, type: 'text' | 'file', file?: File) => {
+        if (!user) return;
 
         try {
-            p2pService.sendChat(peer, text);
+            setIsUploading(true);
+            const token = getToken();
 
-            const newMessage = {
-                id: Math.random().toString(),
-                text,
-                sender: user.email,
-                timestamp: Date.now(),
-                isSelf: true
-            };
+            // 1. Send to Backend (Persistence)
+            const formData = new FormData();
+            formData.append('receiver_email', peer);
+            formData.append('content', content);
+            formData.append('type', type);
+            if (file) {
+                formData.append('file', file);
+            }
 
-            setMessages(prev => [...prev, newMessage]);
-            setInput('');
-
-            // Save locally
-            await chatStorage.saveMessage({
-                threadId: peer,
-                sender: user.email,
-                content: text,
-                timestamp: newMessage.timestamp
+            const res = await fetch('/api/chat/send', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                    // No Content-Type for FormData, browser sets boundary
+                },
+                body: formData
             });
 
+            if (res.ok) {
+                const result = await res.json();
+                const savedMsg = result.message;
+
+                // 2. Update UI
+                const newMessage: Message = {
+                    id: savedMsg.id ? savedMsg.id.toString() : Math.random().toString(),
+                    text: savedMsg.content,
+                    sender: user.email,
+                    timestamp: new Date().getTime(),
+                    isSelf: true,
+                    type: savedMsg.type,
+                    fileUrl: savedMsg.file_url, // Use the URL returned by server
+                    fileName: savedMsg.file_name // Use server stored name
+                };
+
+                setMessages(prev => [...prev, newMessage]);
+
+                // 3. Send P2P Signal (Instant Notification)
+                // We send the file URL if it was an upload
+                p2pService.sendChat(peer, content || 'Sent a file', {
+                    type: savedMsg.type,
+                    fileUrl: savedMsg.file_url,
+                    fileName: savedMsg.file_name
+                });
+
+            } else {
+                console.error('Failed to save message');
+            }
+
         } catch (err) {
-            console.error('Failed to send chat', err);
+            console.error('Error sending message:', err);
+        } finally {
+            setIsUploading(false);
         }
     };
 
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleSend();
-        }
-    };
 
-    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files.length > 0) {
-            p2pService.sendFiles(peer, Array.from(e.target.files));
-            e.target.value = '';
-        }
-    };
 
     return (
-        <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-3xl shadow-xl overflow-hidden border border-gray-200 dark:border-slate-800 relative">
-            {/* Storage Prompt Modal */}
-            {showStoragePrompt && (
-                <LocalStoragePrompt
-                    onComplete={() => setShowStoragePrompt(false)}
-                    onClose={() => setShowStoragePrompt(false)}
-                />
-            )}
+        <div className="flex flex-col h-full bg-white rounded-xl shadow-2xl overflow-hidden border border-gray-200 relative animate-scale-up">
 
             {/* Header */}
-            <div className="p-4 bg-gray-50 dark:bg-slate-800 border-b border-gray-100 dark:border-slate-700 flex items-center justify-between">
+            <div className="p-4 bg-white border-b border-gray-100 flex items-center justify-between shadow-sm z-10">
                 <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center">
-                        <User className="text-blue-600 dark:text-blue-400" size={20} />
+                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold">
+                        {peer[0].toUpperCase()}
                     </div>
                     <div>
-                        <h3 className="font-semibold text-gray-900 dark:text-white">{peer}</h3>
-                        <p className="text-xs text-green-500 font-medium">Secured P2P Chat</p>
+                        <h3 className="font-bold text-gray-800">{peer}</h3>
+                        <p className="text-xs text-green-600 font-medium flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
+                            Online
+                        </p>
                     </div>
                 </div>
                 {onClose && (
-                    <button onClick={onClose} className="p-2 hover:bg-gray-200 dark:hover:bg-slate-700 rounded-lg transition">
-                        <X className="w-5 h-5 text-gray-500" />
+                    <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 hover:text-gray-600 transition">
+                        <X size={20} />
                     </button>
                 )}
             </div>
 
             {/* Messages */}
-            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50 dark:bg-slate-950/50">
+            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
                 {messages.length === 0 && (
-                    <div className="text-center py-10 text-gray-400 dark:text-gray-500 text-sm">
-                        No messages yet. Start something!
+                    <div className="flex flex-col items-center justify-center h-full text-gray-400 space-y-2">
+                        <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center">
+                            <Send size={24} className="opacity-20" />
+                        </div>
+                        <p className="text-sm">No messages yet. Say hello!</p>
                     </div>
                 )}
-                {messages.map(msg => (
-                    <div key={msg.id} className={`flex ${msg.isSelf ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[70%] rounded-2xl p-3 px-4 ${msg.isSelf
+
+                {messages.map((msg, index) => (
+                    <div key={msg.id || index} className={`flex ${msg.isSelf ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[75%] rounded-2xl p-3 px-4 shadow-sm ${msg.isSelf
                             ? 'bg-blue-600 text-white rounded-br-none'
-                            : 'bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 text-gray-800 dark:text-gray-200 rounded-bl-none'
+                            : 'bg-white border border-gray-100 text-gray-800 rounded-bl-none'
                             }`}>
-                            <p className="text-sm">{msg.text}</p>
-                            <p className={`text-[10px] mt-1 ${msg.isSelf ? 'text-blue-100' : 'text-gray-400'}`}>
+                            {msg.type === 'file' && (
+                                <div className="mb-2 bg-black/10 rounded-lg p-2 flex items-center gap-2">
+                                    <File size={16} />
+                                    <div className="flex flex-col">
+                                        <span className="text-xs font-bold truncate max-w-[150px]">{msg.fileName || 'Attachment'}</span>
+                                        <a
+                                            href={msg.fileUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            download={msg.fileName}
+                                            className="text-xs underline truncate max-w-[150px]"
+                                        >
+                                            Download
+                                        </a>
+                                    </div>
+                                </div>
+                            )}
+
+                            {msg.text && <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>}
+
+                            <p className={`text-[10px] mt-1.5 text-right ${msg.isSelf ? 'text-blue-100' : 'text-gray-400'}`}>
                                 {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </p>
                         </div>
@@ -201,38 +242,52 @@ export default function ChatInterface({ peer, onClose }: ChatInterfaceProps) {
                 ))}
             </div>
 
-            {/* Input */}
-            <div className="p-4 bg-white dark:bg-slate-900 border-t border-gray-100 dark:border-slate-800">
-                <div className="flex items-center gap-2">
+            {/* Input Area */}
+            <div className="p-3 bg-white border-t border-gray-100">
+                <div className="flex items-end gap-2 bg-gray-50 p-2 rounded-2xl border border-gray-200 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-100 transition-all">
                     <input
                         type="file"
                         ref={fileInputRef}
                         className="hidden"
                         onChange={handleFileSelect}
-                        multiple
                     />
                     <button
                         onClick={() => fileInputRef.current?.click()}
-                        className="p-3 text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-xl transition"
+                        disabled={isUploading}
+                        className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition h-10 w-10 flex items-center justify-center"
+                        title="Attach file"
                     >
                         <Paperclip size={20} />
                     </button>
-                    <input
-                        type="text"
+
+                    <textarea
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        placeholder="Type a secured message..."
-                        className="flex-1 bg-gray-100 dark:bg-slate-800 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-500/20 outline-none transition dark:text-white"
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSend();
+                            }
+                        }}
+                        placeholder="Type a message..."
+                        className="flex-1 bg-transparent border-none outline-none text-sm text-gray-800 placeholder-gray-400 resize-none py-2.5 max-h-32 min-h-[40px]"
+                        rows={1}
                     />
+
                     <button
                         onClick={handleSend}
-                        disabled={!input.trim()}
-                        className="p-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl transition shadow-lg shadow-blue-600/20"
+                        disabled={!input.trim() || isUploading}
+                        className={`p-2 rounded-xl transition h-10 w-10 flex items-center justify-center shadow-sm ${input.trim()
+                            ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                            : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                            }`}
                     >
-                        <Send size={20} />
+                        <Send size={18} className={input.trim() ? 'ml-0.5' : ''} />
                     </button>
                 </div>
+                {isUploading && (
+                    <div className="text-xs text-blue-500 text-center mt-2">Uploading file...</div>
+                )}
             </div>
         </div>
     );

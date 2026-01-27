@@ -97,7 +97,7 @@ export async function filesToBase64(files: File[]): Promise<Array<{
   content: string;
 }>> {
   const results = [];
-  
+
   for (const file of files) {
     const buffer = await file.arrayBuffer();
     const base64 = btoa(
@@ -106,7 +106,7 @@ export async function filesToBase64(files: File[]): Promise<Array<{
         ''
       )
     );
-    
+
     results.push({
       filename: file.name,
       mime_type: file.type,
@@ -114,7 +114,7 @@ export async function filesToBase64(files: File[]): Promise<Array<{
       content: base64
     });
   }
-  
+
   return results;
 }
 
@@ -198,77 +198,77 @@ export const emailService = {
     return { data: raw, status: r.status };
   },
 
-async getThread(
-  threadId: number | string,
-  userId: number | string
-): ApiResult<any[]> {
-  const url = apiUrl(`/api/email/thread/${threadId}?user_id=${userId}`);
+  async getThread(
+    threadId: number | string,
+    userId: number | string
+  ): ApiResult<any[]> {
+    const url = apiUrl(`/api/email/thread/${threadId}?user_id=${userId}`);
 
-  const resp = await fetch(url, {
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    credentials: "include",
-  });
+    const resp = await fetch(url, {
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      credentials: "include",
+    });
 
-  const r = await handleResp<any[]>(resp);
-  const raw = r.data || [];
+    const r = await handleResp<any[]>(resp);
+    const raw = r.data || [];
 
-  // Normalize recipients (CRITICAL)
-  raw.forEach((email: any) => {
-    email.to_emails = (email.to_emails || []).map((t: any) => ({
-      email: t.email || t,
-    }));
-    email.cc_emails = (email.cc_emails || []).map((t: any) => ({
-      email: t.email || t,
-    }));
-    email.bcc_emails = (email.bcc_emails || []).map((t: any) => ({
-      email: t.email || t,
-    }));
-  });
+    // Normalize recipients (CRITICAL)
+    raw.forEach((email: any) => {
+      email.to_emails = (email.to_emails || []).map((t: any) => ({
+        email: t.email || t,
+      }));
+      email.cc_emails = (email.cc_emails || []).map((t: any) => ({
+        email: t.email || t,
+      }));
+      email.bcc_emails = (email.bcc_emails || []).map((t: any) => ({
+        email: t.email || t,
+      }));
+    });
 
-  return { data: raw, status: r.status };
-},
+    return { data: raw, status: r.status };
+  },
 
   // -------------------------------------------------------------
   // CREATE EMAIL (FULL PATCH WITH ATTACHMENTS)
-async createEmail(payload: any): ApiResult<any> {
-  const url = apiUrl("/api/email/create");
+  async createEmail(payload: any): ApiResult<any> {
+    const url = apiUrl("/api/email/create");
 
-  const bodyClean = {
-    user_id: payload.user_id,
-    from_email: payload.from_email,
-    from_name: payload.from_name,
+    const bodyClean = {
+      user_id: payload.user_id,
+      from_email: payload.from_email,
+      from_name: payload.from_name,
 
-    subject: payload.subject || "(no subject)",
-    body: payload.body || "",
-    is_draft: !!payload.is_draft,
-    folder_id: payload.folder_id || null,
+      subject: payload.subject || "(no subject)",
+      body: payload.body || "",
+      is_draft: !!payload.is_draft,
+      folder_id: payload.folder_id || null,
 
-    in_reply_to: payload.in_reply_to || null,
+      in_reply_to: payload.in_reply_to || null,
 
-    to_emails: payload.to_emails || [],
-    cc_emails: payload.cc_emails || [],
-    bcc_emails: payload.bcc_emails || [],
+      to_emails: payload.to_emails || [],
+      cc_emails: payload.cc_emails || [],
+      bcc_emails: payload.bcc_emails || [],
 
-    // ✅ CRITICAL
-    attachments: payload.attachments || [],
-    p2p_enabled: false,
-    p2p_delivered: false,
-  };
+      // ✅ CRITICAL
+      attachments: payload.attachments || [],
+      p2p_enabled: false,
+      p2p_delivered: false,
+    };
 
-  console.log("EMAIL SERVICE FINAL PAYLOAD:", bodyClean);
+    console.log("EMAIL SERVICE FINAL PAYLOAD:", bodyClean);
 
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...authHeaders(),
-    },
-    credentials: "include",
-    body: JSON.stringify(bodyClean),
-  });
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(),
+      },
+      credentials: "include",
+      body: JSON.stringify(bodyClean),
+    });
 
-  return handleResp<any>(resp);
-},
+    return handleResp<any>(resp);
+  },
 
   // -------------------------------------------------------------
   // UPDATE EMAIL (read/star/folder)
@@ -345,23 +345,23 @@ async createEmail(payload: any): ApiResult<any> {
     return handleResp<any>(resp);
   },
 
-// call metrics for logged-in user (no userId needed)
-async getCarbonMetricsMe(mode?: 'realistic'|'medium'|'gamified') {
-  const qs = mode ? `?mode=${encodeURIComponent(mode)}` : '';
-  const url = apiUrl(`/api/carbon/metrics/me${qs}`);
-  const resp = await fetch(url, {
-    method: 'GET',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    credentials: 'include',
-  });
-  const parsed = await handleResp<any>(resp);
-  if (parsed.error) return { error: parsed.error, status: parsed.status };
-  return { data: parsed.data || parsed, status: parsed.status };
-},
+  // call metrics for logged-in user (no userId needed)
+  async getCarbonMetricsMe(mode?: 'realistic' | 'medium' | 'gamified') {
+    const qs = mode ? `?mode=${encodeURIComponent(mode)}` : '';
+    const url = apiUrl(`/api/carbon/metrics/me${qs}`);
+    const resp = await fetch(url, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      credentials: 'include',
+    });
+    const parsed = await handleResp<any>(resp);
+    if (parsed.error) return { error: parsed.error, status: parsed.status };
+    return { data: parsed.data || parsed, status: parsed.status };
+  },
 
   async submitCarbonCredits(payload: {
     userId: string,
-    mode?: 'realistic'|'medium'|'gamified',
+    mode?: 'realistic' | 'medium' | 'gamified',
     credits?: number,
     co2eSaved?: number,
     gamifiedPoints?: number,

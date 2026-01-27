@@ -4,9 +4,9 @@
  * Provides easy integration with compose components
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { draftService, CreateDraftParams, UpdateDraftParams } from './draftService';
-import { DraftData } from './draftStorage';
+import { useRef, useState, useCallback, useEffect } from 'react';
+import { draftService, CreateDraftParams } from '../lib/draftService';
+import { DraftData } from '../lib/draftStorage';
 
 interface UseDraftOptions {
     userId: number;
@@ -33,7 +33,7 @@ interface UseDraftReturn {
 }
 
 export function useDraft(options: UseDraftOptions): UseDraftReturn {
-    const { userId, userEmail, userName, threadId, autoSave = true, debounceMs = 2000 } = options;
+    const { userId, userEmail, userName, threadId, debounceMs = 2000 } = options;
 
     const [draftId, setDraftId] = useState<number | null>(null);
     const [version, setVersion] = useState<number>(1);

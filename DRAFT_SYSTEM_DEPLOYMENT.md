@@ -8,7 +8,7 @@
 **Changes Applied:**
 - ✅ Added `draft_version` column to `emails` table
 - ✅ Added `last_modified` column to `emails` table  
-- ✅ Added `original_message_id` column to `emails` table
+- ✅ Added `original_message_id` column to `emails` table 
 - ✅ Created `draft_sync_queue` table for offline sync
 - ✅ Created indexes for performance
 - ✅ Initialized existing drafts with version = 1

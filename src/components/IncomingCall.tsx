@@ -16,31 +16,41 @@ export default function IncomingCall({ caller, onAccept, onReject }: IncomingCal
     React.useEffect(() => {
         // Play ringtone
         const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        let oscillator: OscillatorNode;
-        let gain: GainNode;
         let timer: any;
 
-        const playBeep = () => {
+        const playBeep = (count: number) => {
             if (ctx.state === 'suspended') ctx.resume();
 
-            oscillator = ctx.createOscillator();
-            gain = ctx.createGain();
+            const now = ctx.currentTime;
 
-            oscillator.connect(gain);
-            gain.connect(ctx.destination);
+            // First tone
+            const osc1 = ctx.createOscillator();
+            const g1 = ctx.createGain();
+            osc1.connect(g1);
+            g1.connect(ctx.destination);
+            osc1.frequency.setValueAtTime(count % 2 === 0 ? 440 : 480, now);
+            g1.gain.setValueAtTime(0, now);
+            g1.gain.linearRampToValueAtTime(0.1, now + 0.1);
+            g1.gain.linearRampToValueAtTime(0, now + 0.4);
+            osc1.start(now);
+            osc1.stop(now + 0.5);
 
-            oscillator.frequency.setValueAtTime(880, ctx.currentTime);
-            oscillator.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.5);
-
-            gain.gain.setValueAtTime(0.1, ctx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
-
-            oscillator.start();
-            oscillator.stop(ctx.currentTime + 0.5);
+            // Second tone (harmonic)
+            const osc2 = ctx.createOscillator();
+            const g2 = ctx.createGain();
+            osc2.connect(g2);
+            g2.connect(ctx.destination);
+            osc2.frequency.setValueAtTime(count % 2 === 0 ? 880 : 960, now);
+            g2.gain.setValueAtTime(0, now);
+            g2.gain.linearRampToValueAtTime(0.05, now + 0.1);
+            g2.gain.linearRampToValueAtTime(0, now + 0.4);
+            osc2.start(now);
+            osc2.stop(now + 0.5);
         };
 
-        playBeep();
-        timer = setInterval(playBeep, 1000);
+        let count = 0;
+        playBeep(count++);
+        timer = setInterval(() => playBeep(count++), 1000);
 
         return () => {
             clearInterval(timer);

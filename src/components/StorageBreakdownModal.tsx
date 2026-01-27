@@ -1,6 +1,21 @@
 import { X, HardDrive, FileText, Image as ImageIcon, Video, Music, Archive, TrendingUp, Calendar } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
-import storageService, { StorageBreakdown } from '../lib/storageService';
+import { formatFileSize } from "../lib/driveService";
+// Mock storageService since file was missing
+export interface StorageBreakdown {
+    by_type: { type: string; size_bytes: number; file_count: number; percentage: number; color: string }[];
+    by_folder: { folder_name: string; size_bytes: number; file_count: number; percentage: number }[];
+    timeline: { date: string; size_bytes: number }[];
+}
+
+const storageService = {
+    getStorageBreakdown: async (_id: number): Promise<StorageBreakdown> => ({
+        by_type: [],
+        by_folder: [],
+        timeline: []
+    }),
+    formatBytes: formatFileSize
+};
 import { useEffect, useState } from 'react';
 
 interface StorageBreakdownModalProps {

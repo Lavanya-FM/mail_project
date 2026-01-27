@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Clock, File, Image, FileText, Music, Video, Archive, Star } from 'lucide-react';
-import { useTheme } from '../contexts/ThemeContext';
 import * as driveService from "../lib/driveService";
+import type { DriveFile } from "../lib/driveService";
 import { authService } from '../lib/authService';
 
 export default function RecentFilesView() {
-    const { theme } = useTheme();
     const user = authService.getCurrentUser();
     const [recentFiles, setRecentFiles] = useState<DriveFile[]>([]);
     const [loading, setLoading] = useState(true);
@@ -19,7 +18,8 @@ export default function RecentFilesView() {
     const loadRecentFiles = async () => {
         setLoading(true);
         try {
-            setRecentFiles([]);
+            const files = await driveService.getRecentFiles(user?.id || 1, 20);
+            setRecentFiles(files);
         } catch (error) {
             console.error('Error loading recent files:', error);
         } finally {
