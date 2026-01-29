@@ -8,7 +8,7 @@ import {
 import { useTheme } from '../contexts/ThemeContext';
 import * as driveService from "../lib/driveService";
 import { DriveFile, DriveFolder } from "../lib/driveService";
-import { formatFileSize } from "../lib/driveService";
+
 import { authService } from '../lib/authService';
 
 export interface StorageQuota {
@@ -26,11 +26,7 @@ export interface OptimizationSuggestion {
 }
 
 // Mock storageService since file was missing
-const storageService = {
-    getUserQuota: async (_id: number): Promise<StorageQuota> => ({ used_bytes: 0, quota_bytes: 10737418240, percentage_used: 0 }),
-    getOptimizationSuggestions: async (_id: number): Promise<OptimizationSuggestion[]> => [],
-    formatBytes: formatFileSize
-};
+
 import StorageBreakdownModal from './StorageBreakdownModal';
 import DuplicateFilesModal from './DuplicateFilesModal';
 import LargeFilesModal from './LargeFilesModal';
@@ -113,8 +109,8 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
             }
 
             const [quotaData, suggestionsData] = await Promise.all([
-                storageService.getUserQuota(userId),
-                storageService.getOptimizationSuggestions(userId)
+                driveService.getUserQuota(userId),
+                driveService.getOptimizationSuggestions(userId)
             ]);
 
             setQuota(quotaData);
@@ -279,7 +275,7 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                                 Storage
                             </span>
                             <span className="text-xs text-gray-500 dark:text-slate-400">
-                                {storageService.formatBytes(quota.used_bytes)} of {storageService.formatBytes(quota.quota_bytes)}
+                                {driveService.formatFileSize(quota.used_bytes)} of {driveService.formatFileSize(quota.quota_bytes)}
                             </span>
                         </div>
                         <div className="relative w-full h-2 bg-gray-100 dark:bg-slate-700 rounded-full overflow-hidden mb-4">
@@ -408,7 +404,7 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                                                     <h4 className="font-semibold text-gray-900 dark:text-white text-lg">{suggestion.title}</h4>
                                                     <p className="text-gray-500 dark:text-slate-400 text-sm mt-1">{suggestion.description}</p>
                                                     <p className="text-sm text-gray-500 dark:text-slate-400 mt-1">
-                                                        Potential savings: <span className="font-medium text-gray-900 dark:text-white">{storageService.formatBytes(suggestion.potential_savings)}</span>
+                                                        Potential savings: <span className="font-medium text-gray-900 dark:text-white">{driveService.formatFileSize(suggestion.potential_savings)}</span>
                                                     </p>
                                                 </div>
                                             </div>
