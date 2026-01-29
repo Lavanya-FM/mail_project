@@ -8,7 +8,7 @@ import { authService } from '../lib/authService';
 interface AttachFromDriveModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onAttach: (files: DriveFile[]) => void;
+    onAttach: (files: DriveFile[], shareAsLink: boolean) => void;
 }
 
 export default function AttachFromDriveModal({ isOpen, onClose, onAttach }: AttachFromDriveModalProps) {
@@ -22,18 +22,19 @@ export default function AttachFromDriveModal({ isOpen, onClose, onAttach }: Atta
     const [shareAsLink, setShareAsLink] = useState(true);
 
     useEffect(() => {
-        if (isOpen && user) {
+        if (isOpen && user?.id) {
             loadFiles();
         }
-    }, [isOpen, user, currentFolder]);
+    }, [isOpen, user?.id, currentFolder]);
 
     const loadFiles = async () => {
         setLoading(true);
         try {
             const userId = user?.id || 1;
-            const contents = await driveService.getFolderContents(currentFolder, userId);
-            setFiles(contents.files);
-            setFolders(contents.folders);
+            // Fetch ALL files (flat list) to ensure all are visible
+            const allFiles = await driveService.getRecentFiles(userId, 1000);
+            setFiles(allFiles);
+            setFolders([]);
         } catch (error) {
             console.error('Error loading files:', error);
         } finally {
@@ -53,7 +54,7 @@ export default function AttachFromDriveModal({ isOpen, onClose, onAttach }: Atta
 
     const handleAttach = () => {
         const filesToAttach = files.filter(f => selectedFiles.has(f.id));
-        onAttach(filesToAttach);
+        onAttach(filesToAttach, shareAsLink);
         setSelectedFiles(new Set());
         onClose?.();
     };
@@ -151,14 +152,20 @@ export default function AttachFromDriveModal({ isOpen, onClose, onAttach }: Atta
                                 return (
                                     <div
                                         key={`file-${file.id}`}
-                                        onClick={() => toggleFileSelection(file.id)}
-                                        className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition ${isSelected
-                                            ? 'bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500'
-                                            : 'bg-white dark:bg-slate-800 border-2 border-gray-200 dark:border-slate-700 hover:border-blue-500'
+                                        onClick={() => !file.is_missing && toggleFileSelection(file.id)}
+                                        className={`flex items-center gap-3 p-3 rounded-lg transition ${file.is_missing
+                                            ? 'opacity-60 grayscale cursor-not-allowed bg-gray-50 dark:bg-slate-800/50'
+                                            : isSelected
+                                                ? 'bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500'
+                                                : 'bg-white dark:bg-slate-800 border-2 border-gray-200 dark:border-slate-700 hover:border-blue-500'
                                             }`}
                                     >
                                         <div className="flex-shrink-0">
-                                            {isSelected ? (
+                                            {file.is_missing ? (
+                                                <div className="w-5 h-5 bg-gray-300 dark:bg-slate-600 rounded flex items-center justify-center">
+                                                    <X className="w-3 h-3 text-white" />
+                                                </div>
+                                            ) : isSelected ? (
                                                 <div className="w-5 h-5 bg-blue-600 rounded flex items-center justify-center">
                                                     <Check className="w-3 h-3 text-white" />
                                                 </div>
@@ -168,7 +175,14 @@ export default function AttachFromDriveModal({ isOpen, onClose, onAttach }: Atta
                                         </div>
                                         <File className="w-5 h-5" style={{ color: driveService.getFileColor(file.file_type) }} />
                                         <div className="flex-1">
-                                            <p className="font-medium text-gray-900 dark:text-white">{file.name}</p>
+                                            <div className="flex items-center gap-2">
+                                                <p className="font-medium text-gray-900 dark:text-white">{file.name}</p>
+                                                {file.is_missing && (
+                                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800">
+                                                        Missing
+                                                    </span>
+                                                )}
+                                            </div>
                                             <p className="text-xs text-gray-500 dark:text-slate-400">
                                                 {driveService.formatFileSize(file.size_bytes)}
                                             </p>
