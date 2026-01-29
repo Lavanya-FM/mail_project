@@ -28,6 +28,11 @@ app.use((req, res, next) => {
 // ROUTES
 // -------------------------
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Specific 404 for uploads to prevent SPA fallback
+app.use('/uploads', (req, res) => {
+  res.status(404).json({ error: 'File not found' });
+});
 app.use('/api', require('./mail'));
 app.use('/api', require('./draftController')); // Gmail-style draft management
 app.use('/api/drive', require('./drive'));
