@@ -54,9 +54,9 @@ router.post("/upload", upload.single("file"), async (req, res) => {
     fs.renameSync(oldPath, newPath);
 
     await db.query(
-      `INSERT INTO drive_files (user_id, filename, filepath, size, folder_id)
-       VALUES (?, ?, ?, ?, ?)`,
-      [userId, newFilename, newPath, req.file.size, folderId]
+      `INSERT INTO drive_files (user_id, name, filename, filepath, size, folder_id)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [userId, req.file.originalname, newFilename, newPath, req.file.size, folderId]
     );
 
     res.json({
@@ -91,7 +91,7 @@ router.get("/contents", async (req, res) => {
 
     // --- FILES ---
     let filesQuery = `
-      SELECT id, filename, filepath, size, is_starred, folder_id, created_at, user_id
+      SELECT id, name, filename, filepath, size, is_starred, folder_id, created_at, user_id
       FROM drive_files
       WHERE user_id = ?
       AND (is_deleted = 0 OR is_deleted IS NULL)
@@ -103,19 +103,23 @@ router.get("/contents", async (req, res) => {
 
     const [filesRaw] = await db.query(filesQuery, filesParams);
 
-    const files = filesRaw.map(f => ({
-      id: f.id,
-      name: f.filename,
-      filename: f.filename,
-      user_id: f.user_id || userId,
-      filepath: f.filepath,
-      size_bytes: f.size,
-      file_type: f.filename.split('.').pop(),
-      folder_id: f.folder_id,
-      is_starred: !!f.is_starred,
-      created_at: f.created_at,
-      updated_at: f.created_at
-    }));
+    const files = filesRaw.map(f => {
+      const exists = f.filepath && fs.existsSync(f.filepath);
+      return {
+        id: f.id,
+        name: f.name || f.filename,
+        filename: f.filename,
+        user_id: f.user_id || userId,
+        filepath: f.filepath,
+        size_bytes: f.size,
+        file_type: f.filename.split('.').pop(),
+        folder_id: f.folder_id,
+        is_starred: !!f.is_starred,
+        is_missing: !exists, // Check if file is physically present
+        created_at: f.created_at,
+        updated_at: f.created_at
+      };
+    });
 
     // --- FOLDERS ---
     let foldersQuery = `
