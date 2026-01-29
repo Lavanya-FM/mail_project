@@ -88,15 +88,15 @@ async function initTables() {
 initTables().catch(console.error);
 
 async function logActivity(userId, accessType, req) {
-    try {
-        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-        await db.query(
-            "INSERT INTO activity_log (user_id, access_type, ip, location) VALUES (?, ?, ?, ?)",
-            [userId, accessType, ip, 'Unknown']
-        );
-    } catch (err) {
-        console.error('Failed to log activity', err);
-    }
+  try {
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    await db.query(
+      "INSERT INTO activity_log (user_id, access_type, ip, location) VALUES (?, ?, ?, ?)",
+      [userId, accessType, ip, 'Unknown']
+    );
+  } catch (err) {
+    console.error('Failed to log activity', err);
+  }
 }
 
 // -------------------- AUTH ROUTES --------------------
@@ -868,22 +868,50 @@ router.get("/email/:emailId/attachment/:attachmentId", async (req, res) => {
 
     const [[row]] = await db.query(
       `
-      SELECT filename, mime_type, content_base64
+      SELECT filename, mime_type, content_base64, delivery_mode, p2p_message_id
       FROM email_attachments
       WHERE id = ?
         AND email_id = ?
-        AND email_id IN (
-          SELECT email_id
-          FROM email_mailbox
-          WHERE user_id = ?
+        AND (
+          /* Check if user has email in their mailbox (Sender/Receiver) */
+          email_id IN (
+            SELECT email_id FROM email_mailbox WHERE user_id = ?
+          )
+          OR
+          /* OR Check if user is the SENDER directly */
+          email_id IN (
+            SELECT e.id FROM emails e 
+            JOIN users u ON e.from_email = u.email 
+            WHERE u.id = ?
+          )
+          OR
+          /* OR Check if user is a RECIPIENT in email_recipients table */
+          email_id IN (
+            SELECT r.email_id FROM email_recipients r 
+            JOIN users u ON r.address = u.email 
+            WHERE u.id = ?
+          )
         )
       LIMIT 1
       `,
-      [attachmentId, emailId, userId]
+      [attachmentId, emailId, userId, userId, userId]
     );
 
-    if (!row || !row.content_base64) {
+    if (!row) {
       return res.status(404).json({ error: "Attachment not found" });
+    }
+
+    // Check if this is a P2P attachment without server-side content
+    if (row.delivery_mode === 'P2P' && !row.content_base64) {
+      return res.status(400).json({
+        error: "P2P file must be downloaded via peer-to-peer transfer",
+        is_p2p: true,
+        p2p_message_id: row.p2p_message_id
+      });
+    }
+
+    if (!row.content_base64) {
+      return res.status(404).json({ error: "Attachment content not found" });
     }
 
     const buffer = Buffer.from(row.content_base64, "base64");
@@ -1385,8 +1413,8 @@ router.post("/email/create", async (req, res) => {
       }
     }
 
-    // deliver to recipients inbox (for local users) - only if not P2P delivered
-    {
+    // deliver to recipients inbox (for local users) - only if not P2P delivered AND NOT DRAFT
+    if (!is_draft) {
       const all = [...new Set([...toList, ...ccList, ...bccList])];
       if (all.length) {
         const placeholders = all.map(() => "?").join(",");
@@ -1400,8 +1428,10 @@ router.post("/email/create", async (req, res) => {
             [rcp.id]
           );
           if (!inbox) continue;
+
+          // Use INSERT IGNORE to prevent duplicate entries
           await conn.query(
-            `INSERT INTO email_mailbox (user_id, email_id, mailbox_id, is_read)
+            `INSERT IGNORE INTO email_mailbox (user_id, email_id, mailbox_id, is_read)
              VALUES (?, ?, ?, 0)`,
             [rcp.id, emailId, inbox.id]
           );
@@ -1696,20 +1726,34 @@ router.get("/storage/quota", async (req, res) => {
       return res.status(400).json({ error: "user_id is required" });
     }
 
-    // Calculate used storage from drive_files
-    const [fileStats] = await db.query(
-      `SELECT 
-        COALESCE(SUM(size), 0) as used_bytes
-      FROM drive_files
-      WHERE user_id = ? 
-      AND (is_deleted = 0 OR is_deleted IS NULL)`,
-      [userId]
-    );
+    // Calculate used storage: Drive Files + Email Attachments
+    const [fileResult, emailResult] = await Promise.all([
+      db.query(
+        `SELECT COALESCE(SUM(size), 0) as used_bytes
+         FROM drive_files
+         WHERE user_id = ? 
+         AND (is_deleted = 0 OR is_deleted IS NULL)`,
+        [userId]
+      ),
+      db.query(
+        `SELECT COALESCE(SUM(size_bytes), 0) as used_bytes
+         FROM email_attachments
+         WHERE email_id IN (
+           SELECT email_id FROM email_mailbox WHERE user_id = ?
+         )
+         AND (delivery_mode != 'P2P' OR delivery_mode IS NULL)`,
+        [userId]
+      )
+    ]);
 
-    const usedBytes = Number(fileStats[0]?.used_bytes || 0);
+    const driveUsed = Number(fileResult[0][0]?.used_bytes || 0);
+    const emailUsed = Number(emailResult[0][0]?.used_bytes || 0);
+    const usedBytes = driveUsed + emailUsed;
 
-    // Set quota to 1 GB (1073741824 bytes)
-    const quotaBytes = 1073741824; // 1 GB
+    console.log(`STORAGE QUOTA [User ${userId}]: Drive=${driveUsed}, Email=${emailUsed}, Total=${usedBytes}`);
+
+    // Set quota to 25 GB
+    const quotaBytes = 26843545600; // 25 GB
     const bonusBytes = 0;
     const availableBytes = Math.max(0, quotaBytes - usedBytes);
     const percentageUsed = quotaBytes > 0 ? Math.round((usedBytes / quotaBytes) * 100) : 0;
@@ -1724,7 +1768,11 @@ router.get("/storage/quota", async (req, res) => {
     });
   } catch (err) {
     console.error("STORAGE QUOTA ERROR:", err);
-    return res.status(500).json({ error: "Failed to fetch storage quota" });
+    return res.status(500).json({
+      error: "Failed to fetch storage quota",
+      details: err.message,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
   }
 });
 
