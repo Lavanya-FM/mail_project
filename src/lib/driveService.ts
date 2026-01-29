@@ -27,6 +27,7 @@ export interface DriveFile {
     is_trashed: boolean;
     tags?: string[];
     previewUrl?: string;
+    is_missing?: boolean;
 }
 
 /* ===============================
@@ -287,4 +288,32 @@ export async function getTrash(userId: number) {
         console.error('driveService.getTrash ERROR', e);
         return { files: [] };
     }
+}
+
+/* ===============================
+   STORAGE ANALYTICS
+================================ */
+export async function getUserQuota(userId: number) {
+    const res = await fetch(`/api/storage/quota?user_id=${userId}`);
+    return res.json();
+}
+
+export async function getOptimizationSuggestions(userId: number) {
+    const res = await fetch(`/api/storage/suggestions?user_id=${userId}`);
+    return res.json();
+}
+
+export async function getStorageBreakdown(userId: number) {
+    const res = await fetch(`/api/storage/breakdown?user_id=${userId}`);
+    return res.json();
+}
+
+export async function getLargeFiles(userId: number) {
+    const res = await fetch(`/api/storage/large-files?user_id=${userId}`);
+    return res.json();
+}
+
+export async function getDuplicateFiles(userId: number) {
+    const res = await fetch(`/api/storage/duplicates?user_id=${userId}`);
+    return res.json();
 }
