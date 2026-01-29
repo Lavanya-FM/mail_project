@@ -39,7 +39,7 @@ async function handleResp<T>(resp: Response) {
   }
 }
 
-function authHeaders() {
+function authHeaders(): Record<string, string> {
   const token = localStorage.getItem("token");
 
   if (!token || token === "null" || token === "undefined") {
@@ -47,20 +47,6 @@ function authHeaders() {
   }
 
   return { Authorization: `Bearer ${token}` };
-}
-
-// -------------------------------------------------------------
-// NORMALIZE RECIPIENT LISTS
-// -------------------------------------------------------------
-function normalizeRecipientList(list: any): string[] {
-  if (!list) return [];
-  return (Array.isArray(list) ? list : [])
-    .map((x) =>
-      typeof x === "string"
-        ? x.trim().toLowerCase()
-        : (x?.email || x?.address || "").trim().toLowerCase()
-    )
-    .filter(Boolean);
 }
 
 // -------------------------------------------------------------
@@ -314,6 +300,22 @@ export const emailService = {
   // -------------------------------------------------------------
   async deleteEmail(email_id: number, user_id: number): ApiResult<any> {
     const url = apiUrl("/api/email/delete");
+
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      credentials: "include",
+      body: JSON.stringify({ email_id, user_id }),
+    });
+
+    return handleResp<any>(resp);
+  },
+
+  // -------------------------------------------------------------
+  // DELETE PERMANENTLY
+  // -------------------------------------------------------------
+  async deletePermanently(email_id: number, user_id: number): ApiResult<any> {
+    const url = apiUrl("/api/email/delete-permanent");
 
     const resp = await fetch(url, {
       method: "POST",
