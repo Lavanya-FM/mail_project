@@ -117,9 +117,36 @@ class CallService {
         // Listen for call events from P2P WebSocket
         if (typeof window !== 'undefined') {
             window.addEventListener('p2p-message', this.handleP2PMessage.bind(this));
+            // NEW: Listen for secure connection ready
+            window.addEventListener('p2p-connection-ready', this.handleConnectionReady.bind(this));
         }
 
         console.log('[CallService] Initialized');
+    }
+
+    /**
+     * Handle P2P connection ready
+     */
+    private handleConnectionReady(event: any) {
+        const { peer } = event.detail;
+        console.log(`[CallService] Secure connection ready with ${peer}`);
+
+        // FIX 3: Promote call to ACTIVE/CONNECTED state
+        // Find any call with this peer that is pending
+        const activeCall = Array.from(this.activeCalls.values()).find(c =>
+            (c.caller === peer || c.callee === peer) &&
+            (c.status === 'ringing' || c.status === 'connecting')
+        );
+
+        if (activeCall) {
+            console.log(`[CallService] Promoting call ${activeCall.callId} to CONNECTED`);
+            // Force status update
+            activeCall.status = 'connected';
+            activeCall.connectedAt = new Date();
+            this.notifyStateChange();
+        } else {
+            console.log(`[CallService] Connection ready for ${peer}, but no pending call found.`);
+        }
     }
 
     /**

@@ -23,18 +23,18 @@ interface P2PAttachmentListProps {
   mode: 'sender' | 'receiver';
 }
 
-export default function P2PAttachmentList({ 
-  attachments, 
-  senderEmail, 
+export default function P2PAttachmentList({
+  attachments,
+  senderEmail,
   emailId,
-  mode 
+  mode
 }: P2PAttachmentListProps) {
-  
+
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
   const [downloadStatus, setDownloadStatus] = useState<Record<string, 'idle' | 'downloading' | 'complete' | 'failed'>>({});
   const [previewFile, setPreviewFile] = useState<{ blob: Blob; name: string; mimeType: string } | null>(null);
   const [showPreview, setShowPreview] = useState(false);
-  
+
   // Track P2P delivery status for each file
   useEffect(() => {
     const handleProgress = (e: CustomEvent) => {
@@ -53,12 +53,24 @@ export default function P2PAttachmentList({
       setDownloadStatus(prev => ({ ...prev, [messageId]: 'failed' }));
     };
 
+    const handleReceiverProgress = (e: CustomEvent) => {
+      const { messageId, percentage, status } = e.detail;
+      setDownloadProgress(prev => ({ ...prev, [messageId]: percentage }));
+      if (status === 'RECEIVING' || status === 'downloading') {
+        setDownloadStatus(prev => ({ ...prev, [messageId]: 'downloading' }));
+      } else if (status === 'COMPLETED' || status === 'complete') {
+        setDownloadStatus(prev => ({ ...prev, [messageId]: 'complete' }));
+      }
+    };
+
     window.addEventListener('p2p-progress', handleProgress as EventListener);
+    window.addEventListener('p2p-receiver-progress', handleReceiverProgress as EventListener);
     window.addEventListener('p2p-delivered', handleDelivered as EventListener);
     window.addEventListener('p2p-error', handleError as EventListener);
 
     return () => {
       window.removeEventListener('p2p-progress', handleProgress as EventListener);
+      window.removeEventListener('p2p-receiver-progress', handleReceiverProgress as EventListener);
       window.removeEventListener('p2p-delivered', handleDelivered as EventListener);
       window.removeEventListener('p2p-error', handleError as EventListener);
     };
@@ -96,15 +108,15 @@ export default function P2PAttachmentList({
 
       // Check if file is already received
       const hasFile = await p2pService.hasReceivedFile(attachment.p2p_message_id);
-      
+
       if (hasFile) {
         // File is ready, download it
         await p2pService.downloadReceivedFile(attachment.p2p_message_id, attachment.filename);
-        
+
         // Record the download
         const userId = localStorage.getItem('userId') || 'unknown';
         enhancedP2PService.recordDownload(attachment.p2p_message_id, attachment.filename, userId);
-        
+
         setDownloadStatus(prev => ({ ...prev, [attachment.p2p_message_id]: 'complete' }));
         toast.success(`✓ Downloaded: ${attachment.filename}`);
       } else {
@@ -122,7 +134,7 @@ export default function P2PAttachmentList({
   const handlePreview = async (attachment: P2PAttachment) => {
     // Check if file is already received
     const hasFile = await p2pService.hasReceivedFile(attachment.p2p_message_id);
-    
+
     if (!hasFile) {
       toast.error('File not ready. Please wait for transfer to complete.');
       return;
@@ -131,7 +143,7 @@ export default function P2PAttachmentList({
     try {
       // Get file blob
       let blob: Blob | null = null;
-      
+
       // Try to get from memory first
       const db = await (p2pService as any).openDB();
       const tx = db.transaction('files', 'readonly');
@@ -171,7 +183,7 @@ export default function P2PAttachmentList({
     }
     const byteArray = new Uint8Array(byteNumbers);
     const blob = new Blob([byteArray], { type: mimeType });
-    
+
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -232,7 +244,7 @@ export default function P2PAttachmentList({
     if (status === 'downloading') return 'Downloading...';
     if (status === 'complete') return 'Downloaded';
     if (status === 'failed') return 'Download failed';
-    
+
     return 'Available via P2P';
   };
 
@@ -244,7 +256,7 @@ export default function P2PAttachmentList({
         <FileIcon className="w-4 h-4" />
         Attachments ({attachments.length})
       </h3>
-      
+
       <div className="space-y-2">
         {attachments.map((attachment, idx) => {
           const isP2P = attachment.is_p2p && !attachment.content_base64;
@@ -297,12 +309,12 @@ export default function P2PAttachmentList({
                       <Eye className="w-5 h-5 text-gray-600 dark:text-gray-400" />
                     </button>
                   )}
-                  
+
                   {/* Download button */}
                   {canDownload && (
                     <button
                       onClick={() => handleDownload(attachment)}
-                      disabled={status === 'downloading' || (attachment.is_p2p && attachment.p2p_message_id && enhancedP2PService.hasBeenDownloaded(attachment.p2p_message_id))}
+                      disabled={attachment.is_p2p && !!attachment.p2p_message_id && enhancedP2PService.hasBeenDownloaded(attachment.p2p_message_id)}
                       className="flex-shrink-0 p-2 hover:bg-gray-200 dark:hover:bg-slate-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       title={
                         attachment.is_p2p && attachment.p2p_message_id && enhancedP2PService.hasBeenDownloaded(attachment.p2p_message_id)
@@ -313,7 +325,7 @@ export default function P2PAttachmentList({
                       <Download className="w-5 h-5 text-gray-600 dark:text-gray-400" />
                     </button>
                   )}
-                  
+
                   {/* Single-download indicator */}
                   {attachment.is_p2p && attachment.p2p_message_id && enhancedP2PService.hasBeenDownloaded(attachment.p2p_message_id) && (
                     <span className="text-xs text-gray-500 dark:text-gray-400 px-2 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded">
@@ -332,7 +344,7 @@ export default function P2PAttachmentList({
         <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg flex items-start gap-2">
           <AlertCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
           <div className="text-xs text-blue-800 dark:text-blue-300">
-            <strong>P2P Transfer:</strong> Files will be downloaded directly from sender when you click download. 
+            <strong>P2P Transfer:</strong> Files will be downloaded directly from sender when you click download.
             Sender must be online for transfer to work.
           </div>
         </div>

@@ -21,7 +21,6 @@ import TermsOfServiceModal from './TermsOfServiceModal';
 import { animations } from '../utils/animations';
 import { Email, Folder } from '../types/email';
 import { normalizeEmailBody } from '../utils/email'; // <-- import added
-import { p2pService } from '../lib/p2pService';
 
 const iconMap: Record<string, typeof Inbox> = {
   inbox: Inbox,
@@ -52,15 +51,7 @@ const folderColors: Record<string, string> = {
 
 export default function MailLayout() {
   const profile = authService.getCurrentUser();
-  useEffect(() => {
-    if (!profile?.id || !profile?.email) return;
-
-    p2pService.connect(profile.id, profile.email);
-
-    return () => {
-      p2pService.disconnect?.();
-    };
-  }, [profile?.id]);
+  // P2P service is initialized in MainApp - no need to re-initialize here
 
   const signOut = () => {
     authService.logout();
@@ -628,10 +619,10 @@ export default function MailLayout() {
         <div className="mb-3">
           <div className="flex items-center justify-between text-xs text-gray-600 dark:text-slate-400 mb-2">
             <span>Storage Used</span>
-            <span>{((profile?.storage_used || 0) / (1024 * 1024)).toFixed(1)} MB / 1024 MB</span>
+            <span>{((profile?.storage_used_bytes || 0) / (1024 * 1024)).toFixed(1)} MB / 1024 MB</span>
           </div>
           <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-1.5">
-            <div className="bg-gradient-to-r from-blue-500 to-cyan-500 h-1.5 rounded-full transition-all duration-300" style={{ width: `${Math.min(((profile?.storage_used || 0) / (profile?.storage_limit || 1073741824)) * 100, 100)}%` }}></div>
+            <div className="bg-gradient-to-r from-blue-500 to-cyan-500 h-1.5 rounded-full transition-all duration-300" style={{ width: `${Math.min(((profile?.storage_used_bytes || 0) / (profile?.storage_limit_bytes || 1073741824)) * 100, 100)}%` }}></div>
           </div>
         </div>
       </div>

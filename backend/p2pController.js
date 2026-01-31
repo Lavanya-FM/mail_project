@@ -25,13 +25,14 @@ function assertNoFileContent(obj) {
 }
 
 function broadcastPresence() {
-  const online = getOnlinePeers().map(p => p.email);
+  const online = getOnlinePeers();
 
   broadcast({
     type: 'online-peers',
     data: online
   });
 }
+
 
 /* ---------------- REDIS ---------------- */
 
@@ -48,6 +49,12 @@ redisClient.connect()
   .catch(err => console.error('[P2P] Redis error', err));
 
 const TEMP_STORAGE_TTL = 3600;
+
+const P2P_POLICIES = {
+  MAX_FILE_SIZE_BYTES: 2 * 1024 * 1024 * 1024, // 2GB
+  MAX_TRANSFER_DURATION_MS: 48 * 3600 * 1024, // 48 Hours
+  QUOTA_PER_RECIPIENT: true // Industry-grade: count once per recipient on fallback
+};
 
 /* ---------------- STATE ---------------- */
 
@@ -122,13 +129,30 @@ function setupP2PWebSocket(server) {
 
           case 'chunk-ack':
           case 'key-exchange':
+          case 'key-exchange-init':
+          case 'key-exchange-ack':
           case 'resume-request':
           case 'signal':
+          case 'p2p-offer':
+          case 'p2p-revoke':
             // Forward these directly to recipient
             if (msg.to) {
-              forwardToRecipient(msg.to, msg);
+              const forwarded = forwardToRecipient(msg.to, msg);
+              if (!forwarded) {
+                // Notify sender that recipient is offline
+                ws.send(JSON.stringify({
+                  type: 'recipient-offline',
+                  recipient: msg.to,
+                  messageId: msg.messageId
+                }));
+              }
             }
             break;
+
+          case 'log-event':
+            await handleLogEvent(msg);
+            break;
+
 
           case 'transfer-complete':
             await handleTransferComplete(msg);
@@ -170,6 +194,40 @@ function setupP2PWebSocket(server) {
   }, 30000);
 
   console.log('[P2P] WebSocket initialized with Room support');
+}
+
+/* ---------------- AUDIT HELPERS ---------------- */
+
+async function logDeliveryEvent(attachmentId, p2pMessageId, sender, recipient, eventType, metadata = {}) {
+  try {
+    // 1. Immutable Log
+    await db.query(
+      `INSERT INTO p2p_delivery_logs (attachment_id, p2p_message_id, sender_email, recipient_email, event_type, event_metadata)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+      [attachmentId || 0, p2pMessageId, sender, recipient, eventType, JSON.stringify(metadata)]
+    );
+
+    // 2. State Update
+    let status = 'PENDING';
+    if (eventType === 'STARTED') status = 'TRANSFERRING';
+    if (eventType === 'COMPLETED') status = 'DELIVERED';
+    if (eventType === 'FAILED') status = 'FAILED';
+    if (eventType === 'FALLBACK_INITIATED') status = 'FALLBACK';
+
+    if (attachmentId) {
+      await db.query(
+        `UPDATE email_attachments SET delivery_status = ?, last_status_update = NOW() WHERE id = ?`,
+        [status, attachmentId]
+      );
+    } else if (p2pMessageId) {
+      await db.query(
+        `UPDATE email_attachments SET delivery_status = ?, last_status_update = NOW() WHERE p2p_message_id = ?`,
+        [status, p2pMessageId]
+      );
+    }
+  } catch (err) {
+    console.error('[P2P] Audit logging failed:', err);
+  }
 }
 
 /* ---------------- HANDLERS ---------------- */
@@ -227,8 +285,12 @@ async function handleRegister(ws, connectionId, msg, wss) {
       ws,
       userId,
       email,
+      p2pCapable: !!publicKey,
+      publicKey: publicKey, // Store it
       lastSeen: new Date()
     });
+
+
     broadcastPresence();
 
     // Save to database with public key
@@ -258,10 +320,15 @@ async function handleRegister(ws, connectionId, msg, wss) {
     broadcastToPeers(wss, {
       type: 'peer-online',
       from: email,
-      publicKey
+      publicKey,
+      p2pCapable: !!publicKey
     }, ws);
 
-    console.log(`[P2P] Registered: ${email} (user_id: ${userId})`);
+    console.log(`[P2P] Registered: ${email} (user_id: ${userId}, p2pCapable: ${!!publicKey})`);
+
+    // Check for pending transfers to this user and notify sender if online
+    await notifyPendingTransfers(email);
+
 
   } catch (error) {
     console.error('[P2P] Registration error:', error);
@@ -311,7 +378,13 @@ async function handleEmailInitiate(ws, msg) {
       data
     });
   }
+
+  await logDeliveryEvent(data.attachmentId, data.id, from, to, 'STARTED', {
+    filename: data.file.name,
+    size: data.file.size
+  });
 }
+
 
 async function handleFileChunk(ws, msg) {
   const { to, from, payload, messageId } = msg;
@@ -395,7 +468,27 @@ async function handleTransferComplete(msg) {
   if (keys.length > 0) {
     await redisClient.del(keys);
   }
+
+  // AUDIT LOG
+  await logDeliveryEvent(null, msg.messageId, msg.from, msg.to, 'COMPLETED');
+
+  // QUOTA ACCOUNTING
+  try {
+    const [meta] = await db.query('SELECT size_bytes, recipient_email FROM p2p_file_metadata WHERE message_id = ?', [msg.messageId]);
+    if (meta && meta[0]) {
+      // Industry-standard: Count once per recipient
+      await db.query('UPDATE users SET storage_used_bytes = storage_used_bytes + ? WHERE email = ?', [meta[0].size_bytes, meta[0].recipient_email]);
+    }
+  } catch (e) {
+    console.error('[P2P] Quota update failed:', e);
+  }
 }
+
+async function handleLogEvent(msg) {
+  const { messageId, eventType, metadata, from, to } = msg;
+  await logDeliveryEvent(null, messageId, from, to, eventType, metadata);
+}
+
 
 async function handleDisconnect(connectionId, wss) {
   const peer = peerConnections.get(connectionId);
@@ -440,13 +533,14 @@ async function handleDisconnect(connectionId, wss) {
 
   await db.query(
     `UPDATE email_attachments
-   SET delivered = 0
-   WHERE message_id IN (
+   SET delivered = 0, delivery_status = 'FAILED'
+   WHERE p2p_message_id IN (
      SELECT message_id
      FROM p2p_file_metadata
      WHERE status = 'failed'
    )`
   );
+
 
   broadcastToPeers(wss, {
     type: 'peer-offline',
@@ -556,11 +650,15 @@ function sendToPeer(email, msg) {
 }
 
 function forwardToRecipient(recipientEmail, message) {
+  let forwarded = false;
+  const target = recipientEmail ? recipientEmail.toLowerCase() : '';
   for (const peer of peerConnections.values()) {
-    if (peer.email === recipientEmail && peer.ws.readyState === WebSocket.OPEN) {
+    if (peer.email.toLowerCase() === target && peer.ws.readyState === WebSocket.OPEN) {
       peer.ws.send(JSON.stringify(message));
+      forwarded = true;
     }
   }
+  return forwarded;
 }
 
 function broadcast(msg, exceptWs = null) {
@@ -580,8 +678,10 @@ function broadcastToPeers(wss, message, excludeWs) {
 }
 
 function findPeerByEmail(email) {
+  if (!email) return null;
+  const searchEmail = email.toLowerCase();
   for (const peer of peerConnections.values()) {
-    if (peer.email === email) return peer;
+    if (peer.email.toLowerCase() === searchEmail) return peer;
   }
   return null;
 }
@@ -590,12 +690,52 @@ function isPeerOnline(email) {
   return !!findPeerByEmail(email);
 }
 
+async function notifyPendingTransfers(recipientEmail) {
+  try {
+    const [pending] = await db.query(
+      "SELECT sender_email, message_id FROM p2p_file_metadata WHERE recipient_email = ? AND status IN ('initiated', 'transferring')",
+      [recipientEmail]
+    );
+
+    // Also check for pending P2P email attachments
+    const [pendingEmails] = await db.query(
+      `SELECT e.from_email as sender_email, a.p2p_message_id as message_id
+       FROM email_attachments a
+       JOIN emails e ON a.email_id = e.id
+       JOIN email_recipients r ON e.id = r.email_id
+       WHERE r.address = ? 
+         AND a.delivery_mode = 'P2P' 
+         AND a.delivered = 0`,
+      [recipientEmail]
+    );
+
+    const allPending = [...pending, ...pendingEmails];
+
+    for (const row of allPending) {
+      const sender = findPeerByEmail(row.sender_email);
+      if (sender) {
+        sender.ws.send(JSON.stringify({
+          type: 'recipient-available',
+          recipient: recipientEmail,
+          messageId: row.message_id
+        }));
+      }
+    }
+  } catch (err) {
+    console.error('[P2P] Failed to notify pending transfers:', err);
+  }
+}
+
 function getOnlinePeers() {
   return [...peerConnections.values()].map(p => ({
     email: p.email,
-    userId: p.userId
+    userId: p.userId,
+    p2pCapable: p.p2pCapable,
+    publicKey: p.publicKey // Store raw public key bytes if needed, or already JSON string
   }));
 }
+
+
 
 /* ---------------- EXPORT ---------------- */
 

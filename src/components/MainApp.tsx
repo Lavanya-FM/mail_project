@@ -4,6 +4,7 @@ import MailLayout from './MailLayout';
 import JeeDrive from './JeeDrive';
 import CallManager from './CallManager';
 import CallsView from './CallsView';
+import P2PTransferManager from './P2PTransferManager';
 
 type View = 'mail' | 'drive' | 'calls';
 
@@ -54,6 +55,7 @@ export default function MainApp() {
     return (
         <div className="h-screen flex flex-col">
             <CallManager />
+            <P2PTransferManager />
             {/* Top Navigation Bar */}
             <div className="bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 px-4 py-3 flex items-center justify-between shadow-sm">
                 <div className="flex items-center gap-2">

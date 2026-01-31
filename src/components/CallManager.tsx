@@ -119,7 +119,7 @@ export default function CallManager() {
     };
 
     useEffect(() => {
-        console.log('[CallManager] Debug:', { user, activeCall, incomingCall });
+        // console.log('[CallManager] Debug:', { user, activeCall, incomingCall });
     }, [user, activeCall, incomingCall]);
 
     // Dismiss notification when call accepted or ended

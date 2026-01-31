@@ -1,0 +1,36 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "AckResumeMessage",
+    "description": "Message for acknowledging received chunks or requesting missing ones to resume transfer.",
+    "type": "object",
+    "properties": {
+        "message_id": {
+            "type": "string"
+        },
+        "attachment_id": {
+            "type": "string"
+        },
+        "received_chunks": {
+            "type": "array",
+            "items": {
+                "type": "integer",
+                "minimum": 0
+            },
+            "description": "List of chunk indices successfully received"
+        },
+        "missing_chunks": {
+            "type": "array",
+            "items": {
+                "type": "integer",
+                "minimum": 0
+            },
+            "description": "List of chunk indices still needed"
+        }
+    },
+    "required": [
+        "message_id",
+        "attachment_id",
+        "received_chunks",
+        "missing_chunks"
+    ]
+}

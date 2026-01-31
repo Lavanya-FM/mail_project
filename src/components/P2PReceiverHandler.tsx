@@ -1,12 +1,10 @@
 import { useState, useEffect } from 'react';
 import P2PTransferProgress from './P2PTransferProgress';
 import { p2pToast } from '../utils/p2pToasts';
+import { p2pService } from '../lib/p2pService';
 import toast from 'react-hot-toast';
 
-interface P2PReceiverHandlerProps {
-  userId: string;
-  userEmail: string;
-}
+
 
 interface IncomingTransfer {
   messageId: string;
@@ -19,44 +17,47 @@ interface IncomingTransfer {
     progress: number;
     status: 'pending' | 'sending' | 'delivered' | 'failed';
     encryptedData?: string;
+    messageId?: string;
   }>;
 }
 
-export default function P2PReceiverHandler({ userId, userEmail }: P2PReceiverHandlerProps) {
+export default function P2PReceiverHandler() {
   const [incomingTransfer, setIncomingTransfer] = useState<IncomingTransfer | null>(null);
   const [showProgress, setShowProgress] = useState(false);
 
   useEffect(() => {
     // Listen for incoming P2P transfers
     const handleIncomingTransfer = (e: CustomEvent) => {
-      const { messageId, senderEmail, subject, body, files } = e.detail;
-      
-      console.log('[P2P Receiver] Incoming transfer from:', senderEmail);
-      
+      // Adapted to match p2pService emission: { messageId, from, fileName, size }
+      const { messageId, from, fileName, size } = e.detail;
+
+      console.log('[P2P Receiver] Incoming transfer from:', from);
+
       setIncomingTransfer({
         messageId,
-        senderEmail,
-        subject,
-        body,
-        files: files.map((f: any) => ({
-          name: f.name,
-          size: f.size,
+        senderEmail: from,
+        subject: 'File Transfer',
+        body: '',
+        files: [{
+          name: fileName,
+          size: size,
           progress: 0,
-          status: 'pending'
-        }))
+          status: 'pending',
+          messageId: messageId // Important: Store messageId in file object for matching
+        } as any]
       });
-      
+
       setShowProgress(true);
-      p2pToast.receiving(`files from ${senderEmail}`);
+      p2pToast.receiving(`file from ${from}`);
     };
 
     // Listen for file progress updates
     const handleFileProgress = (e: CustomEvent) => {
       const { fileName, progress } = e.detail;
-      
+
       setIncomingTransfer(prev => {
         if (!prev) return prev;
-        
+
         return {
           ...prev,
           files: prev.files.map(f =>
@@ -70,16 +71,16 @@ export default function P2PReceiverHandler({ userId, userEmail }: P2PReceiverHan
 
     // Listen for file completion
     const handleFileReceived = (e: CustomEvent) => {
-      const { messageId, fileName } = e.detail;
-      
+      const { fileName } = e.detail;
+
       console.log('[P2P Receiver] File received:', fileName);
-      
+
       // Show toast notification
       p2pToast.delivered(fileName);
-      
+
       setIncomingTransfer(prev => {
         if (!prev) return prev;
-        
+
         return {
           ...prev,
           files: prev.files.map(f =>
@@ -90,25 +91,25 @@ export default function P2PReceiverHandler({ userId, userEmail }: P2PReceiverHan
         };
       });
     };
-    
+
     // Listen for receiver progress updates
     const handleReceiverProgress = (e: CustomEvent) => {
       const { messageId, percentage, fileName, etaSeconds, speedBps } = e.detail;
-      
+
       setIncomingTransfer(prev => {
         if (!prev) return prev;
-        
+
         return {
           ...prev,
           files: prev.files.map(f =>
             f.name === fileName || f.messageId === messageId
-              ? { 
-                  ...f, 
-                  progress: percentage, 
-                  status: percentage >= 100 ? 'delivered' as const : 'sending' as const,
-                  etaSeconds,
-                  speedBps
-                }
+              ? {
+                ...f,
+                progress: percentage,
+                status: percentage >= 100 ? 'delivered' as const : 'sending' as const,
+                etaSeconds,
+                speedBps
+              }
               : f
           )
         };
@@ -116,32 +117,35 @@ export default function P2PReceiverHandler({ userId, userEmail }: P2PReceiverHan
     };
 
     // Listen for transfer completion
-    const handleTransferComplete = (e: CustomEvent) => {
+    const handleTransferComplete = () => {
       console.log('[P2P Receiver] All files received!');
       toast.success('✓ All files received successfully!');
     };
 
     // Listen for download requests
-    const handleDownloadFile = async (e: CustomEvent) => {
-      const { fileName } = e.detail;
-      
-      if (!incomingTransfer) return;
-      
-      const file = incomingTransfer.files.find(f => f.name === fileName);
-      if (!file || !file.encryptedData) {
-        toast.error('File not found or not ready');
-        return;
-      }
+    const handleDownloadFile = async (e: Event) => {
+      const { fileName, messageId } = (e as CustomEvent).detail;
+
+      console.log('[P2P Receiver] Download requested for:', fileName, messageId);
 
       try {
-        // Decrypt the file data
-        console.log('[P2P Receiver] Decrypting and downloading:', fileName);
-        
-        // In real implementation, decrypt using session key
-        const decryptedData = atob(file.encryptedData); // Simplified - should use proper decryption
-        
-        // Create blob and download
-        const blob = new Blob([decryptedData], { type: 'application/octet-stream' });
+        // 1. Try Memory (Fastest)
+        let blob = p2pService.getDownloadedFile?.(messageId);
+
+        // 2. Try Storage (Persistence)
+        if (!blob) {
+          const stored = await import('../lib/p2pStorage').then(m => m.getFile(messageId));
+          if (stored && stored.blob) {
+            blob = stored.blob;
+          }
+        }
+
+        if (!blob) {
+          toast.error('File pending assembly or not found. Please wait.');
+          return;
+        }
+
+        // 3. Trigger Download
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -150,15 +154,16 @@ export default function P2PReceiverHandler({ userId, userEmail }: P2PReceiverHan
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        
-        toast.success(`✓ ${fileName} downloaded securely`);
+
+        toast.success(`✓ ${fileName} saved to device`);
+
       } catch (error) {
         console.error('[P2P Receiver] Download failed:', error);
         toast.error('Failed to download file');
       }
     };
 
-    window.addEventListener('p2p-incoming-transfer', handleIncomingTransfer as EventListener);
+    window.addEventListener('p2p-incoming-file', handleIncomingTransfer as EventListener);
     window.addEventListener('p2p-file-progress', handleFileProgress as EventListener);
     window.addEventListener('p2p-file-received', handleFileReceived as EventListener);
     window.addEventListener('p2p-transfer-complete', handleTransferComplete as EventListener);
@@ -167,7 +172,7 @@ export default function P2PReceiverHandler({ userId, userEmail }: P2PReceiverHan
     window.addEventListener('p2p-receiver-progress', handleReceiverProgress as EventListener);
 
     return () => {
-      window.removeEventListener('p2p-incoming-transfer', handleIncomingTransfer as EventListener);
+      window.removeEventListener('p2p-incoming-file', handleIncomingTransfer as EventListener);
       window.removeEventListener('p2p-file-progress', handleFileProgress as EventListener);
       window.removeEventListener('p2p-file-received', handleFileReceived as EventListener);
       window.removeEventListener('p2p-transfer-complete', handleTransferComplete as EventListener);
@@ -175,7 +180,7 @@ export default function P2PReceiverHandler({ userId, userEmail }: P2PReceiverHan
       window.removeEventListener('p2p-file-ready', handleFileReceived as EventListener);
       window.removeEventListener('p2p-receiver-progress', handleReceiverProgress as EventListener);
     };
-  }, [incomingTransfer]);
+  }, []);
 
   if (!incomingTransfer) return null;
 

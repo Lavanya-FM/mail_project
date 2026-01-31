@@ -1,5 +1,5 @@
 // src/components/EmailList.tsx
-import { Star, Paperclip, Circle, Inbox, Tag, Users, Check, CheckCheck, Share2 } from 'lucide-react';
+import { Paperclip, Inbox, Tag, Users, Share2 } from 'lucide-react';
 import { Email } from '../types/email';
 import { useState, useEffect } from 'react';
 
@@ -112,9 +112,17 @@ export default function EmailList({
       .slice(0, 2);
   };
 
+  const getSenderName = (name?: string, email?: string) => {
+    const safeEmail = email || "";
+    // If name exists and doesn't look like an email, use it
+    if (name && !name.includes('@')) return name;
+    // Otherwise extract username from email
+    return safeEmail.split('@')[0];
+  };
+
   // Thread grouping
   const groupEmailsByThread = (emails: Email[]) => {
-    const map: Record<number, Email[]> = {};
+    const map: Record<string | number, Email[]> = {};
     for (const email of emails) {
       const threadId = email.thread_id || email.id;
       if (!map[threadId]) map[threadId] = [];
@@ -124,8 +132,8 @@ export default function EmailList({
     for (const t in map) {
       map[t].sort(
         (a, b) =>
-          new Date(b.created_at).getTime() -
-          new Date(a.created_at).getTime()
+          new Date(b.created_at || "").getTime() -
+          new Date(a.created_at || "").getTime()
       );
     }
 
@@ -143,8 +151,8 @@ export default function EmailList({
     }))
     .sort(
       (a, b) =>
-        new Date(b.latestEmail.created_at).getTime() -
-        new Date(a.latestEmail.created_at).getTime()
+        new Date(b.latestEmail.created_at || "").getTime() -
+        new Date(a.latestEmail.created_at || "").getTime()
     );
 
   return (
@@ -155,11 +163,10 @@ export default function EmailList({
         <div className="flex">
           <button
             onClick={() => setActiveTab("primary")}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3.5 text-sm font-medium transition-all ${
-              activeTab === "primary"
-                ? "text-blue-600 dark:text-blue-500 border-b-2 border-blue-600 dark:border-blue-500 bg-blue-50/50 dark:bg-blue-900/10"
-                : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
-            }`}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3.5 text-sm font-medium transition-all ${activeTab === "primary"
+              ? "text-blue-600 dark:text-blue-500 border-b-2 border-blue-600 dark:border-blue-500 bg-blue-50/50 dark:bg-blue-900/10"
+              : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
+              }`}
           >
             <Inbox className="w-4 h-4" />
             <span>Primary</span>
@@ -167,11 +174,10 @@ export default function EmailList({
 
           <button
             onClick={() => setActiveTab("social")}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3.5 text-sm font-medium transition-all ${
-              activeTab === "social"
-                ? "text-blue-600 dark:text-blue-500 border-b-2 border-blue-600 dark:border-blue-500 bg-blue-50/50 dark:bg-blue-900/10"
-                : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
-            }`}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3.5 text-sm font-medium transition-all ${activeTab === "social"
+              ? "text-blue-600 dark:text-blue-500 border-b-2 border-blue-600 dark:border-blue-500 bg-blue-50/50 dark:bg-blue-900/10"
+              : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
+              }`}
           >
             <Users className="w-4 h-4" />
             <span>Social</span>
@@ -179,11 +185,10 @@ export default function EmailList({
 
           <button
             onClick={() => setActiveTab("promotions")}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3.5 text-sm font-medium transition-all ${
-              activeTab === "promotions"
-                ? "text-blue-600 dark:text-blue-500 border-b-2 border-blue-600 dark:border-blue-500 bg-blue-50/50 dark:bg-blue-900/10"
-                : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
-            }`}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3.5 text-sm font-medium transition-all ${activeTab === "promotions"
+              ? "text-blue-600 dark:text-blue-500 border-b-2 border-blue-600 dark:border-blue-500 bg-blue-50/50 dark:bg-blue-900/10"
+              : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
+              }`}
           >
             <Tag className="w-4 h-4" />
             <span>Promotions</span>
@@ -210,9 +215,9 @@ export default function EmailList({
                 ({ threadId, latestEmail, unreadCount, allEmails }) => {
                   const isSelected = selectedEmail?.id === latestEmail.id;
                   const hasAttachments = allEmails.some(
-                     e => e.has_attachments === true || (e.attachment_count ?? 0) > 0
+                    e => e.has_attachments === true || (e.attachment_count ?? 0) > 0
                   );
-                  
+
                   // Check for P2P emails - both email-level and attachment-level
                   const isP2PEmail = allEmails.some(e => (e as any).p2p_enabled || (e as any).p2p_delivered);
                   const p2pAttachments = allEmails.reduce((count, e) => {
@@ -223,29 +228,27 @@ export default function EmailList({
                   }, 0);
                   const hasP2P = isP2PEmail || p2pAttachments > 0;
 
-const normalize = (value: any): string => {
-  if (value === null || value === undefined) return "";
-  const s = String(value).trim().replace(/\r/g, "");
-  if (s === "") return "";
-  if (/^0+$/.test(s)) return "";     // handles "0", "00", "0\n", " 0 "
-  return s;
-};
+                  const normalize = (value: any): string => {
+                    if (value === null || value === undefined) return "";
+                    const s = String(value).trim().replace(/\r/g, "");
+                    if (s === "") return "";
+                    if (/^0+$/.test(s)) return "";     // handles "0", "00", "0\n", " 0 "
+                    return s;
+                  };
 
-const cleanBody = stripHtmlTags(normalize(latestEmail.body));
+                  const cleanBody = stripHtmlTags(normalize(latestEmail.body));
 
                   return (
                     <button
                       key={threadId}
                       onClick={() => onSelectEmail(latestEmail)}
-                      className={`w-full text-left px-4 py-3.5 transition-all border-b border-gray-100 dark:border-gray-800 ${
-                        isSelected
-                          ? "bg-blue-50 dark:bg-blue-900/20 border-l-4 border-l-blue-600 dark:border-l-blue-500"
-                          : "hover:bg-gray-50 dark:hover:bg-gray-800/50 border-l-4 border-l-transparent"
-                      } ${
-                        unreadCount > 0
+                      className={`w-full text-left px-4 py-3.5 transition-all border-b border-gray-100 dark:border-gray-800 ${isSelected
+                        ? "bg-blue-50 dark:bg-blue-900/20 border-l-4 border-l-blue-600 dark:border-l-blue-500"
+                        : "hover:bg-gray-50 dark:hover:bg-gray-800/50 border-l-4 border-l-transparent"
+                        } ${unreadCount > 0
                           ? "bg-white dark:bg-gray-900"
                           : "bg-gray-50/30 dark:bg-gray-900/50"
-                      }`}
+                        }`}
                     >
                       <div className="flex items-start gap-3">
 
@@ -254,7 +257,7 @@ const cleanBody = stripHtmlTags(normalize(latestEmail.body));
                           <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 dark:from-blue-600 dark:to-indigo-700 flex items-center justify-center text-white text-sm font-semibold shadow-sm">
                             {getInitials(
                               latestEmail.from_name ||
-                                latestEmail.from_email
+                              latestEmail.from_email
                             )}
                           </div>
                         </div>
@@ -263,64 +266,60 @@ const cleanBody = stripHtmlTags(normalize(latestEmail.body));
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between gap-2 mb-0.5">
                             <span
-                              className={`text-sm truncate ${
-                                unreadCount > 0
-                                  ? "font-semibold text-gray-900 dark:text-white"
-                                  : "font-normal text-gray-700 dark:text-gray-300"
-                              }`}
+                              className={`text-sm truncate ${unreadCount > 0
+                                ? "font-semibold text-gray-900 dark:text-white"
+                                : "font-normal text-gray-700 dark:text-gray-300"
+                                }`}
                             >
-                              {latestEmail.from_name ||
-                                latestEmail.from_email}
+                              {getSenderName(latestEmail.from_name, latestEmail.from_email)}
                             </span>
 
                             {/* Date */}
-                            <span className={`text-xs flex-shrink-0 ${
-                              unreadCount > 0 
-                                ? "text-gray-700 dark:text-gray-300 font-medium" 
-                                : "text-gray-500 dark:text-gray-400"
-                            }`}>
+                            <span className={`text-xs flex-shrink-0 ${unreadCount > 0
+                              ? "text-gray-700 dark:text-gray-300 font-medium"
+                              : "text-gray-500 dark:text-gray-400"
+                              }`}>
                               {formatDate(
                                 latestEmail.sent_at ||
-                                  latestEmail.created_at ||
-                                  ""
+                                latestEmail.created_at ||
+                                ""
                               )}
                             </span>
                           </div>
 
-<div className="flex items-center gap-2 mb-1">
-  <h3
-    className={`text-sm truncate flex-1 ${
-      unreadCount > 0
-        ? "font-semibold text-gray-900 dark:text-white"
-        : "font-normal text-gray-700 dark:text-gray-300"
-    }`}
-  >
-    {latestEmail.subject || "(No subject)"}
-  </h3>
+                          <div className="flex items-center gap-2 mb-1">
+                            <h3
+                              className={`text-sm truncate flex-1 ${unreadCount > 0
+                                ? "font-semibold text-gray-900 dark:text-white"
+                                : "font-normal text-gray-700 dark:text-gray-300"
+                                }`}
+                            >
+                              {latestEmail.subject || "(No subject)"}
+                            </h3>
 
-  {/* 📎 Attachment Indicator — Gmail style */}
-  {hasAttachments && (
-    <Paperclip className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-  )}
+                            {/* 📎 Attachment Indicator — Gmail style */}
+                            {hasAttachments && (
+                              <Paperclip className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                            )}
 
-  {/* P2P Secure Badge - Clear differentiation from regular mail */}
-  {hasP2P && (
-    <div className="flex items-center gap-1 px-2 py-0.5 bg-emerald-500 text-white rounded-full text-[10px] font-bold flex-shrink-0 shadow-sm">
-      <Share2 className="w-3 h-3" />
-      <span>P2P</span>
-      {p2pAttachments > 1 && (
-        <span className="ml-0.5 bg-white/20 px-1 rounded">{p2pAttachments}</span>
-      )}
-    </div>
-  )}
+                            {/* P2P Secure Badge - Clear differentiation from regular mail */}
+                            {hasP2P && (
+                              <div className="flex items-center gap-1 px-2 py-0.5 bg-emerald-500 text-white rounded-full text-[10px] font-bold flex-shrink-0 shadow-sm">
+                                <Share2 className="w-3 h-3" />
+                                <span>P2P</span>
+                                {p2pAttachments > 1 && (
+                                  <span className="ml-0.5 bg-white/20 px-1 rounded">{p2pAttachments}</span>
+                                )}
+                              </div>
+                            )}
 
-  {/* Unread Count Badge */}
-  {unreadCount > 0 && (
-    <span className="text-xs bg-blue-600 dark:bg-blue-500 text-white px-1.5 py-0.5 rounded font-medium flex-shrink-0">
-      {unreadCount}
-    </span>
-  )}
-</div>
+                            {/* Unread Count Badge */}
+                            {unreadCount > 0 && (
+                              <span className="text-xs bg-blue-600 dark:bg-blue-500 text-white px-1.5 py-0.5 rounded font-medium flex-shrink-0">
+                                {unreadCount}
+                              </span>
+                            )}
+                          </div>
 
                           {/* Preview */}
                           <p className="text-xs text-gray-600 dark:text-gray-400 line-clamp-1">
@@ -358,15 +357,15 @@ const cleanBody = stripHtmlTags(normalize(latestEmail.body));
             </button>
           </div>
           <div className="flex justify-center gap-3 text-xs text-gray-500 dark:text-gray-400">
-            <button 
-              className="hover:text-blue-600 dark:hover:text-blue-500 transition-colors" 
+            <button
+              className="hover:text-blue-600 dark:hover:text-blue-500 transition-colors"
               onClick={onViewPrivacy}
             >
               Privacy
             </button>
             <span className="text-gray-300 dark:text-gray-600">•</span>
-            <button 
-              className="hover:text-blue-600 dark:hover:text-blue-500 transition-colors" 
+            <button
+              className="hover:text-blue-600 dark:hover:text-blue-500 transition-colors"
               onClick={onViewTerms}
             >
               Terms

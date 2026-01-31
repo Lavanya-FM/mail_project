@@ -51,10 +51,25 @@ app.post('/api/chat/send', upload.single('file'), chatController.sendMessage);
 // -------------------------
 // Serve static files from the React app (ONE level up in dist)
 const clientBuildPath = path.join(__dirname, '../dist');
-app.use(express.static(clientBuildPath));
+
+// Disable caching for all static files to ensure new builds are seen immediately
+app.use(express.static(clientBuildPath, {
+  etag: false,
+  lastModified: false,
+  setHeaders: (res, path) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }
+}));
 
 // Handle SPA fallback - send index.html for any other requests
+// Disable cache for index.html to ensure new builds are seen
 app.get(/(.*)/, (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
   res.sendFile(path.join(clientBuildPath, 'index.html'));
 });
 

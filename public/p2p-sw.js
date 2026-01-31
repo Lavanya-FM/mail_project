@@ -1,12 +1,13 @@
-self.addEventListener('message', async (e) => {
-  if (e.data?.type === 'P2P_RESUME') {
-    self.clients.matchAll().then(clients => {
-      clients.forEach(client => {
-        client.postMessage({
-          type: 'P2P_RESUME_REQUEST',
-          messageId: e.data.messageId
-        });
-      });
-    });
-  }
+// p2p-sw.js - TEMPORARILY DISABLED
+self.addEventListener("install", e => {
+    console.log('[SW] Install');
+    self.skipWaiting();
 });
+
+self.addEventListener("activate", e => {
+    console.log('[SW] Activate');
+    self.clients.claim();
+});
+
+// Any fetch handlers or other logic should be commented out or removed
+// to prevent caching old assets.

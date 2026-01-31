@@ -84,6 +84,18 @@ async function initTables() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // Add attachment_transfer_state to email_attachments if not exists
+  // Introduce ONE source of truth: attachment_transfer_state
+  try {
+    await db.query(`
+        ALTER TABLE email_attachments 
+        ADD COLUMN IF NOT EXISTS attachment_transfer_state VARCHAR(50) DEFAULT 'WAITING_FOR_PEER'
+     `);
+  } catch (err) {
+    // Ignore/Log
+    console.log('Migration note (attachment_transfer_state): ' + err.message);
+  }
 }
 initTables().catch(console.error);
 
@@ -1015,7 +1027,7 @@ router.get("/email/thread/:threadId", async (req, res) => {
       // ✅ attachment metadata including P2P fields
       const [atts] = await db.query(
         `
-        SELECT id, filename, mime_type, size_bytes, delivery_mode, delivered, p2p_message_id
+        SELECT id, filename, mime_type, size_bytes, delivery_mode, delivered, p2p_message_id, attachment_transfer_state
         FROM email_attachments
         WHERE email_id = ?
         `,
@@ -1088,7 +1100,8 @@ router.get("/emails/:userId/:folder", async (req, res) => {
     size_bytes,
     delivery_mode,
     delivered,
-    p2p_message_id
+    p2p_message_id,
+    attachment_transfer_state
   FROM email_attachments
   WHERE email_id = ?
   `,
@@ -1333,8 +1346,8 @@ router.post("/email/create", async (req, res) => {
         await conn.query(
           `INSERT INTO email_attachments
        (email_id, filename, mime_type, size_bytes,
-        content_base64, delivery_mode, delivered, p2p_message_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        content_base64, delivery_mode, delivered, p2p_message_id, attachment_transfer_state, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
           [
             emailId,
             filename,
@@ -1343,7 +1356,8 @@ router.post("/email/create", async (req, res) => {
             content_base64, // Always store content as fallback
             isP2P ? 'P2P' : 'EMAIL',
             isP2P ? 0 : 1,
-            a.p2p_message_id || null
+            a.p2p_message_id || null,
+            isP2P ? 'WAITING_FOR_PEER' : 'COMPLETED'
           ]
         );
       }
@@ -1395,11 +1409,12 @@ router.post("/email/create", async (req, res) => {
         sendOptions.attachments = attachmentsList
           .map((a) => {
             if (!a.filename) return null;
+            const content = a.content_base64 || a.content;
+            if (!content && a.p2p_message_id) return null; // Skip binary for P2P
             return {
               filename: a.filename,
-              content: a.content_base64 || a.content,
+              content: content,
               encoding: "base64",
-
               contentType: a.mime_type || "application/octet-stream"
             };
           })
@@ -1530,7 +1545,7 @@ router.post("/p2p/delivered", async (req, res) => {
 
     // Update attachment as delivered
     const [result] = await db.query(
-      `UPDATE email_attachments SET delivered = 1, delivered_at = NOW() WHERE p2p_message_id = ?`,
+      `UPDATE email_attachments SET delivered = 1, attachment_transfer_state = 'COMPLETED', delivered_at = NOW() WHERE p2p_message_id = ?`,
       [p2p_message_id]
     );
 
@@ -2159,6 +2174,45 @@ router.get("/activity", async (req, res) => {
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// -------------------- P2P FALLBACK UPLOAD --------------------
+router.post("/email/attachment/update", async (req, res) => {
+  const { p2p_message_id, content_base64, delivery_mode } = req.body;
+
+  if (!p2p_message_id || !content_base64) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  try {
+    // 1. Update the attachment payload and mode
+    const [result] = await db.query(
+      `UPDATE email_attachments 
+       SET content_base64 = ?, 
+           delivery_mode = ?, 
+           delivery_status = 'FALLBACK',
+           fallback_triggered = 1
+       WHERE p2p_message_id = ?`,
+      [content_base64, delivery_mode || 'FALLBACK', p2p_message_id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Attachment not found" });
+    }
+
+    // 2. Clear from p2p_file_metadata status
+    await db.query(
+      "UPDATE p2p_file_metadata SET status = 'fallback' WHERE message_id = ?",
+      [p2p_message_id]
+    );
+
+    console.log(`[Fallback] Attachment ${p2p_message_id} uploaded to server.`);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[Fallback Error]", err);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 

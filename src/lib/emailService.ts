@@ -115,19 +115,16 @@ export async function fileToBase64(file: File): Promise<string> {
 }
 
 // -------------------------------------------------------------
-// GET FOLDERS
+// EMAIL SERVICE
 // -------------------------------------------------------------
 export const emailService = {
   async getFolders(userId: number | string): ApiResult<any[]> {
     const url = apiUrl(`/api/folders/${encodeURIComponent(String(userId))}`);
-
     const resp = await fetch(url, {
       headers: { "Content-Type": "application/json", ...authHeaders() },
       credentials: "include",
     });
-
     const result = await handleResp<any[]>(resp);
-
     if (result.error) return result;
 
     const folders = (result.data || []).map((f: any) => ({
@@ -135,219 +132,141 @@ export const emailService = {
       name: f.name || f.system_box || "unknown",
       system_box: (f.system_box || f.name).toLowerCase(),
     }));
-
     localStorage.setItem("folders", JSON.stringify(folders));
-
     return { data: folders, status: result.status };
   },
 
-  // -------------------------------------------------------------
-  // GET EMAILS (with full normalization)
-  // -------------------------------------------------------------
-  async getEmails(
-    userId: number | string,
-    folderId?: number | string
-  ): ApiResult<any[]> {
+  async getEmails(userId: number | string, folderId?: number | string): ApiResult<any[]> {
     let fid: number | null;
-
     if (!folderId) fid = getFolderIdByName("inbox");
-    else if (isNaN(Number(folderId)))
-      fid = getFolderIdByName(String(folderId));
+    else if (isNaN(Number(folderId))) fid = getFolderIdByName(String(folderId));
     else fid = Number(folderId);
 
     if (!fid) return { error: "Invalid folderId", status: 400 };
-
     const url = apiUrl(`/api/emails/${userId}/${fid}`);
-
     const resp = await fetch(url, {
       headers: { "Content-Type": "application/json", ...authHeaders() },
       credentials: "include",
     });
-
     const r = await handleResp<any>(resp);
-
     const raw = r.data || [];
-
-    // Normalize recipients for UI
     raw.forEach((email: any) => {
-      email.to_emails = (email.to_emails || []).map((t: any) => ({
-        email: t.email || t,
-      }));
-      email.cc_emails = (email.cc_emails || []).map((t: any) => ({
-        email: t.email || t,
-      }));
-      email.bcc_emails = (email.bcc_emails || []).map((t: any) => ({
-        email: t.email || t,
-      }));
+      email.to_emails = (email.to_emails || []).map((t: any) => ({ email: t.email || t }));
+      email.cc_emails = (email.cc_emails || []).map((t: any) => ({ email: t.email || t }));
+      email.bcc_emails = (email.bcc_emails || []).map((t: any) => ({ email: t.email || t }));
     });
-
     return { data: raw, status: r.status };
   },
 
-  async getThread(
-    threadId: number | string,
-    userId: number | string
-  ): ApiResult<any[]> {
+  async getThread(threadId: number | string, userId: number | string): ApiResult<any[]> {
     const url = apiUrl(`/api/email/thread/${threadId}?user_id=${userId}`);
-
     const resp = await fetch(url, {
       headers: { "Content-Type": "application/json", ...authHeaders() },
       credentials: "include",
     });
-
     const r = await handleResp<any[]>(resp);
     const raw = r.data || [];
-
-    // Normalize recipients (CRITICAL)
     raw.forEach((email: any) => {
-      email.to_emails = (email.to_emails || []).map((t: any) => ({
-        email: t.email || t,
-      }));
-      email.cc_emails = (email.cc_emails || []).map((t: any) => ({
-        email: t.email || t,
-      }));
-      email.bcc_emails = (email.bcc_emails || []).map((t: any) => ({
-        email: t.email || t,
-      }));
+      email.to_emails = (email.to_emails || []).map((t: any) => ({ email: t.email || t }));
+      email.cc_emails = (email.cc_emails || []).map((t: any) => ({ email: t.email || t }));
+      email.bcc_emails = (email.bcc_emails || []).map((t: any) => ({ email: t.email || t }));
     });
-
     return { data: raw, status: r.status };
   },
 
-  // -------------------------------------------------------------
-  // CREATE EMAIL (FULL PATCH WITH ATTACHMENTS)
   async createEmail(payload: any): ApiResult<any> {
     const url = apiUrl("/api/email/create");
-
     const bodyClean = {
       user_id: payload.user_id,
       from_email: payload.from_email,
       from_name: payload.from_name,
-
       subject: payload.subject || "(no subject)",
       body: payload.body || "",
       is_draft: !!payload.is_draft,
       folder_id: payload.folder_id || null,
-
       in_reply_to: payload.in_reply_to || null,
-
       to_emails: payload.to_emails || [],
       cc_emails: payload.cc_emails || [],
       bcc_emails: payload.bcc_emails || [],
-
-      // ✅ CRITICAL
       attachments: payload.attachments || [],
-      p2p_enabled: false,
-      p2p_delivered: false,
+      p2p_enabled: !!payload.p2p_enabled,
+      p2p_delivered: !!payload.p2p_delivered,
     };
-
-    console.log("EMAIL SERVICE FINAL PAYLOAD:", bodyClean);
-
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...authHeaders(),
-      },
-      credentials: "include",
-      body: JSON.stringify(bodyClean),
-    });
-
-    return handleResp<any>(resp);
-  },
-
-  // -------------------------------------------------------------
-  // UPDATE EMAIL (read/star/folder)
-  // -------------------------------------------------------------
-  async updateEmail(emailId: number | string, data: any): ApiResult<any> {
-    const url = apiUrl("/api/email/update");
-
     const resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
       credentials: "include",
-      body: JSON.stringify({
-        email_id: Number(emailId),
-        ...data,
-      }),
+      body: JSON.stringify(bodyClean),
     });
-
     return handleResp<any>(resp);
   },
 
-  // -------------------------------------------------------------
-  // MOVE EMAIL
-  // -------------------------------------------------------------
-  async moveEmail(
-    email_id: number,
-    user_id: number,
-    target_folder: number
-  ): ApiResult<any> {
-    const url = apiUrl("/api/email/move");
+  async updateEmail(emailId: number | string, data: any): ApiResult<any> {
+    const url = apiUrl("/api/email/update");
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      credentials: "include",
+      body: JSON.stringify({ email_id: Number(emailId), ...data }),
+    });
+    return handleResp<any>(resp);
+  },
 
+  async updateEmailAttachment(data: any): ApiResult<any> {
+    const url = apiUrl("/api/email/attachment/update");
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      credentials: "include",
+      body: JSON.stringify(data),
+    });
+    return handleResp<any>(resp);
+  },
+
+  async moveEmail(email_id: number, user_id: number, target_folder: number): ApiResult<any> {
+    const url = apiUrl("/api/email/move");
     const resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
       credentials: "include",
       body: JSON.stringify({ email_id, user_id, target_folder }),
     });
-
     return handleResp<any>(resp);
   },
 
-  // -------------------------------------------------------------
-  // DELETE EMAIL
-  // -------------------------------------------------------------
   async deleteEmail(email_id: number, user_id: number): ApiResult<any> {
     const url = apiUrl("/api/email/delete");
-
     const resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
       credentials: "include",
       body: JSON.stringify({ email_id, user_id }),
     });
-
     return handleResp<any>(resp);
   },
 
-  // -------------------------------------------------------------
-  // DELETE PERMANENTLY
-  // -------------------------------------------------------------
   async deletePermanently(email_id: number, user_id: number): ApiResult<any> {
     const url = apiUrl("/api/email/delete-permanent");
-
     const resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
       credentials: "include",
       body: JSON.stringify({ email_id, user_id }),
     });
-
     return handleResp<any>(resp);
   },
 
-  // -------------------------------------------------------------
-  // STAR
-  // -------------------------------------------------------------
-  async star(
-    email_id: number,
-    user_id: number,
-    status: boolean
-  ): ApiResult<any> {
+  async star(email_id: number, user_id: number, status: boolean): ApiResult<any> {
     const url = apiUrl("/api/email/star");
-
     const resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
       credentials: "include",
       body: JSON.stringify({ email_id, user_id, status }),
     });
-
     return handleResp<any>(resp);
   },
 
-  // call metrics for logged-in user (no userId needed)
   async getCarbonMetricsMe(mode?: 'realistic' | 'medium' | 'gamified') {
     const qs = mode ? `?mode=${encodeURIComponent(mode)}` : '';
     const url = apiUrl(`/api/carbon/metrics/me${qs}`);
@@ -356,19 +275,10 @@ export const emailService = {
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       credentials: 'include',
     });
-    const parsed = await handleResp<any>(resp);
-    if (parsed.error) return { error: parsed.error, status: parsed.status };
-    return { data: parsed.data || parsed, status: parsed.status };
+    return handleResp<any>(resp);
   },
 
-  async submitCarbonCredits(payload: {
-    userId: string,
-    mode?: 'realistic' | 'medium' | 'gamified',
-    credits?: number,
-    co2eSaved?: number,
-    gamifiedPoints?: number,
-    metadata?: any
-  }) {
+  async submitCarbonCredits(payload: any) {
     const url = apiUrl('/api/carbon/submit');
     const resp = await fetch(url, {
       method: 'POST',
@@ -376,22 +286,15 @@ export const emailService = {
       credentials: 'include',
       body: JSON.stringify(payload),
     });
-    const parsed = await handleResp<any>(resp);
-    if (parsed.error) return { error: parsed.error, status: parsed.status };
-    return { data: parsed.data || parsed, status: parsed.status };
+    return handleResp<any>(resp);
   },
 
-  // -------------------------------------------------------------
-  // CHECK EMAIL EXISTENCE
-  // -------------------------------------------------------------
   async checkEmailExists(email: string): ApiResult<any> {
     const url = apiUrl(`/api/users/email/${encodeURIComponent(email)}`);
-
     const resp = await fetch(url, {
       headers: { "Content-Type": "application/json", ...authHeaders() },
       credentials: "include",
     });
-
     return handleResp<any>(resp);
   },
 };

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Trash2, RotateCcw, X, AlertTriangle, File, Image, FileText, Music, Video, Archive } from 'lucide-react';
-import { useTheme } from '../contexts/ThemeContext';
+
 import * as driveService from "../lib/driveService";
 import { DriveFile } from "../lib/driveService";
 import { authService } from '../lib/authService';
@@ -11,7 +11,7 @@ interface TrashItem extends DriveFile {
 }
 
 export default function TrashView() {
-    const { theme } = useTheme();
+
     const user = authService.getCurrentUser();
     const [trashItems, setTrashItems] = useState<TrashItem[]>([]);
     const [loading, setLoading] = useState(true);

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Download, CheckCircle, AlertCircle, File, Image, Pause, Play, Wifi, WifiOff, XCircle } from 'lucide-react';
+import { X, Download, CheckCircle, AlertCircle, File, Image, Pause, Play, Wifi, XCircle } from 'lucide-react';
 import { p2pService } from '../lib/p2pService';
 import { p2pToast } from '../utils/p2pToasts';
 
@@ -10,7 +10,7 @@ interface P2PTransferProgressProps {
     name: string;
     size: number;
     progress: number;
-    status: 'pending' | 'sending' | 'delivered' | 'failed' | 'paused';
+    status: 'pending' | 'sending' | 'delivered' | 'failed' | 'paused' | 'transferring' | 'receiving';
     messageId?: string;
     etaSeconds?: number | null;
     speedBps?: number;
@@ -20,6 +20,7 @@ interface P2PTransferProgressProps {
   senderEmail?: string;
   recipientEmail?: string;
   recipients?: string[]; // For multi-recipient support
+  recipientStatus?: 'online' | 'offline' | 'unknown';
 }
 
 export default function P2PTransferProgress({
@@ -29,12 +30,13 @@ export default function P2PTransferProgress({
   mode,
   senderEmail,
   recipientEmail,
-  recipients = []
+  recipients = [],
+  recipientStatus
 }: P2PTransferProgressProps) {
   const [downloadedFiles, setDownloadedFiles] = useState<Set<string>>(new Set());
   const [fileStates, setFileStates] = useState<Map<string, {
     progress: number;
-    status: 'pending' | 'sending' | 'delivered' | 'failed' | 'paused';
+    status: 'pending' | 'sending' | 'delivered' | 'failed' | 'paused' | 'transferring' | 'receiving';
     etaSeconds?: number | null;
     speedBps?: number;
     isPaused?: boolean;
@@ -131,13 +133,13 @@ export default function P2PTransferProgress({
       p2pService.pauseTransfer(messageId);
     } else {
       // Receiver pause logic
-      const rt = (p2pService as any).receiverTransfers.get(messageId);
+      const rt = (p2pService as any).receiverTransfers?.get(messageId);
       if (rt) {
         rt.status = 'paused';
-        (p2pService as any).markReceiverPaused(messageId, 'USER_PAUSED');
+        // (p2pService as any).markReceiverPaused(messageId, 'USER_PAUSED');
       }
     }
-    
+
     setFileStates(prev => {
       const updated = new Map(prev);
       const current = updated.get(messageId);
@@ -158,7 +160,7 @@ export default function P2PTransferProgress({
       // Receiver resume logic
       p2pService.resumeReceive(messageId);
     }
-    
+
     setFileStates(prev => {
       const updated = new Map(prev);
       const current = updated.get(messageId);
@@ -175,12 +177,12 @@ export default function P2PTransferProgress({
   const handleCancel = (messageId: string) => {
     // Cancel transfer logic
     if (mode === 'sender') {
-      const transfer = (p2pService as any).activeTransfers.get(messageId);
+      const transfer = (p2pService as any).activeTransfers?.get(messageId);
       if (transfer) {
         (p2pService as any).activeTransfers.delete(messageId);
       }
     } else {
-      const rt = (p2pService as any).receiverTransfers.get(messageId);
+      const rt = (p2pService as any).receiverTransfers?.get(messageId);
       if (rt) {
         rt.status = 'failed';
       }
@@ -202,7 +204,7 @@ export default function P2PTransferProgress({
   const getFileIcon = (filename: string) => {
     const ext = filename.split('.').pop()?.toLowerCase();
     const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'];
-    
+
     if (imageExts.includes(ext || '')) {
       return <Image className="w-5 h-5 text-blue-500" />;
     }
@@ -220,13 +222,13 @@ export default function P2PTransferProgress({
     try {
       console.log(`[P2P] Securely downloading: ${file.name}`);
       setDownloadedFiles(prev => new Set([...prev, file.name]));
-      
-window.dispatchEvent(new CustomEvent('p2p-download-file', {
-  detail: {
-    messageId: file.messageId,
-    fileName: file.name
-  }
-}));
+
+      window.dispatchEvent(new CustomEvent('p2p-download-file', {
+        detail: {
+          messageId: file.messageId,
+          fileName: file.name
+        }
+      }));
     } catch (error) {
       console.error('[P2P] Download failed:', error);
     }
@@ -235,7 +237,7 @@ window.dispatchEvent(new CustomEvent('p2p-download-file', {
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
       <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-2xl shadow-2xl border border-gray-200 dark:border-slate-700 overflow-hidden">
-        
+
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-slate-700 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-slate-800 dark:to-slate-800">
           <div>
@@ -250,18 +252,28 @@ window.dispatchEvent(new CustomEvent('p2p-download-file', {
                 </>
               )}
             </h3>
-            <p className="text-sm text-gray-600 dark:text-slate-400 mt-1">
-              {mode === 'sender' 
-                ? recipients.length > 0 
-                  ? `To: ${recipients.join(', ')}`
-                  : `To: ${recipientEmail}`
-                : `From: ${senderEmail}`}
-            </p>
+            <div className="flex flex-col mt-1">
+              <p className="text-sm text-gray-600 dark:text-slate-400">
+                {mode === 'sender'
+                  ? recipients.length > 0
+                    ? `To: ${recipients.join(', ')}`
+                    : `To: ${recipientEmail}`
+                  : `From: ${senderEmail}`}
+              </p>
+              {mode === 'sender' && recipientStatus && (
+                <div className={`text-xs flex items-center gap-1.5 mt-0.5 font-medium ${recipientStatus === 'online' ? 'text-green-600 dark:text-green-400' : 'text-gray-500'
+                  }`}>
+                  <div className={`w-2 h-2 rounded-full ${recipientStatus === 'online' ? 'bg-green-500' : 'bg-gray-400'
+                    }`} />
+                  {recipientStatus === 'online' ? 'Recipient Online' : 'Recipient Offline'}
+                </div>
+              )}
+            </div>
           </div>
           <button
             onClick={() => {
-            window.dispatchEvent(new Event('p2p-modal-closed'));
-            onClose();
+              window.dispatchEvent(new Event('p2p-modal-closed'));
+              onClose();
             }}
             disabled={mode === 'sender' && !allDelivered && !anyFailed}
             className="p-2 text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-800 rounded-lg transition disabled:opacity-50"
@@ -280,7 +292,7 @@ window.dispatchEvent(new CustomEvent('p2p-download-file', {
               {totalProgress.toFixed(0)}%
             </span>
           </div>
-          
+
           <div className="relative w-full h-4 bg-gray-200 dark:bg-slate-700 rounded-full overflow-hidden">
             <div
               className="absolute inset-y-0 left-0 bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300 flex items-center justify-end pr-2"
@@ -314,7 +326,7 @@ window.dispatchEvent(new CustomEvent('p2p-download-file', {
               <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400">
                 <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
                 <span className="text-sm font-medium">
-                  Transferring {files.filter(f => f.status === 'sending').length} file(s)...
+                  Transferring {files.filter(f => f.status === 'sending' || f.status === 'transferring' || f.status === 'receiving').length} file(s)...
                 </span>
               </div>
             )}
@@ -325,7 +337,8 @@ window.dispatchEvent(new CustomEvent('p2p-download-file', {
         <div className="max-h-96 overflow-y-auto">
           {files.map((file, index) => {
             const isDownloaded = downloadedFiles.has(file.name);
-            
+            const currentState = fileStates.get(file.messageId || '') || file;
+
             return (
               <div
                 key={index}
@@ -351,24 +364,24 @@ window.dispatchEvent(new CustomEvent('p2p-download-file', {
 
                       {/* Status Badge */}
                       <div className="flex-shrink-0">
-                        {file.status === 'delivered' && (
+                        {currentState.status === 'delivered' && (
                           <div className="flex items-center gap-1 px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
                             <CheckCircle className="w-3 h-3" />
                             Delivered
                           </div>
                         )}
-                        {file.status === 'sending' && (
+                        {(currentState.status === 'sending' || currentState.status === 'transferring' || currentState.status === 'receiving') && (
                           <div className="flex items-center gap-1 px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-full text-xs font-medium">
                             <div className="w-3 h-3 border-2 border-blue-700 border-t-transparent rounded-full animate-spin" />
-                            {file.progress}%
+                            {currentState.progress}%
                           </div>
                         )}
-                        {file.status === 'pending' && (
+                        {currentState.status === 'pending' && (
                           <div className="px-2 py-1 bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-400 rounded-full text-xs font-medium">
                             Pending
                           </div>
                         )}
-                        {file.status === 'failed' && (
+                        {currentState.status === 'failed' && (
                           <div className="flex items-center gap-1 px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-full text-xs font-medium">
                             <AlertCircle className="w-3 h-3" />
                             Failed
@@ -378,31 +391,37 @@ window.dispatchEvent(new CustomEvent('p2p-download-file', {
                     </div>
 
                     {/* Progress Bar with ETA and Speed */}
-                    {(file.status === 'sending' || file.status === 'pending' || file.status === 'paused') && (
+                    {(currentState.status === 'sending' || currentState.status === 'transferring' || currentState.status === 'receiving' || currentState.status === 'pending' || currentState.status === 'paused') && (
                       <div className="space-y-2">
                         <div className="relative w-full h-2.5 bg-gray-200 dark:bg-slate-700 rounded-full overflow-hidden">
                           <div
-                            className={`absolute inset-y-0 left-0 transition-all duration-300 ${
-                              file.status === 'paused' ? 'bg-yellow-500' : 'bg-gradient-to-r from-blue-500 to-purple-500'
-                            }`}
-                            style={{ width: `${file.progress}%` }}
+                            className={`absolute inset-y-0 left-0 transition-all duration-300 ${currentState.status === 'paused' ? 'bg-yellow-500' : 'bg-gradient-to-r from-blue-500 to-purple-500'
+                              }`}
+                            style={{ width: `${currentState.progress}%` }}
                           />
                         </div>
-                        
+
                         {/* ETA and Speed Info */}
                         <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
                           <div className="flex items-center gap-3">
-                            {file.etaSeconds !== null && file.etaSeconds !== undefined && (
-                              <span>ETA: {formatETA(file.etaSeconds)}</span>
+                            {currentState.etaSeconds !== null && currentState.etaSeconds !== undefined && (
+                              <span>ETA: {formatETA(currentState.etaSeconds)}</span>
                             )}
-                            {file.speedBps !== undefined && file.speedBps > 0 && (
+                            {currentState.speedBps !== undefined && currentState.speedBps > 0 && (
                               <div className="flex items-center gap-1">
                                 <Wifi className="w-3 h-3" />
-                                <span>{formatSpeed(file.speedBps)}</span>
+                                <span>{formatSpeed(currentState.speedBps)}</span>
                               </div>
                             )}
                           </div>
-                          <span className="font-medium">{file.progress}%</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-500 dark:text-gray-400">
+                              {formatFileSize((currentState.progress / 100) * file.size)} of {formatFileSize(file.size)}
+                            </span>
+                            <span className="font-medium bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 rounded text-blue-700 dark:text-blue-300 text-xs text-center min-w-[3rem]">
+                              {currentState.progress}%
+                            </span>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -410,12 +429,12 @@ window.dispatchEvent(new CustomEvent('p2p-download-file', {
                     {/* Control Buttons */}
                     <div className="flex items-center gap-2 mt-2">
                       {/* Pause/Resume Button */}
-                      {(file.status === 'sending' || file.status === 'paused') && (
+                      {(currentState.status === 'sending' || currentState.status === 'transferring' || currentState.status === 'receiving' || currentState.status === 'paused') && (
                         <button
-                          onClick={() => file.isPaused ? handleResume(file.messageId || '') : handlePause(file.messageId || '')}
+                          onClick={() => currentState.isPaused ? handleResume(file.messageId || '') : handlePause(file.messageId || '')}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-slate-600"
                         >
-                          {file.isPaused ? (
+                          {currentState.isPaused ? (
                             <>
                               <Play className="w-3.5 h-3.5" />
                               Resume
@@ -430,7 +449,7 @@ window.dispatchEvent(new CustomEvent('p2p-download-file', {
                       )}
 
                       {/* Cancel Button */}
-                      {(file.status === 'sending' || file.status === 'pending' || file.status === 'paused') && (
+                      {(currentState.status === 'sending' || currentState.status === 'transferring' || currentState.status === 'receiving' || currentState.status === 'pending' || currentState.status === 'paused') && (
                         <button
                           onClick={() => handleCancel(file.messageId || '')}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50"
@@ -441,15 +460,14 @@ window.dispatchEvent(new CustomEvent('p2p-download-file', {
                       )}
 
                       {/* Download Button (Receiver Only) */}
-                      {mode === 'receiver' && file.status === 'delivered' && (
+                      {mode === 'receiver' && currentState.status === 'delivered' && (
                         <button
                           onClick={() => handleDownloadFile(file)}
                           disabled={isDownloaded}
-                          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                            isDownloaded
-                              ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 cursor-not-allowed'
-                              : 'bg-blue-500 text-white hover:bg-blue-600'
-                          }`}
+                          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition ${isDownloaded
+                            ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 cursor-not-allowed'
+                            : 'bg-blue-500 text-white hover:bg-blue-600'
+                            }`}
                         >
                           {isDownloaded ? (
                             <>
@@ -479,7 +497,7 @@ window.dispatchEvent(new CustomEvent('p2p-download-file', {
               <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
             </div>
             <div className="text-xs text-gray-600 dark:text-slate-400">
-              <strong className="text-blue-600 dark:text-blue-400">🔒 End-to-End Encrypted:</strong> Files are 
+              <strong className="text-blue-600 dark:text-blue-400">🔒 End-to-End Encrypted:</strong> Files are
               transferred directly between peers using AES-256 encryption. No server has access to your file contents.
             </div>
           </div>
@@ -488,14 +506,14 @@ window.dispatchEvent(new CustomEvent('p2p-download-file', {
         {/* Close Button */}
         {(allDelivered || anyFailed) && (
           <div className="p-4 bg-gray-50 dark:bg-slate-800/50 border-t border-gray-200 dark:border-slate-700">
-           <button
-             onClick={() => {
-             window.dispatchEvent(new Event('p2p-modal-closed'));
-             onClose();
-             }}
-             className="w-full ..."
-             >
-             Close
+            <button
+              onClick={() => {
+                window.dispatchEvent(new Event('p2p-modal-closed'));
+                onClose();
+              }}
+              className="w-full py-2 bg-gray-200 dark:bg-slate-700 hover:bg-gray-300 dark:hover:bg-slate-600 rounded-lg text-sm font-medium text-gray-700 dark:text-white transition-colors"
+            >
+              Close
             </button>
           </div>
         )}

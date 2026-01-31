@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Phone, Mic, MicOff, Video, VideoOff, MonitorUp, Smile, Captions, Hand, MoreVertical, Info, Users, MessageSquare, X, Send, Maximize2, Minimize2, Settings, Download, Save, Paperclip, FileText, UserPlus, Sparkles, Shield, Lock, Unlock, CheckSquare, Square, Search } from 'lucide-react';
 import { getToken } from '../lib/authService';
 import { authService } from '../lib/authService';

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { emailService } from "../lib/emailService";
+import { authService } from "../lib/authService";
 import EmailView from "./EmailView";
 
 interface ThreadEmail {
@@ -57,9 +58,18 @@ export default function ThreadView({
   function handleCompose(email: ThreadEmail, data: any) {
     if (!onCompose) return;
 
+    let targetTo = data?.to || email.from_email;
+    const me = authService.getCurrentUser()?.email;
+
+    // If we're replying to an email WE sent, the recipient should be the original "to"
+    if (me && targetTo === me && email.to_emails?.length > 0) {
+      const firstTo = email.to_emails[0];
+      targetTo = typeof firstTo === "string" ? firstTo : (firstTo.email || firstTo.address || "");
+    }
+
     onCompose({
       ...data,
-      to: data?.to || email.from_email,
+      to: targetTo,
       threadId,
     });
   }
@@ -96,6 +106,8 @@ export default function ThreadView({
             hideClose
             hideToolbar
             onCompose={(data: any) => handleCompose(email, data)}
+            onClose={() => { }}
+            onRefresh={fetchThread}
           />
         ))}
       </div>

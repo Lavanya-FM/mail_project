@@ -8,8 +8,10 @@ import { p2pToast } from '../utils/p2pToasts';
 import toast from 'react-hot-toast';
 import ComposeUI from './compose/ComposeUI';
 import { presenceService } from '../lib/presenceService';
-import { filesToBase64 } from '../lib/fileUtils';
+import { filesToBase64, fileToBase64 } from '../lib/fileUtils';
 import { MAX_EMAIL_ATTACHMENT_BYTES } from '../constants/attachmentLimits';
+import { classifyAttachments } from '../lib/p2pClassifier';
+
 
 const getFolderIdByName = (name: string) => {
   const folders = JSON.parse(localStorage.getItem("folders") || "[]");
@@ -63,15 +65,20 @@ export default function ComposeEmail(props: ComposeEmailProps) {
   const textareaRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const hasLargeAttachments = attachments.some(f => f.size > LARGE_ATTACHMENT_BYTES);
   const recipientEmail = normalizeEmailField(to).split(',')[0]?.trim();
+  const recipientP2PCapable = recipientEmail ? p2pService.isPeerOnline(recipientEmail) : false;
+
+  const classifications = classifyAttachments(attachments, recipientP2PCapable);
+  const hasP2PAttachments = classifications.some(c => c.mode === 'P2P');
+  const hasLargeAttachments = attachments.some(f => f.size > LARGE_ATTACHMENT_BYTES);
 
   // Check if P2P is available
   const canUseP2P = p2pConnected &&
-    recipientStatus === 'online' &&
+    recipientP2PCapable &&
     recipientEmail &&
     p2pService.hasSessionKey?.(recipientEmail) &&
     attachments.length > 0;
+
 
   // Draft autosave
   const saveDraft = async () => {
@@ -153,14 +160,35 @@ export default function ComposeEmail(props: ComposeEmailProps) {
       p2pToast.delivered(fileName);
     };
 
-    const errorHandler = (e: any) => {
-      const { messageId, fileName } = e.detail;
+    const errorHandler = async (e: any) => {
+      const { messageId, fileName, message } = e.detail;
 
       setP2pFiles(prev => prev.map(f =>
         (f.messageId === messageId || f.name === fileName)
           ? { ...f, status: 'failed' as const }
           : f
       ));
+
+      // Handle Automatic Fallback Upload
+      if (message?.includes('Falling back') || message?.includes('Secure pipe lost')) {
+        const file = attachments.find(a => a.name === fileName);
+        if (file && profile) {
+          const toastId = `fallback-${messageId}`;
+          toast.loading(`Fallback: Uploading ${fileName} to server...`, { id: toastId });
+          try {
+            const base64 = await fileToBase64(file);
+            await emailService.updateEmailAttachment({
+              p2p_message_id: messageId,
+              content_base64: base64,
+              delivery_mode: 'FALLBACK'
+            });
+            toast.success(`Fallback complete: ${fileName} uploaded to server`, { id: toastId });
+          } catch (err) {
+            console.error('Fallback upload failed:', err);
+            toast.error(`Fallback failed for ${fileName}`, { id: toastId });
+          }
+        }
+      }
     };
 
     window.addEventListener('p2p-progress', progressHandler);
@@ -258,14 +286,8 @@ export default function ComposeEmail(props: ComposeEmailProps) {
   // Modal close handler
   useEffect(() => {
     const handleModalClosed = () => {
-      const allDelivered = p2pFiles.every(f => f.status === 'delivered');
-
-      if (allDelivered && p2pFiles.length > 0) {
-        setP2pFiles([]);
-        setShowP2PProgress(false);
-        onSent?.();
-        onClose();
-      }
+      setP2pFiles([]);
+      setShowP2PProgress(false);
     };
 
     window.addEventListener('p2p-modal-closed', handleModalClosed);
@@ -368,13 +390,47 @@ export default function ComposeEmail(props: ComposeEmailProps) {
 
     setSending(true);
     try {
-      const p2pAttachments = attachments.map(file => ({
-        filename: file.name,
-        mime_type: file.type,
-        size_bytes: file.size,
-        p2p_message_id: uuid(),
-        delivery_mode: 'P2P',
-        is_p2p: true,
+      const p2pAttachments = attachments.map((file, idx) => {
+        const cls = classifications[idx];
+        const isP2P = cls.mode === 'P2P';
+
+        return {
+          filename: file.name,
+          mime_type: file.type,
+          size_bytes: file.size,
+          p2p_message_id: isP2P ? uuid() : undefined,
+          delivery_mode: isP2P ? 'P2P' : 'EMAIL',
+          is_p2p: isP2P,
+        };
+      });
+
+      // Prepare metadata-only attachments for P2P, and regular for EMAIL
+      const processedAttachments = await Promise.all(attachments.map(async (file, idx) => {
+        const cls = classifications[idx];
+        const isP2P = cls.mode === 'P2P';
+
+        if (isP2P) {
+          return {
+            filename: file.name,
+            mime_type: file.type,
+            size_bytes: file.size,
+            p2p_message_id: p2pAttachments[idx].p2p_message_id,
+            delivery_mode: 'P2P',
+            is_p2p: true,
+            content_base64: null // DO NOT ATTACH BINARIES
+          };
+        } else {
+          // Fallback to regular attachment if classified as EMAIL
+          const base64 = await fileToBase64(file);
+          return {
+            filename: file.name,
+            mime_type: file.type,
+            size_bytes: file.size,
+            delivery_mode: 'EMAIL',
+            is_p2p: false,
+            content_base64: base64
+          };
+        }
       }));
 
       await emailService.createEmail({
@@ -387,35 +443,41 @@ export default function ComposeEmail(props: ComposeEmailProps) {
         is_draft: false,
         folder_id: getFolderIdByName('sent'),
         thread_id: threadId ?? null,
-        p2p_enabled: true,
+        p2p_enabled: hasP2PAttachments,
         p2p_delivered: false,
-        attachments: p2pAttachments.map(a => ({
-          ...a,
-          content_base64: null,
-          delivery_mode: 'P2P',
-          is_p2p: true
-        }))
+        attachments: processedAttachments
       });
 
-      setP2pFiles(p2pAttachments.map(a => ({
-        name: a.filename,
-        size: a.size_bytes,
-        progress: 0,
-        status: 'pending',
-        messageId: a.p2p_message_id
-      })));
+      const p2pList = p2pAttachments.filter(a => a.is_p2p);
+      const p2pFilesToStart = attachments.filter((_, idx) => classifications[idx].mode === 'P2P');
 
-      setShowP2PProgress(true);
-      const recipients = to.split(',').map(e => e.trim()).filter(Boolean);
-      attachments.forEach((file: File) => { p2pToast.started(file.name); });
+      if (p2pList.length > 0) {
+        setP2pFiles(p2pList.map(a => ({
+          name: a.filename,
+          size: a.size_bytes,
+          progress: 0,
+          status: 'pending',
+          messageId: a.p2p_message_id
+        })));
 
-      await p2pService.startTransfer(
-        recipients,
-        attachments,
-        p2pAttachments.map(a => a.p2p_message_id)
-      );
+        setShowP2PProgress(true);
+        const recipients = to.split(',').map(e => e.trim()).filter(Boolean);
+        p2pList.forEach(a => { p2pToast.started(a.filename); });
 
-      toast.success('✓ Email sent, transferring files via P2P');
+        await p2pService.startTransfer(
+          recipients,
+          p2pFilesToStart,
+          p2pList.map(a => a.p2p_message_id!)
+        );
+
+        toast.success(`✓ Email sent, ${p2pList.length} files transferring via P2P`);
+      } else {
+        toast.success('✓ Email sent via traditional mode');
+      }
+
+      onSent?.();
+      onClose();
+
     } catch (err: any) {
       console.error('[P2P SEND FAILED]', err);
       toast.error(err?.message || 'Failed to send via P2P');

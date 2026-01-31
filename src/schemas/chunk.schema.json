@@ -1,0 +1,33 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "ChunkMessage",
+    "description": "Individual chunk of data sent during a P2P transfer.",
+    "type": "object",
+    "properties": {
+        "message_id": {
+            "type": "string"
+        },
+        "attachment_id": {
+            "type": "string"
+        },
+        "chunk_index": {
+            "type": "integer",
+            "minimum": 0
+        },
+        "encrypted_payload": {
+            "type": "string",
+            "description": "Base64 encoded encrypted chunk data"
+        },
+        "checksum": {
+            "type": "string",
+            "description": "Verification hash for this specific chunk"
+        }
+    },
+    "required": [
+        "message_id",
+        "attachment_id",
+        "chunk_index",
+        "encrypted_payload",
+        "checksum"
+    ]
+}

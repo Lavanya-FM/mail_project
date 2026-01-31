@@ -1,5 +1,5 @@
 // ComposeEmail.tsx - Complete implementation with two send modes
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { emailService } from '../../lib/emailService';
 import { authService } from '../../lib/authService';
 import { p2pService } from '../../lib/p2pService';
@@ -10,6 +10,7 @@ import ComposeUI from './ComposeUI';
 import { presenceService } from '../../lib/presenceService';
 import { filesToBase64 } from '../../lib/fileUtils';
 import { MAX_EMAIL_ATTACHMENT_BYTES } from '../../constants/attachmentLimits';
+import { createManifest, manifestToBase64 } from '../../lib/p2pManifest';
 
 const getFolderIdByName = (name: string) => {
   const folders = JSON.parse(localStorage.getItem("folders") || "[]");
@@ -34,7 +35,7 @@ const normalizeEmailField = (val: any): string => {
 };
 
 export default function ComposeEmail(props: ComposeEmailProps) {
-  const { onClose, onSent, onDraftSaved, prefilledData } = props;
+  const { onClose, onSent, prefilledData } = props;
 
   // Form State
   const [to, setTo] = useState('');
@@ -71,7 +72,6 @@ export default function ComposeEmail(props: ComposeEmailProps) {
   const canUseP2P = p2pConnected &&
     recipientStatus === 'online' &&
     recipientEmail &&
-    p2pService.hasSessionKey?.(recipientEmail) &&
     attachments.length > 0;
 
   // Draft autosave
@@ -90,12 +90,12 @@ export default function ComposeEmail(props: ComposeEmailProps) {
         bcc_emails: [],
         subject,
         body,
-attachments: attachments.map(f => ({
-  filename: f.name,
-  mime_type: f.type,
-  size_bytes: f.size,
-  content_base64: null
-})),
+        attachments: attachments.map(f => ({
+          filename: f.name,
+          mime_type: f.type,
+          size_bytes: f.size,
+          content_base64: null
+        })),
         is_draft: true,
         folder_id: getFolderIdByName('draft'),
       });
@@ -148,7 +148,7 @@ attachments: attachments.map(f => ({
           ? { ...f, status: 'delivered' as const, progress: 100 }
           : f
       ));
-      
+
       // Show toast notification
       p2pToast.delivered(fileName);
     };
@@ -196,8 +196,9 @@ attachments: attachments.map(f => ({
   useEffect(() => {
     if (!profile) return;
 
+    // P2P service is already initialized in MainApp
+    // Just connect presence service for recipient status
     presenceService.connect(profile.email, profile.id);
-    p2pService.connect(profile.id, profile.email);
 
     setP2pConnected(true);
 
@@ -223,7 +224,10 @@ attachments: attachments.map(f => ({
   // Prefill
   useEffect(() => {
     if (!prefilledData) return;
-    setTo(normalizeEmailField(prefilledData.to));
+
+    let targetTo = normalizeEmailField(prefilledData.to);
+
+    setTo(targetTo);
     setCc(normalizeEmailField(prefilledData.cc));
     setBcc(normalizeEmailField(prefilledData.bcc));
     setSubject(prefilledData.subject || "");
@@ -232,7 +236,7 @@ attachments: attachments.map(f => ({
     if (prefilledData.cc) setShowCc(true);
     if (textareaRef.current) textareaRef.current.innerHTML = normalizedBody;
     if (prefilledData.threadId) setThreadId(prefilledData.threadId);
-  }, [prefilledData]);
+  }, [prefilledData, profile]);
 
   // Check recipient status
   useEffect(() => {
@@ -257,19 +261,7 @@ attachments: attachments.map(f => ({
 
   // Modal close handler
   useEffect(() => {
-    const handleModalClosed = () => {
-      const allDelivered = p2pFiles.every(f => f.status === 'delivered');
-
-      if (allDelivered && p2pFiles.length > 0) {
-        setP2pFiles([]);
-        setShowP2PProgress(false);
-        onSent?.();
-        onClose();
-      }
-    };
-
-    window.addEventListener('p2p-modal-closed', handleModalClosed);
-    return () => window.removeEventListener('p2p-modal-closed', handleModalClosed);
+    // No longer needed to block close for P2P
   }, [p2pFiles, onSent, onClose]);
 
   // Attachment helpers
@@ -284,10 +276,10 @@ attachments: attachments.map(f => ({
     return `${(mb / 1024).toFixed(1)} GB`;
   };
 
-const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-  const files = Array.from(e.target.files || []);
-  setAttachments(prev => [...prev, ...files]);
-};
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    setAttachments(prev => [...prev, ...files]);
+  };
 
   const removeAttachment = (index: number) => {
     setAttachments(prev => prev.filter((_, i) => i !== index));
@@ -345,11 +337,18 @@ const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         p2p_delivered: false,
       };
 
-if (attachments.some(f => f.size > MAX_EMAIL_ATTACHMENT_BYTES)) {
-  toast.error('Email attachments must be under 25MB. Use P2P.');
-  setSending(false);
-  return;
-}
+      if (attachments.some(f => f.size > MAX_EMAIL_ATTACHMENT_BYTES)) {
+        if (canUseP2P) {
+          console.log('[REGULAR SEND] Switching to P2P for large files');
+          setSending(false); // handleP2PSend sets it to true
+          handleP2PSend();
+          return;
+        }
+
+        toast.error('File too large (>25MB) and recipient is offline. Cannot use P2P.');
+        setSending(false);
+        return;
+      }
 
       // Always send full attachments for regular email
       if (attachments.length > 0) {
@@ -402,32 +401,72 @@ if (attachments.some(f => f.size > MAX_EMAIL_ATTACHMENT_BYTES)) {
     try {
       console.log('[P2P SEND] Starting P2P transfer to:', recipientEmail);
 
-      // STEP 1: Convert files to base64 for server fallback storage
-      const fileToBase64 = (file: File): Promise<string> => {
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => {
-            const base64 = (reader.result as string).split(',')[1];
-            resolve(base64);
-          };
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-      };
+      // Support multiple recipients (comma-separated)
+      const recipients = to.split(',').map(e => e.trim()).filter(Boolean);
+      const P2P_THRESHOLD = 5 * 1024 * 1024; // 5MB
 
-      // STEP 2: Generate P2P IDs and convert files to base64
-      const p2pAttachments = await Promise.all(attachments.map(async (file) => ({
-        filename: file.name,
-        mime_type: file.type,
-        size_bytes: file.size,
-        p2p_message_id: uuid(),
-        delivery_mode: 'P2P',
-        is_p2p: true,
-        // Store content on server as fallback (like torrent seeders)
-        content_base64: await fileToBase64(file),
-      })));
+      const processedAttachments = [];
+      const p2pMessageIds: string[] = [];
+      const p2pFilesToSeed: File[] = [];
 
-      // STEP 3: Create email with BOTH P2P metadata AND file content as fallback
+      // STEP 1: Process attachments (Generate Manifests for Large Files)
+      for (const file of attachments) {
+        if (file.size > P2P_THRESHOLD) {
+          // LARGE FILE -> MANIFEST
+          const senderEmail = profile.email; // Ensure this is available
+          const manifest = await createManifest(file, senderEmail);
+          const manifestBase64 = manifestToBase64(manifest);
+
+          processedAttachments.push({
+            filename: file.name, // Display ORIGINAL filename, not .p2p
+            mime_type: 'application/x-jeemail-manifest+json',
+            size_bytes: file.size, // Use REAL file size for UI display, not manifest size
+            content_base64: manifestBase64,
+            p2p_message_id: manifest.attachmentId,
+            delivery_mode: 'P2P',
+            is_p2p: true
+          });
+
+          p2pMessageIds.push(manifest.attachmentId);
+          p2pFilesToSeed.push(file);
+
+        } else {
+          // SMALL FILE -> STANDARD ATTACHMENT (or P2P Direct)
+          // For consistency with P2P mode, we can still use P2P direct transfer
+          // OR just send it as a regular attachment if it's small?
+          // The user clicked "Via P2P", so we should try to use P2P transfer even for small files
+          // to save server storage/bandwidth, but for robustness small files are better on server.
+          // Let's use P2P for everything since "Via P2P" was clicked, BUT
+          // allow server fallback (content_base64) for small files.
+
+          const base64 = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve((reader.result as string).split(',')[1]);
+            reader.readAsDataURL(file);
+          });
+
+          const msgId = uuid();
+          processedAttachments.push({
+            filename: file.name,
+            mime_type: file.type,
+            size_bytes: file.size,
+            content_base64: base64, // Fallback allowed
+            p2p_message_id: msgId,
+            delivery_mode: 'P2P',
+            is_p2p: true
+          });
+
+          p2pMessageIds.push(msgId);
+          p2pFilesToSeed.push(file);
+        }
+      }
+
+      // STEP 2: Start Seeding (Non-blocking)
+      // We don't await this strictly before sending email to ensure UI responsiveness,
+      // but it's good to ensure registration happens.
+      await p2pService.startTransfer(recipients, p2pFilesToSeed, p2pMessageIds);
+
+      // STEP 3: Send Email with Metadata
       await emailService.createEmail({
         user_id: profile.id,
         from_email: profile.email,
@@ -440,53 +479,18 @@ if (attachments.some(f => f.size > MAX_EMAIL_ATTACHMENT_BYTES)) {
         thread_id: threadId ?? null,
 
         p2p_enabled: true,
-        p2p_delivered: false,
+        p2p_delivered: false, // Metadata sent, content pending P2P
 
-        // Include content_base64 as server fallback
-        attachments: p2pAttachments.map(a => ({
-          ...a,
-          content: a.content_base64, // Server stores this as fallback
-        }))
+        attachments: processedAttachments
       });
 
-      // STEP 3: UI state
-      setP2pFiles(
-        p2pAttachments.map(a => ({
-          name: a.filename,
-          size: a.size_bytes,
-          progress: 0,
-          status: 'pending',
-          messageId: a.p2p_message_id
-        }))
-      );
-
-      setShowP2PProgress(true);
-
-      // STEP 4: start P2P transfer
-      // Support multiple recipients (comma-separated)
-      const recipients = to.split(',').map(e => e.trim()).filter(Boolean);
-      
-      // Show toast for each file
-      attachments.forEach((file: File) => {
-        p2pToast.started(file.name);
-      });
-
-      await p2pService.startTransfer(
-        recipients, // Use recipients array instead of single recipientEmail
-        attachments,
-        p2pAttachments.map(a => a.p2p_message_id)
-      );
-
-
-      toast.success('✓ Email sent, transferring files via P2P');
-
-      // Don't close - wait for P2P progress modal
+      // Close immediately (Metadata-First / Non-Blocking)
+      onSent?.();
+      onClose();
 
     } catch (err: any) {
       console.error('[P2P SEND FAILED]', err);
       toast.error(err?.message || 'Failed to send via P2P');
-
-      setP2pFiles(prev => prev.map(f => ({ ...f, status: 'failed' as const })));
     } finally {
       setSending(false);
     }
@@ -559,6 +563,7 @@ if (attachments.some(f => f.size > MAX_EMAIL_ATTACHMENT_BYTES)) {
       hasLargeAttachments={hasLargeAttachments}
       hasSessionKey={(email) => p2pService.hasSessionKey?.(email) || false}
       normalizeEmailField={normalizeEmailField}
+      fromEmail={profile?.email}
     />
   );
 }

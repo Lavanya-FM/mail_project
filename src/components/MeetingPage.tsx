@@ -187,8 +187,9 @@ export default function MeetingPage({ meetingId, onLeave, initialVideoOff = fals
         if (!localStream) return;
         if (isGuest && !guestJoined) return; // Wait for guest to enter name
 
-        // Connect p2p service if needed (especially for guests)
-        if (!p2pService.isConnected() && effectiveUser) {
+        // P2P service is already initialized in MainApp for regular users
+        // Only connect for guests who bypass MainApp
+        if (isGuest && !p2pService.isConnected() && effectiveUser) {
             p2pService.connect(effectiveUser.id || 0, effectiveUser.email);
         }
 

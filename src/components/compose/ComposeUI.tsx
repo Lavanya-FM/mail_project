@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
-  X, Send, Paperclip, Link, Smile, Clock, Share2,
-  HardDrive, Zap, Trash2, FileText, ArrowDown, Image as ImageIcon,
+  X, Send, Paperclip, Link, Smile, Clock,
+  HardDrive, Zap, Trash2, FileText, Image as ImageIcon,
 } from 'lucide-react';
 
 import AttachFromDriveModal from '../AttachFromDriveModal';
-import P2PTransferProgress from '../P2PTransferProgress';
-import { p2pService } from '../../lib/p2pService';
+// import P2PTransferProgress from '../P2PTransferProgress';
 import { p2pToast } from '../../utils/p2pToasts';
 
 const AttachmentPreview = ({
@@ -16,7 +15,9 @@ const AttachmentPreview = ({
   status,
   onRemove,
   formatSize,
-  onContinueInBackground
+  onContinueInBackground,
+  recipientStatus,
+  isP2P
 }: {
   file: File;
   progress?: number;
@@ -25,6 +26,8 @@ const AttachmentPreview = ({
   onRemove: () => void;
   formatSize: (n: number) => string;
   onContinueInBackground: () => void;
+  recipientStatus?: 'online' | 'offline' | 'unknown';
+  isP2P?: boolean;
 }) => {
 
   const isImage = file.type.startsWith('image/');
@@ -66,13 +69,12 @@ const AttachmentPreview = ({
   };
 
   return (
-    <div className={`flex items-center gap-3 border rounded-lg px-3 py-2.5 w-full transition-all ${
-      isComplete 
-        ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' 
-        : isTransferring
-          ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
-          : 'bg-gray-50 dark:bg-slate-800 border-gray-200 dark:border-slate-700'
-    }`}>
+    <div className={`flex items-center gap-3 border rounded-lg px-3 py-2.5 w-full transition-all ${isComplete
+      ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+      : isTransferring
+        ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
+        : 'bg-gray-50 dark:bg-slate-800 border-gray-200 dark:border-slate-700'
+      }`}>
 
       {/* LEFT: Icon + file info */}
       <div className="flex items-center gap-3 min-w-0 flex-shrink-0">
@@ -83,13 +85,12 @@ const AttachmentPreview = ({
             className="w-10 h-10 rounded object-cover border"
           />
         ) : (
-          <div className={`w-10 h-10 flex items-center justify-center rounded ${
-            isComplete 
-              ? 'bg-green-100 dark:bg-green-800/30' 
-              : isTransferring 
-                ? 'bg-blue-100 dark:bg-blue-800/30'
-                : 'bg-gray-200 dark:bg-slate-700'
-          }`}>
+          <div className={`w-10 h-10 flex items-center justify-center rounded ${isComplete
+            ? 'bg-green-100 dark:bg-green-800/30'
+            : isTransferring
+              ? 'bg-blue-100 dark:bg-blue-800/30'
+              : 'bg-gray-200 dark:bg-slate-700'
+            }`}>
             {isTransferring ? (
               <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
             ) : (
@@ -102,9 +103,21 @@ const AttachmentPreview = ({
           <p className="truncate text-sm font-medium text-gray-800 dark:text-gray-200 max-w-[180px]">
             {file.name}
           </p>
-          <p className="text-xs text-gray-400">
-            {formatSize(file.size)}
-          </p>
+          {isP2P ? (
+            <div className="flex flex-col text-[10px]">
+              <span className="text-blue-600 dark:text-blue-400 font-medium">
+                Delivery: Direct (P2P)
+              </span>
+              <span className={`${recipientStatus === 'online' ? 'text-green-600 dark:text-green-400' : 'text-gray-500'
+                }`}>
+                {recipientStatus === 'online' ? 'Recipient: Online' : 'Will send when recipient is online'}
+              </span>
+            </div>
+          ) : (
+            <p className="text-xs text-gray-400">
+              {formatSize(file.size)}
+            </p>
+          )}
         </div>
       </div>
 
@@ -125,8 +138,8 @@ const AttachmentPreview = ({
             </span>
             {etaSeconds != null && etaSeconds > 0 && (
               <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
-                ETA: {etaSeconds < 60 
-                  ? `${etaSeconds}s` 
+                ETA: {etaSeconds < 60
+                  ? `${etaSeconds}s`
                   : etaSeconds < 3600
                     ? `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s`
                     : `${Math.floor(etaSeconds / 3600)}h ${Math.floor((etaSeconds % 3600) / 60)}m`}
@@ -237,12 +250,14 @@ export interface ComposeUIProps {
     size: number;
     progress: number;
     etaSeconds?: number | null;
-    status: 'pending' | 'receiving' | 'paused' | 'delivered' | 'failed';
+    status: 'pending' | 'receiving' | 'paused' | 'delivered' | 'failed' | 'sending';
   }[];
 
   showP2PProgress: boolean;
   setShowP2PProgress: (v: boolean) => void;
   recipientEmail: string;
+  deliveryMode?: 'P2P' | 'EMAIL';
+  fromEmail?: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -279,12 +294,9 @@ export default function ComposeUI(props: ComposeUIProps) {
     onBodyKeyDown,
     fileInputRef,
     p2pConnected,
-    hasSessionKey,
-    normalizeEmailField,
     p2pFiles,
-    showP2PProgress,
     setShowP2PProgress,
-    recipientEmail,
+    fromEmail,
   } = props;
 
   /* ------------------------------------------------------------------ */
@@ -296,16 +308,16 @@ export default function ComposeUI(props: ComposeUIProps) {
   const [showDriveModal, setShowDriveModal] = useState(false);
   const [isThrottled, setIsThrottled] = useState(false);
   const [localP2PFiles, setLocalP2PFiles] = useState(p2pFiles);
-const [pendingIncoming, setPendingIncoming] = useState<{
-  messageId: string;
-  name: string;
-  size: number;
-} | null>(null);
+  const [pendingIncoming, setPendingIncoming] = useState<{
+    messageId: string;
+    name: string;
+    size: number;
+  } | null>(null);
 
 
-useEffect(() => {
-  setLocalP2PFiles(p2pFiles);
-}, [p2pFiles]);
+  useEffect(() => {
+    setLocalP2PFiles(p2pFiles);
+  }, [p2pFiles]);
 
   const emojis = ['😊', '😂', '😍', '👍', '🙏', '🎉', '😎', '😢', '🔥', '✨', '💯', '🤔'];
 
@@ -313,112 +325,110 @@ useEffect(() => {
   /* P2P DOWNLOAD EVENT HANDLERS                                        */
   /* ------------------------------------------------------------------ */
 
-// Listen for SENDER progress (p2p-progress event)
-useEffect(() => {
-  const senderHandler = (e: any) => {
-    const { messageId, fileName, progress, etaSeconds, speedBps } = e.detail;
+  // Listen for SENDER progress (p2p-progress event)
+  useEffect(() => {
+    const senderHandler = (e: any) => {
+      const { messageId, fileName, progress, etaSeconds, speedBps } = e.detail;
 
-    setLocalP2PFiles(prev => {
-      // Try to find by messageId first, then by fileName
-      const existingIndex = prev.findIndex(f => f.messageId === messageId || f.name === fileName);
-      
-      if (existingIndex >= 0) {
-        return prev.map((f, i) => 
-          i === existingIndex
-            ? { ...f, progress, status: progress >= 100 ? 'delivered' : 'sending', etaSeconds, speedBps, messageId }
+      setLocalP2PFiles(prev => {
+        // Try to find by messageId first, then by fileName
+        const existingIndex = prev.findIndex(f => f.messageId === messageId || f.name === fileName);
+
+        if (existingIndex >= 0) {
+          return prev.map((f, i) =>
+            i === existingIndex
+              ? { ...f, progress, status: progress >= 100 ? 'delivered' : 'sending', etaSeconds, speedBps, messageId }
+              : f
+          );
+        }
+        return prev;
+      });
+    };
+
+    // Listen for receiver progress too
+    const receiverHandler = (e: any) => {
+      const { messageId, percentage, status, etaSeconds } = e.detail;
+
+      setLocalP2PFiles(prev =>
+        prev.map(f =>
+          f.messageId === messageId
+            ? { ...f, progress: percentage, status: status || 'sending', etaSeconds }
             : f
-        );
-      }
-      return prev;
-    });
-  };
+        )
+      );
+    };
 
-  // Listen for receiver progress too
-  const receiverHandler = (e: any) => {
-    const { messageId, percentage, status, etaSeconds } = e.detail;
+    window.addEventListener('p2p-progress', senderHandler);
+    window.addEventListener('p2p-receiver-progress', receiverHandler);
 
-    setLocalP2PFiles(prev =>
-      prev.map(f =>
-        f.messageId === messageId
-          ? { ...f, progress: percentage, status: status || 'sending', etaSeconds }
-          : f
-      )
-    );
-  };
+    return () => {
+      window.removeEventListener('p2p-progress', senderHandler);
+      window.removeEventListener('p2p-receiver-progress', receiverHandler);
+    };
+  }, []);
 
-  window.addEventListener('p2p-progress', senderHandler);
-  window.addEventListener('p2p-receiver-progress', receiverHandler);
-  
-  return () => {
-    window.removeEventListener('p2p-progress', senderHandler);
-    window.removeEventListener('p2p-receiver-progress', receiverHandler);
-  };
-}, []);
+  useEffect(() => {
+    // Sender progress handler
+    const senderProgress = () => {
+      // REMOVED: Progress toasts (too many notifications)
+      // Progress is shown in the UI components
+    };
 
-useEffect(() => {
-  // Sender progress handler
-  const senderProgress = (e: any) => {
-    const pct = e.detail.progress;
-    const fileName = e.detail.fileName;
-    // REMOVED: Progress toasts (too many notifications)
-    // Progress is shown in the UI components
-  };
+    // Sender done handler  
+    const senderDone = () => {
+      // REMOVED: Toast (shown in ComposeEmail)
+    };
 
-  // Sender done handler  
-  const senderDone = (e: any) => {
-    // REMOVED: Toast (shown in ComposeEmail)
-  };
+    // Receiver handlers
+    const receiverProgress = () => {
+      // REMOVED: Progress toasts (too many notifications)
+    };
 
-  // Receiver handlers
-  const receiverProgress = (e: any) => {
-    // REMOVED: Progress toasts (too many notifications)
-  };
+    const receiverDone = () => {
+      // REMOVED: Toast (shown in other components)
+    };
 
-  const receiverDone = (e: any) => {
-    // REMOVED: Toast (shown in other components)
-  };
+    const failed = (e: any) =>
+      p2pToast.failed(e.detail.fileName, e.detail.reason);
 
-  const failed = (e: any) =>
-    p2pToast.failed(e.detail.fileName, e.detail.reason);
+    // Sender events
+    window.addEventListener('p2p-progress', senderProgress);
+    window.addEventListener('p2p-delivered', senderDone);
 
-  // Sender events
-  window.addEventListener('p2p-progress', senderProgress);
-  window.addEventListener('p2p-delivered', senderDone);
-  
-  // Receiver events
-  window.addEventListener('p2p-receiver-progress', receiverProgress);
-  window.addEventListener('p2p-file-ready', receiverDone);
-  window.addEventListener('p2p-receiver-failed', failed);
+    // Receiver events
+    window.addEventListener('p2p-receiver-progress', receiverProgress);
+    window.addEventListener('p2p-file-ready', receiverDone);
+    window.addEventListener('p2p-receiver-failed', failed);
 
-  return () => {
-    window.removeEventListener('p2p-progress', senderProgress);
-    window.removeEventListener('p2p-delivered', senderDone);
-    window.removeEventListener('p2p-receiver-progress', receiverProgress);
-    window.removeEventListener('p2p-file-ready', receiverDone);
-    window.removeEventListener('p2p-receiver-failed', failed);
-  };
-}, []);
+    return () => {
+      window.removeEventListener('p2p-progress', senderProgress);
+      window.removeEventListener('p2p-delivered', senderDone);
+      window.removeEventListener('p2p-receiver-progress', receiverProgress);
+      window.removeEventListener('p2p-file-ready', receiverDone);
+      window.removeEventListener('p2p-receiver-failed', failed);
+    };
+  }, []);
 
-useEffect(() => {
-  const handler = (e: any) => {
-    const { messageId } = e.detail;
+  useEffect(() => {
+    const handler = (e: any) => {
+      const { messageId } = e.detail;
 
-    setLocalP2PFiles(prev =>
-      prev.map(f =>
-        f.messageId === messageId
-          ? { ...f, status: 'delivered', progress: 100 }
-          : f
-      )
-    );
-  };
+      setLocalP2PFiles(prev =>
+        prev.map(f =>
+          f.messageId === messageId
+            ? { ...f, status: 'delivered', progress: 100 }
+            : f
+        )
+      );
+    };
 
-  window.addEventListener('p2p-file-ready', handler);
-  return () => window.removeEventListener('p2p-file-ready', handler);
-}, []);
+    window.addEventListener('p2p-file-ready', handler);
+    return () => window.removeEventListener('p2p-file-ready', handler);
+  }, []);
 
   useEffect(() => {
     const handleFileReady = (e: Event) => {
-      const { messageId, fileName } = (e as CustomEvent).detail;
+      const { fileName } = (e as CustomEvent).detail;
       console.log('[P2P] File ready for download:', fileName);
       // You can show a toast notification here
     };
@@ -479,7 +489,7 @@ useEffect(() => {
   const hasActiveP2PTransfers = localP2PFiles.some(
     f => f.status !== 'delivered' && f.progress < 100
   );
-  
+
   // Emit a single signal when all P2P transfers finish
   useEffect(() => {
     if (
@@ -491,19 +501,15 @@ useEffect(() => {
       );
     }
   }, [localP2PFiles]);
-  
+
   /* ------------------------------------------------------------------ */
   /* DERIVED STATE                                                      */
   /* ------------------------------------------------------------------ */
-
-  const primaryRecipient =
-    normalizeEmailField(to).split(',')[0]?.trim();
 
   const canUseP2P =
     attachments.length > 0 &&
     liveRecipientStatus === 'online' &&
     p2pConnected &&
-    hasSessionKey(primaryRecipient) &&
     !sending;
 
   /* ------------------------------------------------------------------ */
@@ -524,6 +530,14 @@ useEffect(() => {
 
       {/* FORM */}
       <div className="flex-1 overflow-y-auto bg-white dark:bg-slate-900 flex flex-col">
+
+        {/* FROM */}
+        <div className="flex items-center px-4 py-1 border-b border-gray-100 dark:border-slate-800 min-h-[40px] flex-shrink-0">
+          <label className="text-sm text-gray-500 w-12 pt-0.5">From:</label>
+          <div className="flex-1 flex items-center min-w-0">
+            <span className="text-sm text-gray-900 dark:text-gray-100">{fromEmail}</span>
+          </div>
+        </div>
 
         {/* TO */}
         <div className="flex items-center px-4 py-1 border-b border-gray-100 dark:border-slate-800 min-h-[40px] flex-shrink-0">
@@ -596,68 +610,70 @@ useEffect(() => {
           />
         </div>
 
-{pendingIncoming && (
-  <div className="px-4 py-3 bg-blue-50 border-b border-blue-200 text-sm flex items-center justify-between">
-    <div>
-      <p className="font-medium">
-        Incoming file: {pendingIncoming.name}
-      </p>
-      <p className="text-xs text-gray-600">
-        {formatFileSize(pendingIncoming.size)}
-      </p>
-    </div>
+        {pendingIncoming && (
+          <div className="px-4 py-3 bg-blue-50 border-b border-blue-200 text-sm flex items-center justify-between">
+            <div>
+              <p className="font-medium">
+                Incoming file: {pendingIncoming.name}
+              </p>
+              <p className="text-xs text-gray-600">
+                {formatFileSize(pendingIncoming.size)}
+              </p>
+            </div>
 
-    <div className="flex gap-2">
-      <button
-        className="px-3 py-1 text-xs bg-green-600 text-white rounded"
-        onClick={() => {
-          window.dispatchEvent(new CustomEvent('p2p-accept-file', {
-            detail: { messageId: pendingIncoming.messageId }
-          }));
-          setPendingIncoming(null);
-        }}
-      >
-        Accept
-      </button>
+            <div className="flex gap-2">
+              <button
+                className="px-3 py-1 text-xs bg-green-600 text-white rounded"
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent('p2p-accept-file', {
+                    detail: { messageId: pendingIncoming.messageId }
+                  }));
+                  setPendingIncoming(null);
+                }}
+              >
+                Accept
+              </button>
 
-      <button
-        className="px-3 py-1 text-xs bg-red-500 text-white rounded"
-        onClick={() => {
-          window.dispatchEvent(new CustomEvent('p2p-reject-file', {
-            detail: { messageId: pendingIncoming.messageId }
-          }));
-          setPendingIncoming(null);
-        }}
-      >
-        Reject
-      </button>
-    </div>
-  </div>
-)}
+              <button
+                className="px-3 py-1 text-xs bg-red-500 text-white rounded"
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent('p2p-reject-file', {
+                    detail: { messageId: pendingIncoming.messageId }
+                  }));
+                  setPendingIncoming(null);
+                }}
+              >
+                Reject
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* ATTACHMENTS */}
         {attachments.length > 0 && (
           <div className="px-4 pb-4 pt-2 space-y-2 flex-shrink-0">
 
-{attachments.map((f, i) => {
-  const p2p = localP2PFiles.find(p => p.name === f.name);
+            {attachments.map((f, i) => {
+              const p2p = localP2PFiles.find(p => p.name === f.name);
 
-  return (
-    <AttachmentPreview
-      key={i}
-      file={f}
-      progress={p2p?.progress}
-      etaSeconds={p2p?.etaSeconds}
-      status={p2p?.status}
-      formatSize={formatFileSize}
-      onRemove={() => removeAttachment(i)}
-      onContinueInBackground={() => {
-        setShowP2PProgress(true);
-        onClose();
-      }}
-    />
-  );
-})}
+              return (
+                <AttachmentPreview
+                  key={i}
+                  file={f}
+                  progress={p2p?.progress}
+                  etaSeconds={p2p?.etaSeconds}
+                  status={p2p?.status}
+                  formatSize={formatFileSize}
+                  onRemove={() => removeAttachment(i)}
+                  onContinueInBackground={() => {
+                    setShowP2PProgress(true);
+                    onClose();
+                  }}
+                  recipientStatus={liveRecipientStatus}
+                  isP2P={!!canUseP2P}
+                />
+              );
+            })}
           </div>
         )}
       </div>
@@ -754,18 +770,7 @@ useEffect(() => {
           {/* Separator for P2P */}
           <div className="h-6 w-px bg-gray-300 dark:bg-slate-700 mx-1 ml-2"></div>
 
-          {/* P2P Toggle */}
-          <button
-            disabled={!canUseP2P}
-            onClick={onP2PSend}
-            className={`ml-1 p-2 rounded transition-colors ${canUseP2P
-              ? 'text-green-600 hover:bg-green-50 dark:text-green-500 dark:hover:bg-slate-800'
-              : 'text-gray-400 cursor-not-allowed opacity-50'
-              }`}
-            title="P2P Transfer"
-          >
-            <Share2 className="w-5 h-5" />
-          </button>
+
         </div>
 
         {/* ACTIONS */}
@@ -777,26 +782,19 @@ useEffect(() => {
             <Trash2 className="w-5 h-5" />
           </button>
 
-          {canUseP2P && (
-            <button
-              disabled={sending}
-              onClick={onP2PSend}
-              className="px-4 py-2 rounded-md shadow-sm text-white text-md font-medium bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
-            >
-              <span>Via P2P</span>
-              {!sending && <Share2 className="w-3.5 h-3.5 ml-1" />}
-            </button>
-          )}
-
           <button
             disabled={sending || !to.trim() || hasActiveP2PTransfers}
-onClick={() => {
-  if (hasActiveP2PTransfers) {
-    alert('Please wait until P2P transfer completes.');
-    return;
-  }
-  onRegularSend();
-}}
+            onClick={() => {
+              if (hasActiveP2PTransfers) {
+                alert('Please wait until P2P transfer completes.');
+                return;
+              }
+              if (canUseP2P) {
+                onP2PSend();
+              } else {
+                onRegularSend();
+              }
+            }}
             className="px-6 py-2 rounded-md shadow-sm text-white text-md font-medium bg-[#1a73e8] hover:bg-[#1557b0] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
           >
             <span>{sending ? 'Sending...' : 'Send'}</span>
@@ -805,8 +803,8 @@ onClick={() => {
         </div>
       </div>
 
-      {/* P2P PROGRESS */}
-      <P2PTransferProgress
+      {/* P2P PROGRESS - Removed as per user request to hide dialog box on sender side */}
+      {/* <P2PTransferProgress
         isOpen={showP2PProgress}
         onClose={() => {
           if (p2pFiles.every(f => f.status === 'delivered')) {
@@ -826,7 +824,7 @@ onClick={() => {
         mode="sender"
         recipientEmail={recipientEmail}
         recipients={recipientEmail.includes(',') ? recipientEmail.split(',').map(e => e.trim()) : undefined}
-      />
+      /> */}
 
       {/* DRIVE MODAL */}
       <AttachFromDriveModal

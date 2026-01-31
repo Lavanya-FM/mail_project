@@ -1,0 +1,95 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "AttachmentManifest",
+    "description": "Manifest for a P2P attachment transfer, containing metadata and chunk verification info.",
+    "type": "object",
+    "properties": {
+        "attachment_id": {
+            "type": "string",
+            "description": "Unique identifier for the attachment"
+        },
+        "message_id": {
+            "type": "string",
+            "description": "ID of the email message this attachment belongs to"
+        },
+        "total_size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total size of the file in bytes"
+        },
+        "chunk_size": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Size of each chunk in bytes"
+        },
+        "total_chunks": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Total number of chunks"
+        },
+        "chunk_hashes": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "Array of hashes (e.g. SHA-256) for each chunk in order"
+        },
+        "encryption_meta": {
+            "type": "object",
+            "description": "Encryption parameters used for the payload",
+            "required": [
+                "algorithm",
+                "iv"
+            ],
+            "properties": {
+                "algorithm": {
+                    "type": "string"
+                },
+                "iv": {
+                    "type": "string"
+                },
+                "key_hash": {
+                    "type": "string"
+                }
+            },
+            "additionalProperties": true
+        },
+        "transfer_policy": {
+            "type": "object",
+            "description": "Policy for retry and timeout handling",
+            "required": [
+                "retries",
+                "timeout"
+            ],
+            "properties": {
+                "retries": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "timeout": {
+                    "type": "integer",
+                    "minimum": 0
+                }
+            },
+            "additionalProperties": true
+        },
+        "delivery_mode": {
+            "type": "string",
+            "enum": [
+                "P2P"
+            ],
+            "default": "P2P"
+        }
+    },
+    "required": [
+        "attachment_id",
+        "message_id",
+        "total_size",
+        "chunk_size",
+        "total_chunks",
+        "chunk_hashes",
+        "encryption_meta",
+        "transfer_policy",
+        "delivery_mode"
+    ]
+}
