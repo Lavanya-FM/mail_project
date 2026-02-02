@@ -146,6 +146,18 @@ export async function getFile(messageId: string) {
   });
 }
 
+export async function clearChunks(messageId: string) {
+  const d = await openDB();
+  const tx = d.transaction('chunks', 'readwrite');
+  const store = tx.objectStore('chunks');
+  const range = IDBKeyRange.bound([messageId, 0], [messageId, Infinity]);
+  store.delete(range);
+  return new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 export async function deleteTransferData(messageId: string) {
   const d = await openDB();
   const tx = d.transaction(['chunks', 'meta', 'files', 'pending_transfers'], 'readwrite');
@@ -160,10 +172,14 @@ export async function deleteTransferData(messageId: string) {
 
   // Also try to delete from pending transfers by iterating (compositeId starts with messageId)
   const pendingStore = tx.objectStore('pending_transfers');
+  // Specifically delete the sender info if it exists
+  pendingStore.delete(`sender-info-${messageId}`);
+
+  // Also iterate for others (receiver metadata using compositeId)
   pendingStore.openCursor().onsuccess = (e: any) => {
     const cursor = e.target.result;
     if (cursor) {
-      if (cursor.key.startsWith(messageId)) {
+      if (cursor.key.includes(messageId)) {
         cursor.delete();
       }
       cursor.continue();

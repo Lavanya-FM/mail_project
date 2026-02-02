@@ -377,8 +377,8 @@ export default function P2PTransferProgress({
                           </div>
                         )}
                         {currentState.status === 'pending' && (
-                          <div className="px-2 py-1 bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-400 rounded-full text-xs font-medium">
-                            Pending
+                          <div className="px-2 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded-full text-xs font-medium">
+                            {mode === 'sender' ? 'Waiting for Recipient' : 'Waiting for Sender'}
                           </div>
                         )}
                         {currentState.status === 'failed' && (

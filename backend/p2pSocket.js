@@ -20,18 +20,48 @@ function initP2PSocket(server) {
       }
 
       // 🔐 REGISTER USER
-      if (msg.type === 'register' && msg.from) {
-        email = msg.from;
+      // 🔐 REGISTER USER
+      if (msg.type === 'register' && (msg.email || msg.from)) {
+        const rawEmail = msg.email || msg.from;
+        email = rawEmail.trim().toLowerCase();
+
+        console.log(`[P2P SERVER] Registering ${email}`);
+
+        // 🚨 ENFORCE: One socket per email (close old connection if exists)
+        const existingSocket = clientsByEmail.get(email);
+        if (existingSocket && existingSocket !== ws) {
+          console.log(`[P2P SERVER] Closing old connection for ${email}`);
+          existingSocket.close();
+          clientsByEmail.delete(email);
+        }
+
+        // Send current online peers to this new user FIRST (before adding them)
+        const currentOnline = Array.from(clientsByEmail.keys());
+        ws.send(JSON.stringify({
+          type: 'online-peers',
+          emails: currentOnline
+        }));
+        console.log(`[P2P SERVER] Sent current snapshot to ${email}:`, currentOnline);
+
+        // Now add this user
         clientsByEmail.set(email, ws);
 
         // ✅ ACKNOWLEDGE REGISTRATION
-        ws.send(JSON.stringify({ type: 'registered' }));
+        ws.send(JSON.stringify({
+          type: 'registered',
+          email: email
+        }));
 
-        // 🔔 Notify others
-        broadcast({
-          type: 'peer-online',
-          from: email
-        }, email);
+        // 🔔 BROADCAST FULL SNAPSHOT TO EVERYONE
+        broadcastOnlinePeers();
+
+        // 🔔 ALSO notify others individually
+        const peerOnlineMsg = JSON.stringify({ type: 'peer-online', email: email });
+        for (const [otherEmail, client] of clientsByEmail.entries()) {
+          if (otherEmail !== email && client.readyState === WebSocket.OPEN) {
+            client.send(peerOnlineMsg);
+          }
+        }
       }
 
       // 🏠 ROOM MANAGEMENT
@@ -72,6 +102,16 @@ function initP2PSocket(server) {
         }, email);
       }
 
+      // 🔄 MANUAL PRESENCE REQUEST
+      if (msg.type === 'request-presence' && email) {
+        console.log(`[P2P SERVER] ${email} requested presence update`);
+        const emails = Array.from(clientsByEmail.keys());
+        ws.send(JSON.stringify({
+          type: 'online-peers',
+          emails: emails
+        }));
+      }
+
       // 🔁 ROUTE ANY DIRECTED MESSAGE (Secure, Call, File Chunk)
       if (msg.to) {
         const recipients = Array.isArray(msg.to) ? msg.to : [msg.to];
@@ -87,15 +127,24 @@ function initP2PSocket(server) {
     ws.on('close', () => {
       if (!email) return;
 
+      console.log(`[P2P SERVER] Disconnecting ${email}`);
+
       clientsByEmail.delete(email);
 
       // Leave all rooms
       joinedRooms.forEach(roomId => leaveRoom(roomId, email));
 
-      broadcast({
-        type: 'peer-offline',
-        from: email
-      }, email);
+      // 🔔 BROADCAST FULL SNAPSHOT TO EVERYONE
+      broadcastOnlinePeers();
+
+      // 🔔 ALSO notify others individually
+      const peerOfflineMsg = JSON.stringify({ type: 'peer-offline', email: email });
+      for (const client of clientsByEmail.values()) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(peerOfflineMsg);
+        }
+      }
+      console.log(`[P2P SERVER] Notified others that ${email} went offline`);
     });
 
     function leaveRoom(roomId, email) {
@@ -114,26 +163,46 @@ function initP2PSocket(server) {
     }
   });
 
-  function broadcast(message, exceptEmail) {
-    for (const [email, client] of clientsByEmail.entries()) {
-      if (email !== exceptEmail && client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify(message));
+  function broadcastOnlinePeers() {
+    const emails = Array.from(clientsByEmail.keys());
+    console.log(`[P2P SERVER] Broadcasting online peers snapshot:`, emails);
+
+    const message = JSON.stringify({
+      type: 'online-peers',
+      emails: emails
+    });
+
+    let sentCount = 0;
+    for (const client of clientsByEmail.values()) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+        sentCount++;
       }
     }
+    console.log(`[P2P SERVER] Sent presence snapshot to ${sentCount} clients`);
   }
 
   function broadcastToRoom(roomId, message, exceptEmail) {
     if (!rooms.has(roomId)) return;
     const room = rooms.get(roomId);
+    const jsonMsg = JSON.stringify(message);
     for (const memberEmail of room) {
       if (memberEmail !== exceptEmail) {
         const client = clientsByEmail.get(memberEmail);
         if (client && client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify(message));
+          client.send(jsonMsg);
         }
       }
     }
   }
+
+  // 🔄 PERIODIC PRESENCE BROADCAST (every 30 seconds)
+  setInterval(() => {
+    if (clientsByEmail.size > 0) {
+      console.log('[P2P SERVER] Periodic presence broadcast');
+      broadcastOnlinePeers();
+    }
+  }, 30000);
 }
 
 module.exports = { initP2PSocket };

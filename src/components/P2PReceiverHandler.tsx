@@ -42,8 +42,8 @@ export default function P2PReceiverHandler() {
           name: fileName,
           size: size,
           progress: 0,
-          status: 'pending',
-          messageId: messageId // Important: Store messageId in file object for matching
+          status: 'pending' as const,
+          messageId: messageId
         } as any]
       });
 
@@ -170,6 +170,31 @@ export default function P2PReceiverHandler() {
     window.addEventListener('p2p-download-file', handleDownloadFile as EventListener);
     window.addEventListener('p2p-file-ready', handleFileReceived as EventListener);
     window.addEventListener('p2p-receiver-progress', handleReceiverProgress as EventListener);
+
+    // 🚀 NEW: Check for existing/rehydrated transfers on mount
+    const existingTransfers = (p2pService as any).receiverTransfers as Map<string, any>;
+    if (existingTransfers && existingTransfers.size > 0) {
+      // Pick the first incomplete one to show
+      for (const [messageId, rt] of existingTransfers.entries()) {
+        if (rt.status !== 'COMPLETED') {
+          setIncomingTransfer({
+            messageId,
+            senderEmail: (p2pService as any).transferSenders.get(messageId) || 'Unknown Sender',
+            subject: 'File Transfer',
+            body: '',
+            files: [{
+              name: rt.fileName,
+              size: rt.size || (rt.totalChunks * 1024 * 1024), // Approx if unknown
+              progress: Math.round((rt.receivedChunks.size / rt.totalChunks) * 100),
+              status: 'pending' as const,
+              messageId: messageId
+            }]
+          });
+          setShowProgress(true);
+          break;
+        }
+      }
+    }
 
     return () => {
       window.removeEventListener('p2p-incoming-file', handleIncomingTransfer as EventListener);

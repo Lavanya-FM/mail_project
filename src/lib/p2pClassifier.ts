@@ -1,4 +1,4 @@
-import { MAX_EMAIL_ATTACHMENT_BYTES } from '../constants/attachmentLimits';
+
 
 export type DeliveryMode = 'EMAIL' | 'P2P';
 
@@ -27,23 +27,12 @@ export function classifyAttachments(
             };
         }
 
-        // If file is larger than threshold, use P2P
-        if (file.size > MAX_EMAIL_ATTACHMENT_BYTES) {
-            return {
-                filename: file.name,
-                size: file.size,
-                mode: 'P2P',
-                reason: 'File size exceeds SMTP limit'
-            };
-        }
-
-        // Default to P2P if capable, to save server resources (Green Mail policy)
-        // Alternatively, user could chose. But following "Decide: EMAIL vs P2P" requirement.
+        // Default to P2P if capable, regardless of size (User preference/Green Mail policy)
         return {
             filename: file.name,
             size: file.size,
             mode: 'P2P',
-            reason: 'Recipient capable and preferred for efficiency'
+            reason: 'P2P Preferred'
         };
     });
 }

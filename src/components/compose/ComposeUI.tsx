@@ -26,7 +26,7 @@ const AttachmentPreview = ({
   onRemove: () => void;
   formatSize: (n: number) => string;
   onContinueInBackground: () => void;
-  recipientStatus?: 'online' | 'offline' | 'unknown';
+  recipientStatus?: 'UNKNOWN' | 'CONNECTING' | 'ONLINE' | 'OFFLINE';
   isP2P?: boolean;
 }) => {
 
@@ -57,7 +57,10 @@ const AttachmentPreview = ({
     if (status === 'failed') return '✗ Failed';
     if (status === 'paused') return '⏸ Paused';
     if (progress !== undefined && progress > 0) return `${progress}% sending`;
-    if (status === 'pending') return 'Starting...';
+    if (status === 'pending') {
+      if (recipientStatus === 'OFFLINE') return 'Waiting for recipient...';
+      return 'Starting...';
+    }
     return 'Ready';
   };
 
@@ -108,9 +111,10 @@ const AttachmentPreview = ({
               <span className="text-blue-600 dark:text-blue-400 font-medium">
                 Delivery: Direct (P2P)
               </span>
-              <span className={`${recipientStatus === 'online' ? 'text-green-600 dark:text-green-400' : 'text-gray-500'
-                }`}>
-                {recipientStatus === 'online' ? 'Recipient: Online' : 'Will send when recipient is online'}
+              <span className={`${recipientStatus === 'ONLINE' ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
+                {recipientStatus === 'ONLINE'
+                  ? 'Recipient is online'
+                  : 'Will send automatically when recipient is online'}
               </span>
             </div>
           ) : (
@@ -216,15 +220,15 @@ export interface ComposeUIProps {
   sending: boolean;
   draftStatus?: 'idle' | 'saving' | 'saved';
 
-  liveRecipientStatus: 'online' | 'offline' | 'unknown';
+  liveRecipientStatus: 'UNKNOWN' | 'CONNECTING' | 'ONLINE' | 'OFFLINE';
 
   attachments: File[];
   isImageFile?: (f: File) => boolean;
   removeAttachment: (i: number) => void;
   formatFileSize: (n: number) => string;
 
-  onRegularSend: () => void;
   onP2PSend: () => void;
+  onRegularSend: () => void;
 
   onClose: () => void;
   onLocalAttach: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -238,7 +242,6 @@ export interface ComposeUIProps {
 
   fileInputRef: React.RefObject<HTMLInputElement>;
 
-  p2pConnected: boolean;
   canUseP2P?: boolean | string;
   hasLargeAttachments?: boolean;
   hasSessionKey: (email: string) => boolean;
@@ -258,6 +261,7 @@ export interface ComposeUIProps {
   recipientEmail: string;
   deliveryMode?: 'P2P' | 'EMAIL';
   fromEmail?: string;
+  p2pConnected: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -282,7 +286,6 @@ export default function ComposeUI(props: ComposeUIProps) {
     attachments,
     removeAttachment,
     formatFileSize,
-    onRegularSend,
     onP2PSend,
     onClose,
     onLocalAttach,
@@ -293,7 +296,6 @@ export default function ComposeUI(props: ComposeUIProps) {
     onBodyInput,
     onBodyKeyDown,
     fileInputRef,
-    p2pConnected,
     p2pFiles,
     setShowP2PProgress,
     fromEmail,
@@ -486,9 +488,6 @@ export default function ComposeUI(props: ComposeUIProps) {
     }
   };
 
-  const hasActiveP2PTransfers = localP2PFiles.some(
-    f => f.status !== 'delivered' && f.progress < 100
-  );
 
   // Emit a single signal when all P2P transfers finish
   useEffect(() => {
@@ -508,8 +507,7 @@ export default function ComposeUI(props: ComposeUIProps) {
 
   const canUseP2P =
     attachments.length > 0 &&
-    liveRecipientStatus === 'online' &&
-    p2pConnected &&
+    !!to.trim() &&
     !sending;
 
   /* ------------------------------------------------------------------ */
@@ -550,14 +548,20 @@ export default function ComposeUI(props: ComposeUIProps) {
               onChange={(e) => setTo(e.target.value)}
             />
             {/* Recipient Status Badge */}
-            {to.trim() && liveRecipientStatus !== 'unknown' && (
+            {to.trim() && liveRecipientStatus !== 'UNKNOWN' && (
               <div className={`
                 flex items-center px-2 py-0.5 rounded-full text-xs font-medium mr-2
-                ${liveRecipientStatus === 'online'
+                ${liveRecipientStatus === 'ONLINE'
                   ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-                  : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}
+                  : liveRecipientStatus === 'OFFLINE'
+                    ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                    : 'bg-gray-100 text-gray-700 dark:bg-slate-700 dark:text-gray-400'}
               `}>
-                {liveRecipientStatus === 'online' ? 'Online' : 'Offline'}
+                {liveRecipientStatus === 'ONLINE'
+                  ? '🟢 Online'
+                  : liveRecipientStatus === 'OFFLINE'
+                    ? '🔴 Offline'
+                    : 'Checking...'}
               </div>
             )}
           </div>
@@ -783,17 +787,10 @@ export default function ComposeUI(props: ComposeUIProps) {
           </button>
 
           <button
-            disabled={sending || !to.trim() || hasActiveP2PTransfers}
+            disabled={sending || !to.trim()}
             onClick={() => {
-              if (hasActiveP2PTransfers) {
-                alert('Please wait until P2P transfer completes.');
-                return;
-              }
-              if (canUseP2P) {
-                onP2PSend();
-              } else {
-                onRegularSend();
-              }
+              // Always try Send (unified handler in ComposeEmail)
+              onP2PSend();
             }}
             className="px-6 py-2 rounded-md shadow-sm text-white text-md font-medium bg-[#1a73e8] hover:bg-[#1557b0] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
           >

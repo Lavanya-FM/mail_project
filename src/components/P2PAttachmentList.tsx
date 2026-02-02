@@ -25,13 +25,11 @@ interface P2PAttachmentListProps {
 
 export default function P2PAttachmentList({
   attachments,
-  senderEmail,
-  emailId,
   mode
 }: P2PAttachmentListProps) {
 
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
-  const [downloadStatus, setDownloadStatus] = useState<Record<string, 'idle' | 'downloading' | 'complete' | 'failed'>>({});
+  const [downloadStatus, setDownloadStatus] = useState<Record<string, 'idle' | 'downloading' | 'complete' | 'failed' | 'waiting'>>({});
   const [previewFile, setPreviewFile] = useState<{ blob: Blob; name: string; mimeType: string } | null>(null);
   const [showPreview, setShowPreview] = useState(false);
 
@@ -49,8 +47,13 @@ export default function P2PAttachmentList({
     };
 
     const handleError = (e: CustomEvent) => {
-      const { messageId } = e.detail;
-      setDownloadStatus(prev => ({ ...prev, [messageId]: 'failed' }));
+      const { messageId, code } = e.detail;
+      if (code === 'SENDER_OFFLINE') {
+        setDownloadStatus(prev => ({ ...prev, [messageId]: 'waiting' }));
+        // toast.success('Added to queue. Will start when sender is online.');
+      } else {
+        setDownloadStatus(prev => ({ ...prev, [messageId]: 'failed' }));
+      }
     };
 
     const handleReceiverProgress = (e: CustomEvent) => {
@@ -224,6 +227,13 @@ export default function P2PAttachmentList({
         return <CheckCircle className="w-5 h-5 text-green-500" />;
       case 'failed':
         return <XCircle className="w-5 h-5 text-red-500" />;
+      case 'waiting':
+        return (
+          <div className="flex items-center gap-2" title="Waiting for sender to come online">
+            <Loader className="w-5 h-5 text-yellow-500 animate-pulse" />
+            <span className="text-xs text-yellow-600">Waiting...</span>
+          </div>
+        );
       default:
         return null;
     }
@@ -244,6 +254,7 @@ export default function P2PAttachmentList({
     if (status === 'downloading') return 'Downloading...';
     if (status === 'complete') return 'Downloaded';
     if (status === 'failed') return 'Download failed';
+    if (status === 'waiting') return 'Waiting for sender online...';
 
     return 'Available via P2P';
   };
