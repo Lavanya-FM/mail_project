@@ -30,6 +30,16 @@ app.use((req, res, next) => {
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Specific 404 for uploads to prevent SPA fallback
+app.get('/p2p-sw.js', (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/p2p-sw.js'), {
+    headers: {
+      'Content-Type': 'application/javascript',
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Clear-Site-Data': '"cache", "storage"'
+    }
+  });
+});
+
 app.use('/uploads', (req, res) => {
   res.status(404).json({ error: 'File not found' });
 });
@@ -70,7 +80,19 @@ app.get(/(.*)/, (req, res) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   res.setHeader('Surrogate-Control', 'no-store');
-  res.sendFile(path.join(clientBuildPath, 'index.html'));
+
+  // Read index.html
+  const indexPath = path.join(clientBuildPath, 'index.html');
+  try {
+    const html = require('fs').readFileSync(indexPath, 'utf8');
+
+    // Nuke the cache
+    res.setHeader('Clear-Site-Data', '"cache", "storage", "serviceWorkers"');
+
+    res.send(html);
+  } catch (err) {
+    res.status(500).send('Error loading index.html');
+  }
 });
 
 // -------------------------

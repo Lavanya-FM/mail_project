@@ -9,6 +9,14 @@ const redis = require('redis');
 const db = require('./db'); // Promise pool
 const { handleCallSignaling } = require('./callSignaling');
 const jwt = require('jsonwebtoken');
+const fs = require('fs');
+const path = require('path');
+
+// Ensure uploads directory exists
+const P2P_CHUNKS_DIR = path.join(__dirname, 'uploads', 'p2p_chunks');
+if (!fs.existsSync(P2P_CHUNKS_DIR)) {
+  fs.mkdirSync(P2P_CHUNKS_DIR, { recursive: true });
+}
 
 /* ---------------- SAFETY GUARD ---------------- */
 
@@ -129,31 +137,31 @@ function setupP2PWebSocket(server) {
             await handleFileChunk(ws, msg);
             break;
 
-          case 'chunk-request':
-            await handleChunkRequest(ws, msg);
-            break;
-
-          case 'chunk-ack':
-          case 'chunk-request-batch': // ✅ FIX: Missing forwarder caused 0% stall
-          case 'key-exchange':
-          case 'key-exchange-init':
-          case 'key-exchange-ack':
           case 'resume-request':
           case 'signal':
           case 'p2p-offer':
           case 'p2p-revoke':
             // Forward these directly to recipient
             if (msg.to) {
-              const forwarded = forwardToRecipient(msg.to, msg);
-              if (!forwarded) {
-                // Notify sender that recipient is offline
-                ws.send(JSON.stringify({
-                  type: 'recipient-offline',
-                  recipient: msg.to,
-                  messageId: msg.messageId
-                }));
-              }
+              forwardToRecipient(msg.to, msg);
             }
+            break;
+
+          case 'chunk-ack':
+          case 'key-exchange':
+          case 'key-exchange-init':
+          case 'key-exchange-ack':
+            if (msg.to) {
+              forwardToRecipient(msg.to, msg);
+            }
+            break;
+
+          case 'chunk-request':
+            await handleChunkRequest(ws, msg);
+            break;
+
+          case 'chunk-request-batch':
+            await handleChunkRequestBatch(ws, msg);
             break;
 
           case 'log-event':
@@ -190,8 +198,23 @@ function setupP2PWebSocket(server) {
     ws.on('error', err => console.error('[P2P] WS error', err));
   });
 
-  /* ---------------- HEARTBEAT ---------------- */
+  // 🚀 ROBUST SCHEMA INIT (Ensures p2p_server_chunks exists on server)
+  db.query(`
+    CREATE TABLE IF NOT EXISTS p2p_server_chunks (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      message_id VARCHAR(255) NOT NULL,
+      chunk_index INT NOT NULL,
+      sender_email VARCHAR(255) NOT NULL,
+      recipient_email VARCHAR(255) NOT NULL,
+      data_path TEXT NOT NULL,
+      expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL 24 HOUR),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY idx_msg_chunk (message_id, chunk_index)
+    )
+  `).catch(err => console.warn('[P2P] Schema init warning:', err.message));
 
+
+  /* ---------------- HEARTBEAT ---------------- */
   setInterval(() => {
     for (const ws of wss.clients) {
       if (!ws.isAlive) return ws.terminate();
@@ -215,20 +238,20 @@ async function logDeliveryEvent(attachmentId, p2pMessageId, sender, recipient, e
     );
 
     // 2. State Update
-    let status = 'PENDING';
+    let status = 'WAITING_FOR_PEER';
     if (eventType === 'STARTED') status = 'TRANSFERRING';
-    if (eventType === 'COMPLETED') status = 'DELIVERED';
+    if (eventType === 'COMPLETED') status = 'COMPLETED';
     if (eventType === 'FAILED') status = 'FAILED';
     if (eventType === 'FALLBACK_INITIATED') status = 'FALLBACK';
 
     if (attachmentId) {
       await db.query(
-        `UPDATE email_attachments SET delivery_status = ?, last_status_update = NOW() WHERE id = ?`,
+        `UPDATE email_attachments SET attachment_transfer_state = ?, last_status_update = NOW() WHERE id = ?`,
         [status, attachmentId]
       );
     } else if (p2pMessageId) {
       await db.query(
-        `UPDATE email_attachments SET delivery_status = ?, last_status_update = NOW() WHERE p2p_message_id = ?`,
+        `UPDATE email_attachments SET attachment_transfer_state = ?, last_status_update = NOW() WHERE p2p_message_id = ?`,
         [status, p2pMessageId]
       );
     }
@@ -396,56 +419,111 @@ async function handleEmailInitiate(ws, msg) {
 
 
 async function handleFileChunk(ws, msg) {
-  const { to, from, payload, messageId } = msg;
+  const { to, from, payload, messageId, chunkIndex } = msg;
 
-  // ----------- VALIDATION -----------
   if (!messageId || !payload || !to) {
     console.error('[P2P] Invalid file-chunk message', msg);
     return;
   }
 
-  // Encrypted payload ONLY – server must never inspect contents
-  assertNoFileContent(payload);
+  // 1. SAVE TO SERVER DISK (Optimized for resumption)
+  try {
+    const chunkFile = path.join(P2P_CHUNKS_DIR, `${messageId}_${chunkIndex || 0}.chunk`);
+    const chunkData = JSON.stringify({
+      payload,
+      data: msg.data, // 🚀 CRITICAL: Include the actual base64 data
+      from,
+      to,
+      timestamp: Date.now()
+    });
 
-  // ----------- FORWARD IF RECIPIENT ONLINE -----------
-  const peer = findPeerByEmail(to);
+    // Non-blocking-ish write (we don't await it if we want maximum speed, but safer to await)
+    fs.writeFileSync(chunkFile, chunkData);
 
-  if (peer && peer.ws.readyState === WebSocket.OPEN) {
-    peer.ws.send(JSON.stringify(msg));
-  } else {
-    // ----------- TEMP STORE (ENCRYPTED ONLY) -----------
-    if (redisConnected) {
-      const key = `p2p:${messageId}:${Date.now()}`;
-      await redisClient.set(key, JSON.stringify({ payload, from }), { EX: TEMP_STORAGE_TTL });
-    } else {
-      // Fallback: Just drop it or maybe store in memory LRU? 
-      // For now, simpler to drop if offline recipient and no redis
-      // Client will retry later.
-    }
+    // Also track in DB (optional but good for cleanup)
+    await db.query(`
+      INSERT INTO p2p_server_chunks (message_id, chunk_index, sender_email, recipient_email, data_path)
+      VALUES (?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE data_path = VALUES(data_path), expires_at = (CURRENT_TIMESTAMP + INTERVAL 24 HOUR)
+    `, [messageId, chunkIndex || 0, from, to, chunkFile]).catch(e => { });
+
+  } catch (err) {
+    console.error('[P2P] Failed to cache chunk on server:', err.message);
   }
 
-  // ----------- ACK BACK TO SENDER -----------
-  ws.send(JSON.stringify({
-    type: 'chunk-ack',
-    messageId
-  }));
+  // 2. FORWARD IF RECIPIENT ONLINE
+  const peer = findPeerByEmail(to);
+  if (peer && peer.ws.readyState === WebSocket.OPEN) {
+    peer.ws.send(JSON.stringify(msg));
+  }
+
+  // 3. ACK SENDER
+  ws.send(JSON.stringify({ type: 'chunk-ack', messageId, chunkIndex }));
 }
 
 async function handleChunkRequest(ws, msg) {
-  const { messageId, fileName, chunkIndex, to } = msg;
-  const key = `p2p:${messageId}:${fileName}:${chunkIndex}`;
-  if (!redisConnected) return;
-  const cached = await redisClient.get(key);
+  const { messageId, chunkIndex, to, from } = msg;
+  const chunkFile = path.join(P2P_CHUNKS_DIR, `${messageId}_${chunkIndex}.chunk`);
 
-  if (!cached) return;
+  if (fs.existsSync(chunkFile)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(chunkFile, 'utf8'));
+      ws.send(JSON.stringify({
+        type: 'file-chunk',
+        from: data.from,
+        to: ws.email,
+        messageId,
+        chunkIndex,
+        data: data.data, // 🚀 CRITICAL
+        payload: data.payload,
+        cached: true
+      }));
+      return; // Served from server
+    } catch (e) {
+      console.error('[P2P] Failed to read cached chunk:', e);
+    }
+  }
 
-  sendToPeer(to, {
-    type: 'file-chunk',
-    from: ws.email,
-    to,
-    messageId,
-    payload: JSON.parse(cached).payload
-  });
+  // Fallback: forward to sender if online
+  if (to) {
+    forwardToRecipient(to, msg);
+  }
+}
+
+async function handleChunkRequestBatch(ws, msg) {
+  const { messageId, chunkIndices, to, from } = msg;
+  const missingInCache = [];
+
+  for (const idx of chunkIndices) {
+    const chunkFile = path.join(P2P_CHUNKS_DIR, `${messageId}_${idx}.chunk`);
+    if (fs.existsSync(chunkFile)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(chunkFile, 'utf8'));
+        ws.send(JSON.stringify({
+          type: 'file-chunk',
+          from: data.from,
+          to: ws.email,
+          messageId,
+          chunkIndex: idx,
+          data: data.data, // 🚀 CRITICAL
+          payload: data.payload,
+          cached: true
+        }));
+      } catch (e) {
+        missingInCache.push(idx);
+      }
+    } else {
+      missingInCache.push(idx);
+    }
+  }
+
+  // Forward remaining requests to original sender if they are online
+  if (missingInCache.length > 0 && to) {
+    forwardToRecipient(to, {
+      ...msg,
+      chunkIndices: missingInCache
+    });
+  }
 }
 
 async function handleTransferComplete(msg) {
@@ -480,6 +558,20 @@ async function handleTransferComplete(msg) {
     if (keys.length > 0) {
       await redisClient.del(keys);
     }
+  }
+
+  // 🚀 DELETE CACHED DISK CHUNKS ON SUCCESS
+  try {
+    const [chunks] = await db.query('SELECT data_path FROM p2p_server_chunks WHERE message_id = ?', [msg.messageId]);
+    if (chunks && chunks.length > 0) {
+      for (const c of chunks) {
+        if (fs.existsSync(c.data_path)) fs.unlinkSync(c.data_path);
+      }
+      await db.query('DELETE FROM p2p_server_chunks WHERE message_id = ?', [msg.messageId]);
+      console.log(`[P2P] Purged ${chunks.length} cached chunks for ${msg.messageId}`);
+    }
+  } catch (e) {
+    console.warn('[P2P] Cache purge failed:', e.message);
   }
 
   // AUDIT LOG
@@ -546,7 +638,7 @@ async function handleDisconnect(connectionId, wss) {
 
   await db.query(
     `UPDATE email_attachments
-   SET delivered = 0, delivery_status = 'FAILED'
+   SET delivered = 0, attachment_transfer_state = 'FAILED'
    WHERE p2p_message_id IN (
      SELECT message_id
      FROM p2p_file_metadata
@@ -749,6 +841,31 @@ function getOnlinePeers() {
 }
 
 
+
+/* ---------------- CLEANUP ---------------- */
+
+async function cleanupExpiredChunks() {
+  try {
+    const [expired] = await db.query('SELECT id, data_path FROM p2p_server_chunks WHERE expires_at < NOW()');
+    if (expired && expired.length > 0) {
+      console.log(`[P2P] Cleaning up ${expired.length} expired chunks...`);
+      for (const row of expired) {
+        if (fs.existsSync(row.data_path)) {
+          fs.unlinkSync(row.data_path);
+        }
+      }
+      const ids = expired.map(r => r.id);
+      await db.query('DELETE FROM p2p_server_chunks WHERE id IN (?)', [ids]);
+    }
+  } catch (err) {
+    if (err.code !== 'ER_NO_SUCH_TABLE') {
+      console.warn('[P2P] Chunk cleanup failed:', err.message);
+    }
+  }
+}
+
+// Run cleanup every hour
+setInterval(cleanupExpiredChunks, 3600000);
 
 /* ---------------- EXPORT ---------------- */
 

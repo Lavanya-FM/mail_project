@@ -93,7 +93,7 @@ export default function P2PTransferManager() {
                 const task = next.get(messageId);
                 if (task) {
                     task.progress = percentage;
-                    if (status === 'complete') task.status = 'complete';
+                    if (status === 'complete' || status === 'COMPLETED') task.status = 'complete';
                 } else if (percentage > 0 && percentage < 100) {
                     // Discovery: create task if we didn't know about it
                     next.set(messageId, {

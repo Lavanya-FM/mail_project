@@ -518,9 +518,9 @@ export default function CallsView() {
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-10">
-                        {contacts
-                            .filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()) || c.email.toLowerCase().includes(searchQuery.toLowerCase()))
-                            .map(contact => (
+                        {(Array.isArray(contacts) ? contacts : Object.values(contacts || {}) as Contact[])
+                            .filter((c) => c.name.toLowerCase().includes(searchQuery.toLowerCase()) || c.email.toLowerCase().includes(searchQuery.toLowerCase()))
+                            .map((contact) => (
                                 <div key={contact.id} className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-gray-200 dark:border-slate-800 hover:border-blue-500 transition-all group relative overflow-hidden">
                                     <div className="flex items-center gap-4">
                                         <div className="relative">
@@ -554,7 +554,7 @@ export default function CallsView() {
             <div className="flex items-center justify-between mb-6">
                 <div>
                     <h2 className="text-2xl font-semibold text-gray-900 dark:text-white">Notifications</h2>
-                    <p className="text-sm text-gray-500">{notifications.filter(n => !n.read).length} unread alerts</p>
+                    <p className="text-sm text-gray-500">{(Array.isArray(notifications) ? notifications : Object.values(notifications || {}) as Notification[]).filter((n) => !n.read).length} unread alerts</p>
                 </div>
                 <div className="flex gap-2">
                     <button onClick={markAllAsRead} className="px-4 py-2 bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-xl text-xs font-bold hover:bg-gray-50 transition">Mark all read</button>
@@ -686,13 +686,13 @@ export default function CallsView() {
                         <nav className="space-y-1">
                             <NavItem icon={Users} label="Contacts & Direct Call" active={activeTab === 'contacts'} onClick={() => setActiveTab('contacts')} />
                             <NavItem icon={Clock} label="Call History" active={activeTab === 'history'} onClick={() => setActiveTab('history')} />
-                            <NavItem icon={Bell} label="Notifications" active={activeTab === 'notifications'} badge={notifications.filter(n => !n.read).length} onClick={() => setActiveTab('notifications')} />
+                            <NavItem icon={Bell} label="Notifications" active={activeTab === 'notifications'} badge={(Array.isArray(notifications) ? notifications : Object.values(notifications || {}) as Notification[]).filter((n) => !n.read).length} onClick={() => setActiveTab('notifications')} />
                             <NavItem icon={Settings} label="Settings" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
                         </nav>
                         <div className="mt-auto p-4 bg-blue-50 dark:bg-blue-900/10 rounded-2xl border border-blue-100 dark:border-blue-900/30">
                             <div className="flex items-center gap-2 mb-3"><div className="w-2 h-2 rounded-full bg-green-500"></div><span className="text-xs font-bold text-blue-800 dark:text-blue-300 uppercase tracking-tighter">Fast Quick Call</span></div>
                             <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-                                {onlinePeers.length === 0 ? <p className="text-[10px] text-gray-500 italic">No one online</p> : onlinePeers.filter(p => p !== user?.email).map(peer => (
+                                {onlinePeers.length === 0 ? <p className="text-[10px] text-gray-500 italic">No one online</p> : (Array.isArray(onlinePeers) ? onlinePeers : Array.from(onlinePeers || []) as string[]).filter((p) => p !== user?.email).map((peer) => (
                                     <div key={peer} className="flex items-center gap-2 group">
                                         <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-[10px] text-white uppercase font-bold">{peer[0]}</div>
                                         <span className="text-[10px] text-gray-700 dark:text-gray-300 truncate flex-1">{peer.split('@')[0]}</span>

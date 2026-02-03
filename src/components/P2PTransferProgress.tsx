@@ -15,6 +15,7 @@ interface P2PTransferProgressProps {
     etaSeconds?: number | null;
     speedBps?: number;
     isPaused?: boolean;
+    reason?: string | null;
   }>;
   mode: 'sender' | 'receiver';
   senderEmail?: string;
@@ -40,19 +41,28 @@ export default function P2PTransferProgress({
     etaSeconds?: number | null;
     speedBps?: number;
     isPaused?: boolean;
+    reason?: string | null;
+    startTime?: number;
+    totalChunks?: number;
+    receivedChunks?: number;
+    avgSpeedBps?: number;
   }>>(new Map());
+  const safeFiles = Array.isArray(files) ? files : (Object.values(files || {}) as any[]);
 
-  // Update file states from props
   useEffect(() => {
     const newStates = new Map();
-    files.forEach(file => {
+    safeFiles.forEach((file: any) => {
       if (file.messageId) {
         newStates.set(file.messageId, {
           progress: file.progress,
           status: file.status,
           etaSeconds: file.etaSeconds,
           speedBps: file.speedBps,
-          isPaused: file.isPaused || false
+          isPaused: file.isPaused || false,
+          reason: file.reason,
+          startTime: file.startTime,
+          totalChunks: file.totalChunks,
+          receivedChunks: file.receivedChunks
         });
       }
     });
@@ -66,27 +76,48 @@ export default function P2PTransferProgress({
       setFileStates(prev => {
         const updated = new Map(prev);
         const current = updated.get(messageId) || { progress: 0, status: 'pending' as const };
+
+        // Calculate Avg Speed
+        const elapsed = e.detail.startTime ? (Date.now() - e.detail.startTime) / 1000 : 0;
+        const avgSpeed = elapsed > 0 ? e.detail.received / elapsed : 0;
+
         updated.set(messageId, {
           ...current,
           progress,
           etaSeconds,
           speedBps,
-          status: progress >= 100 ? 'delivered' : 'sending'
+          status: progress >= 100 ? 'delivered' : 'sending',
+          reason: e.detail.reason,
+          startTime: e.detail.startTime,
+          totalChunks: e.detail.totalChunks,
+          receivedChunks: e.detail.receivedChunks,
+          avgSpeedBps: avgSpeed
         });
         return updated;
       });
     };
 
     const receiverProgressHandler = (e: CustomEvent) => {
-      const { messageId, percentage, etaSeconds } = e.detail;
+      const { messageId, percentage, etaSeconds, speedBps } = e.detail;
       setFileStates(prev => {
         const updated = new Map(prev);
         const current = updated.get(messageId) || { progress: 0, status: 'pending' as const };
+
+        // Calculate Avg Speed
+        const elapsed = e.detail.startTime ? (Date.now() - e.detail.startTime) / 1000 : 0;
+        const avgSpeed = elapsed > 0 ? e.detail.received / elapsed : 0;
+
         updated.set(messageId, {
           ...current,
           progress: percentage,
           etaSeconds,
-          status: percentage >= 100 ? 'delivered' : 'sending'
+          speedBps,
+          status: percentage >= 100 ? 'delivered' : 'receiving',
+          reason: e.detail.reason,
+          startTime: e.detail.startTime,
+          totalChunks: e.detail.totalChunks,
+          receivedChunks: e.detail.receivedChunks,
+          avgSpeedBps: avgSpeed
         });
         return updated;
       });
@@ -120,24 +151,29 @@ export default function P2PTransferProgress({
   };
 
   const formatETA = (etaSeconds: number | null | undefined): string => {
-    if (etaSeconds === null || etaSeconds === undefined || etaSeconds <= 0) return 'Calculating...';
+    if (etaSeconds === null || etaSeconds === undefined || etaSeconds <= 0) return '∞';
     if (etaSeconds < 60) return `${Math.ceil(etaSeconds)}s`;
     const minutes = Math.floor(etaSeconds / 60);
+    if (minutes < 60) return `${minutes}m ${Math.ceil(etaSeconds % 60)}s`;
     const hours = Math.floor(minutes / 60);
-    if (hours > 0) return `${hours}h ${minutes % 60}m`;
-    return `${minutes}m`;
+    return `${hours}h ${minutes % 60}m`;
+  };
+
+  const formatElapsed = (startTime: number | undefined): string => {
+    if (!startTime) return '0s';
+    const seconds = Math.floor((Date.now() - startTime) / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ${minutes % 60}m`;
   };
 
   const handlePause = (messageId: string) => {
     if (mode === 'sender') {
       p2pService.pauseTransfer(messageId);
     } else {
-      // Receiver pause logic
-      const rt = (p2pService as any).receiverTransfers?.get(messageId);
-      if (rt) {
-        rt.status = 'paused';
-        // (p2pService as any).markReceiverPaused(messageId, 'USER_PAUSED');
-      }
+      p2pService.pauseReceive(messageId);
     }
 
     setFileStates(prev => {
@@ -149,7 +185,7 @@ export default function P2PTransferProgress({
       return updated;
     });
 
-    const fileName = files.find(f => f.messageId === messageId)?.name || 'file';
+    const fileName = safeFiles.find(f => f.messageId === messageId)?.name || 'file';
     p2pToast.paused(fileName);
   };
 
@@ -157,7 +193,6 @@ export default function P2PTransferProgress({
     if (mode === 'sender') {
       p2pService.resumeTransfer(messageId);
     } else {
-      // Receiver resume logic
       p2pService.resumeReceive(messageId);
     }
 
@@ -170,22 +205,15 @@ export default function P2PTransferProgress({
       return updated;
     });
 
-    const fileName = files.find(f => f.messageId === messageId)?.name || 'file';
+    const fileName = safeFiles.find(f => f.messageId === messageId)?.name || 'file';
     p2pToast.resumed(fileName);
   };
 
   const handleCancel = (messageId: string) => {
-    // Cancel transfer logic
     if (mode === 'sender') {
-      const transfer = (p2pService as any).activeTransfers?.get(messageId);
-      if (transfer) {
-        (p2pService as any).activeTransfers.delete(messageId);
-      }
+      p2pService.cancelSenderTransfer?.(messageId);
     } else {
-      const rt = (p2pService as any).receiverTransfers?.get(messageId);
-      if (rt) {
-        rt.status = 'failed';
-      }
+      p2pService.cancelTransfer(messageId);
     }
 
     setFileStates(prev => {
@@ -197,7 +225,7 @@ export default function P2PTransferProgress({
       return updated;
     });
 
-    const fileName = files.find(f => f.messageId === messageId)?.name || 'file';
+    const fileName = safeFiles.find(f => f.messageId === messageId)?.name || 'file';
     p2pToast.cancelled(fileName);
   };
 
@@ -211,12 +239,18 @@ export default function P2PTransferProgress({
     return <File className="w-5 h-5 text-gray-500" />;
   };
 
-  const totalProgress = files.length > 0
-    ? files.reduce((sum, f) => sum + f.progress, 0) / files.length
+  const totalProgress = safeFiles.length > 0
+    ? safeFiles.reduce((sum, f) => sum + f.progress, 0) / safeFiles.length
     : 0;
 
-  const allDelivered = files.every(f => f.status === 'delivered');
-  const anyFailed = files.some(f => f.status === 'failed');
+  const maxETA = safeFiles.reduce((max, f) => {
+    const state = fileStates.get(f.messageId || '');
+    if (state?.etaSeconds && state.etaSeconds > max) return state.etaSeconds;
+    return max;
+  }, 0);
+
+  const allDelivered = safeFiles.every(f => f.status === 'delivered');
+  const anyFailed = safeFiles.some(f => f.status === 'failed');
 
   const handleDownloadFile = async (file: any) => {
     try {
@@ -285,9 +319,16 @@ export default function P2PTransferProgress({
         {/* Overall Progress */}
         <div className="p-6 bg-gray-50 dark:bg-slate-800/50 border-b border-gray-200 dark:border-slate-700">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-gray-700 dark:text-slate-300">
-              Overall Progress
-            </span>
+            <div className="flex flex-col items-start gap-0.5">
+              <span className="text-sm font-medium text-gray-700 dark:text-slate-300">
+                Overall Progress
+              </span>
+              {maxETA > 0 && !allDelivered && (
+                <span className="text-[11px] font-bold text-blue-600 dark:text-blue-400 animate-pulse">
+                  ⏱️ {mode === 'sender' ? 'Estimated delivery in' : 'Estimated'} {formatETA(maxETA)} {mode === 'receiver' ? 'remaining' : ''}
+                </span>
+              )}
+            </div>
             <span className="text-sm font-bold text-gray-900 dark:text-white">
               {totalProgress.toFixed(0)}%
             </span>
@@ -312,7 +353,9 @@ export default function P2PTransferProgress({
               <div className="flex items-center gap-2 text-green-600 dark:text-green-400">
                 <CheckCircle className="w-4 h-4" />
                 <span className="text-sm font-medium">
-                  {mode === 'sender' ? 'All files delivered successfully!' : 'All files received successfully!'}
+                  {mode === 'sender'
+                    ? 'Recipient has received all files! 🎉'
+                    : 'All files received successfully!'}
                 </span>
               </div>
             )}
@@ -326,7 +369,9 @@ export default function P2PTransferProgress({
               <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400">
                 <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
                 <span className="text-sm font-medium">
-                  Transferring {files.filter(f => f.status === 'sending' || f.status === 'transferring' || f.status === 'receiving').length} file(s)...
+                  {mode === 'sender'
+                    ? `Recipient is downloading ${safeFiles.filter(f => f.status === 'sending' || f.status === 'transferring' || f.status === 'receiving' || f.status === 'pending').length} file(s)...`
+                    : `Transferring ${safeFiles.filter(f => f.status === 'sending' || f.status === 'transferring' || f.status === 'receiving' || f.status === 'pending').length} file(s)...`}
                 </span>
               </div>
             )}
@@ -335,7 +380,7 @@ export default function P2PTransferProgress({
 
         {/* File List */}
         <div className="max-h-96 overflow-y-auto">
-          {files.map((file, index) => {
+          {safeFiles.map((file, index) => {
             const isDownloaded = downloadedFiles.has(file.name);
             const currentState = fileStates.get(file.messageId || '') || file;
 
@@ -367,13 +412,13 @@ export default function P2PTransferProgress({
                         {currentState.status === 'delivered' && (
                           <div className="flex items-center gap-1 px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
                             <CheckCircle className="w-3 h-3" />
-                            Delivered
+                            {mode === 'sender' ? 'File Received' : 'Downloaded'}
                           </div>
                         )}
                         {(currentState.status === 'sending' || currentState.status === 'transferring' || currentState.status === 'receiving') && (
                           <div className="flex items-center gap-1 px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-full text-xs font-medium">
                             <div className="w-3 h-3 border-2 border-blue-700 border-t-transparent rounded-full animate-spin" />
-                            {currentState.progress}%
+                            {mode === 'sender' ? 'Downloading...' : `${currentState.progress}%`}
                           </div>
                         )}
                         {currentState.status === 'pending' && (
@@ -391,24 +436,33 @@ export default function P2PTransferProgress({
                     </div>
 
                     {/* Progress Bar with ETA and Speed */}
-                    {(currentState.status === 'sending' || currentState.status === 'transferring' || currentState.status === 'receiving' || currentState.status === 'pending' || currentState.status === 'paused') && (
+                    {(currentState.status === 'sending' || currentState.status === 'transferring' || currentState.status === 'receiving' || currentState.status === 'pending' || currentState.status === 'paused' || currentState.status === 'delivered') && (
                       <div className="space-y-2">
                         <div className="relative w-full h-2.5 bg-gray-200 dark:bg-slate-700 rounded-full overflow-hidden">
                           <div
-                            className={`absolute inset-y-0 left-0 transition-all duration-300 ${currentState.status === 'paused' ? 'bg-yellow-500' : 'bg-gradient-to-r from-blue-500 to-purple-500'
+                            className={`absolute inset-y-0 left-0 transition-all duration-300 ${currentState.status === 'paused' ? 'bg-yellow-500' :
+                              (currentState.status === 'delivered' || currentState.progress >= 100) ? 'bg-green-500' :
+                                'bg-gradient-to-r from-blue-500 to-purple-500'
                               }`}
                             style={{ width: `${currentState.progress}%` }}
                           />
                         </div>
 
+                        {/* Status Reason */}
+                        {currentState.reason && (
+                          <p className="text-[10px] font-medium text-blue-600 dark:text-blue-400 animate-pulse truncate" title={currentState.reason}>
+                            ⚡ {currentState.reason}
+                          </p>
+                        )}
+
                         {/* ETA and Speed Info */}
                         <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
                           <div className="flex items-center gap-3">
-                            {currentState.etaSeconds !== null && currentState.etaSeconds !== undefined && (
-                              <span>ETA: {formatETA(currentState.etaSeconds)}</span>
+                            {currentState.etaSeconds !== null && currentState.etaSeconds !== undefined && currentState.etaSeconds > 0 && (
+                              <span className="font-semibold">{mode === 'sender' ? 'Delivering' : 'ETA'}: {formatETA(currentState.etaSeconds)}</span>
                             )}
                             {currentState.speedBps !== undefined && currentState.speedBps > 0 && (
-                              <div className="flex items-center gap-1">
+                              <div className="flex items-center gap-1 font-medium">
                                 <Wifi className="w-3 h-3" />
                                 <span>{formatSpeed(currentState.speedBps)}</span>
                               </div>
@@ -426,62 +480,111 @@ export default function P2PTransferProgress({
                       </div>
                     )}
 
-                    {/* Control Buttons */}
-                    <div className="flex items-center gap-2 mt-2">
-                      {/* Pause/Resume Button */}
-                      {(currentState.status === 'sending' || currentState.status === 'transferring' || currentState.status === 'receiving' || currentState.status === 'paused') && (
-                        <button
-                          onClick={() => currentState.isPaused ? handleResume(file.messageId || '') : handlePause(file.messageId || '')}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-slate-600"
-                        >
-                          {currentState.isPaused ? (
-                            <>
-                              <Play className="w-3.5 h-3.5" />
-                              Resume
-                            </>
-                          ) : (
-                            <>
-                              <Pause className="w-3.5 h-3.5" />
-                              Pause
-                            </>
-                          )}
-                        </button>
-                      )}
+                    {/* Control Buttons (Receiver Only) */}
+                    {mode === 'receiver' && (
+                      <div className="flex items-center gap-2 mt-4">
+                        {/* Pause/Resume Button */}
+                        {(currentState.status === 'sending' || currentState.status === 'transferring' || currentState.status === 'receiving' || currentState.status === 'paused') && (
+                          <button
+                            onClick={() => currentState.isPaused ? handleResume(file.messageId || '') : handlePause(file.messageId || '')}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50"
+                          >
+                            {currentState.isPaused ? (
+                              <>
+                                <Play className="w-3.5 h-3.5 fill-current" />
+                                Resume
+                              </>
+                            ) : (
+                              <>
+                                <Pause className="w-3.5 h-3.5 fill-current" />
+                                Pause
+                              </>
+                            )}
+                          </button>
+                        )}
 
-                      {/* Cancel Button */}
-                      {(currentState.status === 'sending' || currentState.status === 'transferring' || currentState.status === 'receiving' || currentState.status === 'pending' || currentState.status === 'paused') && (
-                        <button
-                          onClick={() => handleCancel(file.messageId || '')}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50"
-                        >
-                          <XCircle className="w-3.5 h-3.5" />
-                          Cancel
-                        </button>
-                      )}
+                        {/* Cancel Button */}
+                        {(currentState.status === 'sending' || currentState.status === 'transferring' || currentState.status === 'receiving' || currentState.status === 'pending' || currentState.status === 'paused') && (
+                          <button
+                            onClick={() => handleCancel(file.messageId || '')}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900/50"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                            Cancel
+                          </button>
+                        )}
 
-                      {/* Download Button (Receiver Only) */}
-                      {mode === 'receiver' && currentState.status === 'delivered' && (
-                        <button
-                          onClick={() => handleDownloadFile(file)}
-                          disabled={isDownloaded}
-                          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition ${isDownloaded
-                            ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 cursor-not-allowed'
-                            : 'bg-blue-500 text-white hover:bg-blue-600'
-                            }`}
-                        >
-                          {isDownloaded ? (
-                            <>
-                              <CheckCircle className="w-4 h-4" />
-                              Downloaded
-                            </>
-                          ) : (
-                            <>
-                              <Download className="w-4 h-4" />
-                              Download Securely
-                            </>
+                        {/* Download Button (Receiver Only) */}
+                        {mode === 'receiver' && (currentState.status === 'delivered' || currentState.progress === 100) && (
+                          <button
+                            onClick={() => handleDownloadFile(file)}
+                            disabled={isDownloaded}
+                            className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition shadow-sm ${isDownloaded
+                              ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 cursor-not-allowed border border-green-200 dark:border-green-900/50'
+                              : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 ring-2 ring-blue-500/20'
+                              }`}
+                          >
+                            {isDownloaded ? (
+                              <>
+                                <CheckCircle className="w-4 h-4" />
+                                Saved to Disk
+                              </>
+                            ) : (
+                              <>
+                                <Download className="w-4 h-4 animate-bounce" />
+                                Finalize & Save
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {/* BitTorrent Style Stats Grid */}
+                    <div className="mt-4 p-4 bg-slate-50 dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700/50 grid grid-cols-2 md:grid-cols-3 gap-y-4 gap-x-6">
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Time Elapsed</p>
+                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">{formatElapsed(currentState.startTime)}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Remaining</p>
+                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">{formatETA(currentState.etaSeconds)}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</p>
+                        <p className="text-xs font-semibold text-blue-600 dark:text-blue-400 flex items-center gap-1.5">
+                          {currentState.status === 'delivered' ? 'Completed' :
+                            currentState.isPaused ? 'Paused' :
+                              currentState.status === 'receiving' || currentState.status === 'sending' ? 'Transferring' : 'Ready'}
+                          {currentState.status === 'receiving' && <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-ping" />}
+                        </p>
+                      </div>
+
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                          {mode === 'sender' ? 'Uploaded' : 'Downloaded'}
+                        </p>
+                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                          {formatFileSize((currentState.progress / 100) * file.size)} <span className="text-[10px] font-medium text-slate-400">/ {formatFileSize(file.size)}</span>
+                        </p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                          {mode === 'sender' ? 'Upload Speed' : 'Download Speed'}
+                        </p>
+                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-baseline gap-1">
+                          {formatSpeed(currentState.speedBps)}
+                          {currentState.avgSpeedBps && (
+                            <span className="text-[10px] font-medium text-slate-400">(avg {formatSpeed(currentState.avgSpeedBps)})</span>
                           )}
-                        </button>
-                      )}
+                        </p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pieces</p>
+                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                          {currentState.receivedChunks || 0} <span className="text-[10px] font-medium text-slate-400">of {currentState.totalChunks || '?'}</span>
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </div>

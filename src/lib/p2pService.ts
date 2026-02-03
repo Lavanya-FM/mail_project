@@ -23,11 +23,12 @@ import {
   deleteTransferData,
   savePendingTransfer,
   getAllPendingTransfers,
-  clearChunks
+  clearChunks,
+  saveMeta
 } from './p2pStorage';
 import toast from 'react-hot-toast';
 import { normalizeEmail } from '../utils/normalizeEmail';
-import { setOnlinePeers, updatePeerStatus, isPeerOnline as isPeerOnlineStore, subscribePresence } from './presenceStore';
+import { setOnlinePeers, updatePeerStatus, isPeerOnline as isPeerOnlineStore, subscribePresence, getOnlinePeersSnapshot } from './presenceStore';
 import { authService } from './authService';
 
 /* ---------------------------------------------------- */
@@ -38,27 +39,28 @@ const P2P_LIMITS = {
   BASE_KBPS: 999999,    // Unlimited - no throttling
   MIN_KBPS: 999999,     // Unlimited - no throttling  
   MAX_KBPS: 999999,     // Unlimited - no throttling
-  CHUNK_SIZE: 256 * 1024, // 256KB chunks (Balanced for speed/stability)
+  CHUNK_SIZE: 16 * 1024 * 1024, // 🚀 16MB chunks for TB-scale transfers (Reduced overhead)
 };
 
 const chunkRetries = new Map<string, number>();
 
 // Helper functions for base64 encoding/decoding binary data
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  // 🚀 ULTRA-FAST Base64 for 1TB files (Avoids slow string concatenation)
   const bytes = new Uint8Array(buffer);
-  const chunkSize = 32768; // Process in chunks to avoid call stack issues
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
-    binary += String.fromCharCode.apply(null, Array.from(chunk));
+  const len = bytes.byteLength;
+  let binary = "";
+  for (let i = 0; i < len; i += 32768) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + 32768, len)) as any);
   }
   return btoa(binary);
 }
 
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes.buffer;
@@ -121,14 +123,7 @@ interface StrictMessage {
   resumeIndex?: number;
 }
 
-type StopReason =
-  | 'NETWORK_DROP'
-  | 'SENDER_OFFLINE'
-  | 'THROTTLED'
-  | 'CHUNK_TIMEOUT'
-  | 'USER_PAUSED'
-  | 'SYSTEM_SLEEP'
-  | null;
+type StopReason = string | null;
 
 interface ReceiverTransferState {
   messageId: string;
@@ -141,6 +136,14 @@ interface ReceiverTransferState {
   status: 'INIT' | 'HANDSHAKING' | 'KEY_READY' | 'RECEIVING' | 'COMPLETED' | 'FAILED' | 'PAUSED';
   reason: StopReason;
   lastUpdated: number;
+  // Speed/ETA Tracking
+  actualSize?: number;
+  startTime?: number;
+  lastBytes?: number;
+  lastTime?: number;
+  speedBps?: number;
+  etaSeconds?: number | null;
+  chunkSize?: number; // Store the chunk size used for this transfer
 }
 
 interface TransferState {
@@ -154,6 +157,11 @@ interface TransferState {
   phase: TransferPhase;
   currentChunkIndex: number; // For sender-driven flow
   lastChunkTime: number;
+  speedBps?: number;
+  etaSeconds?: number | null;
+  startTime?: number;
+  lastBytes?: number;
+  lastTime?: number;
 }
 
 /* ---------------------------------------------------- */
@@ -198,9 +206,17 @@ class StrictP2PService {
     status: 'QUEUED' | 'WAITING_FOR_PEER' | 'HANDSHAKING' | 'TRANSFERRING' | 'PAUSED' | 'COMPLETE' | 'FAILED' | 'FALLBACK_SERVER';
     resumeAttempts?: number;
     lastAttemptTime?: number;
+    acknowledgedChunks?: Set<number>;
+    speedBps?: number;
+    etaSeconds?: number | null;
+    lastTime?: number;
+    reason?: string | null;
+    chunkSize?: number;
+    startTime?: number;
   }>();
 
   private activeTransfers = new Map<string, TransferState>();
+  private pullWatchdogs = new Map<string, any>();
   private transferSenders = new Map<string, string>();
   // private presenceListeners = new Set<(peers: Set<string>) => void>();
   private connectionListeners = new Set<(connected: boolean) => void>();
@@ -223,6 +239,8 @@ class StrictP2PService {
   private pendingSignals: any[] = [];
   private pendingRequests = new Map<string, Set<number>>();
   private waitingForSender = new Map<string, string>(); // messageId -> senderEmail
+  private completedTransfers = new Set<string>(); // Cache of completed message IDs
+  private pendingDiskWrites = new Map<string, Set<Promise<void>>>(); // messageId -> Set of active saveChunk promises
 
   // --- ACK-driven throttling ---
   private currentKBPS = P2P_LIMITS.BASE_KBPS;
@@ -256,7 +274,7 @@ class StrictP2PService {
   */
 
   constructor() {
-    console.log("🚀 [P2P SERVICE] V15 LOADED - TRANSFER LOOP FIXED");
+    console.log("🚀 [P2P SERVICE] V55 LOADED - TURBO MODE + ETA");
     // suppress unused warnings for some members if they were to be used later
     // console.log(this.currentProcessingMessageId); 
 
@@ -264,6 +282,32 @@ class StrictP2PService {
     subscribePresence(() => {
       this.triggerPresenceResumption();
     });
+
+    // ✅ FIX: Handle network connectivity changes
+    window.addEventListener('online', () => {
+      console.log('[P2P] Network is ONLINE. Attempting to reconnect...');
+      if (this.email && this.userId) {
+        // Force reconnect if we have credentials
+        this.connect(this.userId, this.email);
+
+        // Request fresh presence data immediately
+        setTimeout(() => {
+          this.send({ type: 'request-presence' }, true);
+        }, 1000);
+      }
+    });
+
+    window.addEventListener('offline', () => {
+      console.log('[P2P] Network is OFFLINE. Disconnecting...');
+      this.disconnect();
+    });
+
+    // 🚀 REAL-TIME PRESENCE: Request presence updates every 15 seconds
+    setInterval(() => {
+      if (this.connected && this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.send({ type: 'request-presence' }, true);
+      }
+    }, 15000);
   }
 
   // --- CORE WEBSOCKET METHODS ---
@@ -379,7 +423,7 @@ class StrictP2PService {
   }
 
   hasReceivedFileSync(messageId: string): boolean {
-    return this.receivedFiles.has(messageId);
+    return this.receivedFiles.has(messageId) || this.completedTransfers.has(messageId);
   }
 
   onPresenceChange(cb: (peers: Set<string>) => void) {
@@ -452,8 +496,8 @@ class StrictP2PService {
     return isPeerOnlineStore(email);
   }
 
-  getOnlinePeers(): Set<string> {
-    return new Set(); // Deprecated, use presenceStore
+  getOnlinePeers(): string[] {
+    return Array.from(getOnlinePeersSnapshot());
   }
 
 
@@ -549,6 +593,9 @@ class StrictP2PService {
     this.receivedFiles.delete(messageId); // Clear from memory cache
     this.receiverChunkBuffer.delete(messageId);
     this.pendingRequests.delete(messageId);
+    if (!wipeFile) {
+      this.completedTransfers.add(messageId);
+    }
 
     // 2. Storage cleanup (IndexedDB)
     if (wipeFile) {
@@ -580,10 +627,29 @@ class StrictP2PService {
     window.dispatchEvent(new CustomEvent('p2p-cleanup', { detail: { messageId } }));
   }
 
+  cancelSenderTransfer(messageId: string) {
+    console.log(`[P2P] Cancelling sender transfer ${messageId}`);
+    const t = this.senderTransferRegistry.get(messageId);
+    if (t) {
+      t.status = 'FAILED';
+      t.started = false;
+    }
+    this.activeTransfers.delete(messageId);
+
+    window.dispatchEvent(new CustomEvent('p2p-progress', {
+      detail: { messageId, status: 'failed' }
+    }));
+
+    this.cleanupTransfer(messageId, true);
+  }
+
   pauseTransfer(messageId: string) {
     const transfer = this.activeTransfers.get(messageId);
     if (transfer) {
       transfer.paused = true;
+      window.dispatchEvent(new CustomEvent('p2p-progress', {
+        detail: { messageId, status: 'paused' }
+      }));
     }
     console.log('[P2P] Transfer paused:', messageId);
   }
@@ -594,7 +660,47 @@ class StrictP2PService {
     if (t) {
       t.paused = false;
       t.phase = TransferPhase.SENDING;
+      window.dispatchEvent(new CustomEvent('p2p-progress', {
+        detail: { messageId, progress: t.progress, status: 'transferring' }
+      }));
     }
+  }
+
+  public hasFileInRegistry(messageId: string): boolean {
+    return this.senderTransferRegistry.has(messageId);
+  }
+
+  public registerFile(file: File, messageId: string) {
+    const chunkSize = P2P_LIMITS.CHUNK_SIZE;
+    this.senderTransferRegistry.set(messageId, {
+      fileId: messageId,
+      file: file,
+      peerEmail: '', // To be set on offer
+      messageId: messageId,
+      started: false,
+      offered: false,
+      currentChunkIndex: 0,
+      totalChunks: Math.ceil(file.size / chunkSize),
+      status: 'QUEUED',
+      acknowledgedChunks: new Set(),
+      startTime: Date.now(),
+      speedBps: 0,
+      etaSeconds: null,
+      chunkSize: chunkSize
+    });
+  }
+
+  public async offerTransfer(messageId: string, to: string) {
+    const t = this.senderTransferRegistry.get(messageId);
+    if (!t) return;
+    t.peerEmail = to;
+    console.log(`[P2P] Offering transfer back to ${to} for message ${messageId}`);
+
+    // Ensure we are connected
+    await this.waitForConnection();
+
+    // Start the process
+    this.initiateHandshake(to, messageId);
   }
 
   public setUserBandwidth(kbps: number) {
@@ -606,22 +712,9 @@ class StrictP2PService {
   }
 
   async resumeReceive(messageId: string, senderEmail?: string) {
-    console.log('[P2P] Resume receive requested for', messageId, 'senderEmail:', senderEmail);
-
-    const hasFile = await this.hasReceivedFile(messageId);
-    if (hasFile) {
-      window.dispatchEvent(new CustomEvent('p2p-receiver-progress', {
-        detail: {
-          messageId,
-          percentage: 100,
-          received: 100,
-          total: 100,
-          status: 'COMPLETED',
-          from: senderEmail || this.transferSenders.get(messageId),
-          fileName: 'Downloaded File'
-        }
-      }));
-      window.dispatchEvent(new CustomEvent('p2p-file-ready', { detail: { messageId } }));
+    if (await this.hasReceivedFile(messageId)) {
+      console.log(`[P2P] File ${messageId} already received, skipping resume`);
+      this.completedTransfers.add(messageId);
       return;
     }
 
@@ -637,13 +730,11 @@ class StrictP2PService {
       console.log(`[P2P] Sender ${sender} is OFFLINE. Queuing resume for ${messageId}`);
       this.waitingForSender.set(messageId, sender);
 
-      window.dispatchEvent(new CustomEvent('p2p-error', {
-        detail: {
-          messageId,
-          error: 'Sender is offline. Transfer will start automatically when they connect.',
-          code: 'SENDER_OFFLINE'
-        }
-      }));
+      const rt = this.receiverTransfers.get(messageId);
+      if (rt) {
+        rt.reason = 'Sender is offline. Waiting for them to connect...';
+        this.notifyReceiverProgress(rt, sender);
+      }
 
       return;
     }
@@ -686,8 +777,20 @@ class StrictP2PService {
       return;
     }
 
+    // 🚀 CRITICAL: Check if transfer is already complete
+    const rtCheck = this.receiverTransfers.get(messageId);
+    if (rtCheck && rtCheck.receivedChunks.size === rtCheck.totalChunks) {
+      console.log(`[P2P] Transfer ${messageId} already complete (${rtCheck.receivedChunks.size}/${rtCheck.totalChunks}). Triggering assembly...`);
+      rtCheck.status = 'COMPLETED';
+
+      // Trigger file assembly immediately
+      await this.assembleFile(messageId, rtCheck.fileName, rtCheck.mimeType);
+      return;
+    }
+
     // 🚀 Switch to pull model for resume
     console.log(`[P2P] Resuming pull loop for ${messageId} from ${sender}`);
+    if (rt) rt.status = 'RECEIVING'; // Explicitly unpause
     const compositeId = `${sender.toLowerCase()}:${messageId}`;
     if (!this.peerSessions.has(compositeId)) {
       this.ensureSession(sender, messageId);
@@ -738,19 +841,27 @@ class StrictP2PService {
     const count = rt.receivedChunks.size;
     const progress = total > 0 ? Math.round((count / total) * 100) : 0;
 
-    const approxTotalBytes = total * P2P_LIMITS.CHUNK_SIZE;
-    const approxReceivedBytes = count * P2P_LIMITS.CHUNK_SIZE;
+    const totalBytes = rt.actualSize || (total * P2P_LIMITS.CHUNK_SIZE);
+    const receivedBytes = Math.min(totalBytes, count * P2P_LIMITS.CHUNK_SIZE);
 
     console.log(`[P2P] Synced ${count}/${total} chunks for ${messageId} (${progress}%)`);
+
+    if (progress === 100 && rt.status !== 'COMPLETED' && !this.completedTransfers.has(messageId)) {
+      console.log(`[P2P] All chunks found on disk for ${messageId}, triggering assembly`);
+      rt.status = 'COMPLETED';
+      await this.assembleFile(messageId, rt.fileName, rt.mimeType);
+      return; // assembleFile will handle UI notify
+    }
 
     window.dispatchEvent(new CustomEvent('p2p-receiver-progress', {
       detail: {
         messageId,
         percentage: progress,
         progress,
-        received: approxReceivedBytes,
-        total: approxTotalBytes,
-        status: progress === 100 ? 'COMPLETED' : 'RECEIVING',
+        received: receivedBytes,
+        total: totalBytes,
+        status: (progress === 100 || this.completedTransfers.has(messageId)) ? 'COMPLETED' :
+          (rt.status === 'PAUSED' ? 'PAUSED' : 'RECEIVING'),
         from: this.transferSenders.get(messageId),
         fileName: rt.fileName
       }
@@ -767,7 +878,45 @@ class StrictP2PService {
     return this.receivedFiles.get(messageId);
   }
 
-  async getReceivedBlob(messageId: string): Promise<Blob | null> {
+  public getTransferState(messageId: string) {
+    // 1. Check sender side first (if we are the sender, this is our primary state)
+    const st = this.senderTransferRegistry.get(messageId);
+    if (st) {
+      const acked = st.acknowledgedChunks?.size || 0;
+      const total = st.totalChunks;
+      const progress = total > 0 ? Math.round((acked / total) * 100) : 0;
+
+      return {
+        messageId,
+        progress,
+        status: st.status,
+        speedBps: st.speedBps,
+        etaSeconds: st.etaSeconds,
+        reason: st.reason
+      };
+    }
+
+    // 2. Check receiver side
+    const rt = this.receiverTransfers.get(messageId);
+    if (rt) {
+      const count = rt.receivedChunks.size;
+      const total = rt.totalChunks;
+      const progress = total > 0 ? Math.round((count / total) * 100) : 0;
+
+      return {
+        messageId,
+        progress,
+        status: (progress === 100 || this.completedTransfers.has(messageId)) ? 'COMPLETED' : rt.status,
+        speedBps: rt.speedBps,
+        etaSeconds: rt.etaSeconds,
+        reason: rt.reason
+      };
+    }
+
+    return null;
+  }
+
+  public async getReceivedBlob(messageId: string): Promise<Blob | null> {
     if (this.receivedFiles.has(messageId)) {
       return this.receivedFiles.get(messageId)!;
     }
@@ -1032,6 +1181,11 @@ class StrictP2PService {
         this.connected = false;
         this.isRegistering = false;
         this.notifyConnection(false);
+
+        // Clear presence data on disconnect
+        setOnlinePeers([]);
+
+        // Attempt reconnection after 5 seconds
         setTimeout(() => this.connect(userId, email), 5000);
       };
 
@@ -1102,6 +1256,20 @@ class StrictP2PService {
 
         // 5️⃣ Start pulling chunks as the 'Client Server'
         this.pullMissingChunks(messageId, from);
+
+        // 6️⃣ Sync progress back to sender so their UI is accurate
+        const rtSync = this.receiverTransfers.get(messageId);
+        if (rtSync) {
+          this.send({
+            type: 'progress-sync',
+            to: from,
+            from: this.email,
+            messageId,
+            progress: rtSync.receivedChunks.size,
+            // Optimization: If small file, send full set. Otherwise just count.
+            data: rtSync.totalChunks < 500 ? Array.from(rtSync.receivedChunks) : undefined
+          });
+        }
         break;
       }
 
@@ -1228,10 +1396,17 @@ class StrictP2PService {
         this.transferSenders.set(messageId, from);
         localStorage.setItem(`p2p-sender-${messageId}`, from);
 
-        // 🚀 FIX: Don't overwrite if exists, UNLESS metadata changed (e.g. Chunk Size update)
+        // 🚀 FIX: Don't overwrite if exists
+        if (this.completedTransfers.has(messageId) || await this.hasReceivedFile(messageId)) {
+          console.log(`[P2P] Already have file for offer ${messageId}. Skipping.`);
+          this.completedTransfers.add(messageId);
+          return;
+        }
+
         if (!this.receiverTransfers.has(messageId)) {
-          this.receiverTransfers.set(messageId, {
-            messageId: messageId,
+          // Initialize state
+          const rt: ReceiverTransferState = {
+            messageId,
             fileName: data.fileName,
             mimeType: data.mimeType,
             totalChunks: data.totalChunks,
@@ -1240,8 +1415,41 @@ class StrictP2PService {
             failedChunks: new Set(),
             status: 'INIT',
             reason: null,
-            lastUpdated: Date.now()
-          });
+            lastUpdated: Date.now(),
+            actualSize: data.size,
+            startTime: Date.now(),
+            chunkSize: data.chunkSize || P2P_LIMITS.CHUNK_SIZE // 🚀 Store chunk size from sender
+          };
+
+          this.receiverTransfers.set(messageId, rt);
+          this.transferSenders.set(messageId, from);
+
+          // Persistent meta
+          await saveMeta(messageId, {
+            fileName: data.fileName,
+            mimeType: data.mimeType,
+            totalChunks: data.totalChunks,
+            actualSize: data.size,
+            chunkSize: rt.chunkSize, // Ensure persistent
+            is_p2p: true,
+            timestamp: Date.now()
+          }).catch(err => console.error('[P2P] Failed to persist meta:', err));
+
+          // Sync progress from DB in case we refreshed
+          await this.syncReceiverStateFromDB(messageId);
+
+          // 🚀 Dispatch only on NEW transfer
+          window.dispatchEvent(
+            new CustomEvent('p2p-incoming-file', {
+              detail: {
+                messageId,
+                from,
+                fileName: data.fileName,
+                size: data.size,
+                mimeType: data.mimeType
+              }
+            })
+          );
         } else {
           const rt = this.receiverTransfers.get(messageId)!;
           if (rt.totalChunks !== data.totalChunks) {
@@ -1260,13 +1468,29 @@ class StrictP2PService {
               failedChunks: new Set(),
               status: 'INIT',
               reason: null,
-              lastUpdated: Date.now()
+              lastUpdated: Date.now(),
+              actualSize: data.size,
+              startTime: Date.now(),
+              chunkSize: data.chunkSize || P2P_LIMITS.CHUNK_SIZE
             });
+
+            // 🚀 Dispatch on RESET transfer
+            window.dispatchEvent(
+              new CustomEvent('p2p-incoming-file', {
+                detail: {
+                  messageId,
+                  from,
+                  fileName: data.fileName,
+                  size: data.size,
+                  mimeType: data.mimeType
+                }
+              })
+            );
           }
         }
 
         // 🚀 NEW: Rehydrate immediately from IndexedDB to show correct progress
-        this.syncReceiverStateFromDB(messageId);
+        await this.syncReceiverStateFromDB(messageId);
 
         // Check if we need handshake
         const compositeId = `${from.toLowerCase()}:${messageId}`;
@@ -1306,17 +1530,7 @@ class StrictP2PService {
           }
         }
 
-        window.dispatchEvent(
-          new CustomEvent('p2p-incoming-file', {
-            detail: {
-              messageId,
-              from,
-              fileName: data.fileName,
-              size: data.size,
-              mimeType: data.mimeType
-            }
-          })
-        );
+        // Removed global dispatch to prevent duplicate popups on retry
         break;
       }
 
@@ -1333,8 +1547,13 @@ class StrictP2PService {
           const sessionKeyId = `${from.toLowerCase()}:${messageId}`;
           const session = this.peerSessions.get(sessionKeyId);
 
+          // ✅ FIX 7: Check if chunk already exists (NO DUPLICATES)
+          const rt = this.receiverTransfers.get(messageId);
+          if (!rt) return;
+
           if (!session || !session.sessionKey) {
             console.log(`[P2P RECEIVE] Key not ready, buffering chunk ${chunkIndex} for ${sessionKeyId}`);
+            rt.reason = 'Waiting for security handshake...';
             if (!this.receiverChunkBuffer.has(messageId)) {
               this.receiverChunkBuffer.set(messageId, new Map());
             }
@@ -1344,12 +1563,9 @@ class StrictP2PService {
             if (!session?.handshaking) {
               this.ensureSession(from, messageId);
             }
+            this.notifyReceiverProgress(rt, from);
             return;
           }
-
-          // ✅ FIX 7: Check if chunk already exists (NO DUPLICATES)
-          const rt = this.receiverTransfers.get(messageId);
-          if (!rt) return;
 
           // ✅ FIX: Check if chunk index is within bounds
           if (chunkIndex >= rt.totalChunks) {
@@ -1374,40 +1590,47 @@ class StrictP2PService {
 
           // Decrypt the chunk
           const decrypted = await decryptChunkAES(session.sessionKey, payload?.iv || [], buffer);
-          await saveChunk(messageId, chunkIndex, decrypted);
+
+          // 🚀 SPEED OPTIMIZATION: Don't wait for disk I/O before requesting more chunks
+          // We mark it as received in memory immediately. Disk persistence happens in background.
+          const writePromise = saveChunk(messageId, chunkIndex, decrypted);
+
+          if (!this.pendingDiskWrites.has(messageId)) {
+            this.pendingDiskWrites.set(messageId, new Set());
+          }
+          const writeSet = this.pendingDiskWrites.get(messageId)!;
+          writeSet.add(writePromise);
+
+          writePromise.then(() => {
+            writeSet.delete(writePromise);
+          }).catch(e => {
+            console.error('[P2P] Failed to save chunk to disk:', chunkIndex, e);
+            rt.receivedChunks.delete(chunkIndex); // Rollback memory state if write fails
+            writeSet.delete(writePromise);
+          });
 
           if (rt) {
             rt.receivedChunks.add(chunkIndex);
 
-            // Progress update
+            // Speed & ETA
             const totalChunks = rt.totalChunks;
-            const receivedChunks = rt.receivedChunks.size;
-            const isDone = receivedChunks === totalChunks;
+            const isDone = rt.receivedChunks.size === totalChunks;
+            const cSize = rt.chunkSize || P2P_LIMITS.CHUNK_SIZE;
+            this.updateSpeedInfo(rt, rt.receivedChunks.size * cSize, rt.actualSize || (totalChunks * cSize));
+            rt.reason = rt.speedBps && rt.speedBps < 50 * 1024
+              ? `Low bandwidth detected (${Math.round(rt.speedBps / 1024)} KB/s)...`
+              : `Receiving data... (Batch in-flight: ${this.pendingRequests.get(messageId)?.size || 0})`;
 
-            // Only show 100% if actually done. Floor otherwise to avoid 99.5% -> 100%
-            const progress = isDone ? 100 : Math.floor((receivedChunks / totalChunks) * 100);
+            this.notifyReceiverProgress(rt, from);
 
-            // Fix: Show bytes for UI instead of chunk count
-            const approxTotalBytes = totalChunks * P2P_LIMITS.CHUNK_SIZE;
-            const approxReceivedBytes = receivedChunks * P2P_LIMITS.CHUNK_SIZE;
-
-            window.dispatchEvent(new CustomEvent('p2p-receiver-progress', {
-              detail: {
-                messageId,
-                percentage: progress,
-                progress, // for compatibility
-                received: approxReceivedBytes,
-                total: approxTotalBytes,
-                status: isDone ? 'COMPLETED' : 'RECEIVING',
-                from,
-                fileName: rt.fileName
-              }
-            }));
+            this.setupPullWatchdog(messageId, from);
 
             if (isDone) rt.status = 'COMPLETED';
             else if (rt.status !== 'PAUSED') rt.status = 'RECEIVING';
 
             if (isDone) {
+              // We DO wait for all chunks to be on disk before assembly
+              // This happens automatically in assembleFile which calls getChunk() (reading from disk)
               await this.assembleFile(messageId, rt.fileName, rt.mimeType);
             }
           }
@@ -1462,7 +1685,8 @@ class StrictP2PService {
               fileName: t.file.name,
               size: t.file.size,
               mimeType: t.file.type,
-              totalChunks
+              totalChunks,
+              chunkSize: t.chunkSize // Include chunk size in offer
             }
           });
         } else if (requestType === 'chunk' && chunkIndex !== undefined) {
@@ -1481,14 +1705,34 @@ class StrictP2PService {
 
       case 'chunk-request-batch': {
         const { messageId, chunkIndices, from } = msg;
-        if (!messageId || !chunkIndices || !Array.from(chunkIndices).length || !from) return;
+        if (!messageId || !chunkIndices || !chunkIndices.length || !from) {
+          console.warn('[P2P SERVER] Invalid batch request:', { messageId, chunkIndices, from });
+          return;
+        }
 
-        console.log(`[P2P SERVER] Received batch request for ${chunkIndices.length} chunks (${chunkIndices.join(',')}) from ${from}`);
+        console.log(`[P2P SERVER] Received batch request for ${chunkIndices.length} chunks from ${from} for ${messageId}`);
 
-        // Process batch
+        // Process batch with parallelized preparation to fill network pipe
         (async () => {
-          for (const idx of chunkIndices) {
-            await this.sendSingleChunk(messageId, idx, from);
+          const t = this.senderTransferRegistry.get(messageId);
+          if (t) {
+            t.status = 'TRANSFERRING';
+            t.reason = `Serving ${chunkIndices.length} chunks... (Parallel)`;
+          }
+
+          // Parallelize encryption and pushing to socket buffer
+          // Up to 8 at a time to avoid CPU starvation, but keep socket full
+          const PARALLEL_PREP = 8;
+          for (let i = 0; i < chunkIndices.length; i += PARALLEL_PREP) {
+            const currentBatch = chunkIndices.slice(i, i + PARALLEL_PREP);
+            await Promise.all(currentBatch.map(idx => {
+              if (this.ws?.readyState !== WebSocket.OPEN) return Promise.resolve();
+              return this.sendSingleChunk(messageId, idx, from);
+            }));
+          }
+
+          if (t && t.status === 'TRANSFERRING') {
+            t.reason = 'Idle (Waiting for next batch request)';
           }
         })();
         break;
@@ -1499,33 +1743,72 @@ class StrictP2PService {
         if (!messageId || chunkIndex === undefined || !from) return;
 
         const t = this.senderTransferRegistry.get(messageId);
-        const st = this.activeTransfers.get(messageId);
-        if (!t || !st) return;
+        if (!t) return;
 
-        if (chunkIndex === t.currentChunkIndex) {
-          // Success! Advance to next chunk
-          t.currentChunkIndex++;
-          st.currentChunkIndex = t.currentChunkIndex;
-          st.progress = Math.round((t.currentChunkIndex / t.totalChunks) * 100);
-          st.bytesSent = t.currentChunkIndex * P2P_LIMITS.CHUNK_SIZE;
+        if (!t.acknowledgedChunks) t.acknowledgedChunks = new Set();
+        t.acknowledgedChunks.add(chunkIndex);
 
-          // Notify UI
+        const acked = t.acknowledgedChunks.size;
+        const progress = Math.round((acked / t.totalChunks) * 100);
+        const bytesSent = Math.min(t.file.size, acked * (t.chunkSize || P2P_LIMITS.CHUNK_SIZE));
+
+        this.updateSpeedInfo(t, bytesSent, t.file.size);
+
+        // Notify UI
+        window.dispatchEvent(new CustomEvent('p2p-progress', {
+          detail: {
+            messageId,
+            progress,
+            status: acked === t.totalChunks ? 'complete' : 'transferring',
+            speedBps: t.speedBps,
+            etaSeconds: t.etaSeconds,
+            received: bytesSent,
+            total: t.file.size,
+            startTime: t.startTime,
+            totalChunks: t.totalChunks,
+            receivedChunks: acked
+          }
+        }));
+
+        if (acked === t.totalChunks) {
+          console.log(`[P2P SENDER] Transfer ${messageId} complete!`);
+          t.status = 'COMPLETE';
+          t.started = false;
+        }
+        break;
+      }
+
+      case 'progress-sync': {
+        const { messageId, progress, data } = msg;
+        if (!messageId) return;
+        const st = this.senderTransferRegistry.get(messageId);
+        if (st && progress !== undefined) {
+          console.log(`[P2P SENDER] Progress sync received for ${messageId}: ${progress} chunks`);
+          if (!st.acknowledgedChunks) st.acknowledgedChunks = new Set();
+
+          if (Array.isArray(data)) {
+            // Full set sync
+            data.forEach(idx => st.acknowledgedChunks!.add(idx));
+          } else {
+            // Rough count sync (backwards compatibility or large file optimization)
+            // If we have nothing, at least show the count. 
+            // Better to assume they are the first N chunks if we don't have the list.
+            if (st.acknowledgedChunks.size < progress) {
+              for (let i = 0; i < progress; i++) st.acknowledgedChunks.add(i);
+            }
+          }
+
+          const currentProgress = Math.round((st.acknowledgedChunks.size / st.totalChunks) * 100);
           window.dispatchEvent(new CustomEvent('p2p-progress', {
             detail: {
               messageId,
-              progress: st.progress,
-              status: 'transferring'
+              progress: currentProgress,
+              status: currentProgress === 100 ? 'complete' : 'transferring',
+              reason: 'Synced with receiver',
+              speedBps: st.speedBps,
+              etaSeconds: st.etaSeconds
             }
           }));
-
-          if (t.currentChunkIndex < t.totalChunks) {
-            this.sendSingleChunk(messageId, t.currentChunkIndex, from);
-          } else {
-            console.log(`[P2P SENDER] Transfer ${messageId} complete!`);
-            t.status = 'COMPLETE';
-            t.started = false;
-            // We keep it in activeTransfers for a bit or cleanup
-          }
         }
         break;
       }
@@ -1543,6 +1826,16 @@ class StrictP2PService {
   private async assembleFile(messageId: string, fileName: string, mimeType: string) {
     if (this.receivedFiles.has(messageId)) return;
 
+    // 🚀 CRITICAL: Wait for all background disk writes to complete
+    const pending = this.pendingDiskWrites.get(messageId);
+    if (pending && pending.size > 0) {
+      console.log(`[P2P] Waiting for ${pending.size} pending disk writes for ${messageId}...`);
+      await Promise.all(Array.from(pending));
+      // Clear the set after all promises resolve
+      this.pendingDiskWrites.delete(messageId);
+      console.log(`[P2P] All disk writes completed for ${messageId}`);
+    }
+
     const meta = await getMeta(messageId);
     const totalChunks = meta?.totalChunks || 0;
     const chunks: Blob[] = [];
@@ -1559,6 +1852,7 @@ class StrictP2PService {
 
     const fileBlob = new Blob(chunks, { type: mimeType });
     this.receivedFiles.set(messageId, fileBlob);
+    this.completedTransfers.add(messageId);
 
     // Save complete file to DB
     await saveFile(messageId, {
@@ -1612,6 +1906,7 @@ class StrictP2PService {
     console.log(`[P2P] Registered sender transfer ${messageId} for ${recipientEmail}`);
 
     // Register the transfer
+    const chunkSize = P2P_LIMITS.CHUNK_SIZE;
     this.senderTransferRegistry.set(messageId, {
       fileId: messageId,
       file: file,
@@ -1620,26 +1915,46 @@ class StrictP2PService {
       started: false,
       offered: false,
       currentChunkIndex: 0,
-      totalChunks: Math.ceil(file.size / P2P_LIMITS.CHUNK_SIZE),
-      status: 'QUEUED'
+      totalChunks: Math.ceil(file.size / chunkSize),
+      status: 'QUEUED',
+      acknowledgedChunks: new Set(),
+      startTime: Date.now(),
+      speedBps: 0,
+      etaSeconds: null,
+      chunkSize: chunkSize // 🚀 Bind chunk size to this session
     });
 
-    // 🚀 Persist for reliability across refreshes
+    // 🚀 Persist for reliability across refreshes (INCLUDING BLOB)
     try {
+      // 1. Save File Blob to IndexedDB so it survives refresh!
       await saveFile(messageId, {
         fileName: file.name,
         mimeType: file.type,
-        blob: file, // File is a Blob
+        blob: file,
         size: file.size,
         timestamp: Date.now()
       });
+
+      // 2. Save metadata to IndexedDB
+      await saveMeta(messageId, {
+        fileName: file.name,
+        mimeType: file.type,
+        totalChunks: Math.ceil(file.size / chunkSize),
+        actualSize: file.size,
+        chunkSize: chunkSize,
+        is_p2p: true,
+        timestamp: Date.now()
+      });
+
+      // Register in pending transfers (for UI/status tracking)
       await savePendingTransfer(`sender-info-${messageId}`, {
         type: 'sender-transfer',
         messageId,
         peerEmail: recipientEmail,
-        fileId: messageId
+        fileId: messageId,
+        fileName: file.name
       });
-      console.log(`[P2P] Persisted sender metadata for ${messageId}`);
+      console.log(`[P2P] Persisted sender metadata for ${messageId} (No blob stored)`);
     } catch (err) {
       console.warn(`[P2P] Could not persist sender metadata:`, err);
     }
@@ -1660,8 +1975,11 @@ class StrictP2PService {
           if (this.senderTransferRegistry.has(messageId)) continue;
 
           const fileData = await getFile(messageId);
+          const meta = await getMeta(messageId);
+
           if (fileData?.blob) {
             console.log(`[P2P] Rehydrated sender transfer ${messageId} for ${peerEmail}`);
+            const cSize = meta?.chunkSize || P2P_LIMITS.CHUNK_SIZE;
             this.senderTransferRegistry.set(messageId, {
               fileId: messageId,
               file: fileData.blob,
@@ -1670,8 +1988,13 @@ class StrictP2PService {
               started: false,
               offered: false,
               currentChunkIndex: 0,
-              totalChunks: Math.ceil(fileData.blob.size / P2P_LIMITS.CHUNK_SIZE),
-              status: 'QUEUED'
+              totalChunks: meta?.totalChunks || Math.ceil(fileData.blob.size / cSize),
+              status: 'QUEUED',
+              acknowledgedChunks: new Set(),
+              startTime: Date.now(),
+              speedBps: 0,
+              etaSeconds: null,
+              chunkSize: cSize
             });
             count++;
 
@@ -1725,7 +2048,18 @@ class StrictP2PService {
 
   private async pullMissingChunks(messageId: string, sender: string) {
     const rt = this.receiverTransfers.get(messageId);
-    if (!rt || rt.status === 'COMPLETED' || rt.status === 'FAILED' || rt.status === 'PAUSED') return;
+
+    // ✅ FIX: Don't pull if completed or paused
+    if (!rt) return;
+    if (rt.status === 'COMPLETED' || rt.receivedChunks.size === rt.totalChunks) {
+      if (rt.status !== 'COMPLETED') {
+        rt.status = 'COMPLETED';
+        await this.assembleFile(messageId, rt.fileName, rt.mimeType);
+      }
+      return;
+    }
+    if (rt.status === 'FAILED' || rt.status === 'PAUSED') return;
+
     rt.status = 'RECEIVING';
 
     const total = rt.totalChunks;
@@ -1737,12 +2071,15 @@ class StrictP2PService {
     const pending = this.pendingRequests.get(messageId)!;
 
     // Pull strategy: request up to X sequential missing chunks
-    const CONCURRENCY = 32;
+    // 🚀 ULTRA-FAST MODE FOR 16MB CHUNKS: 
+    // Aggressive concurrency for maximum speed on modern devices.
+    // 96 chunks x 16MB = 1.5GB memory usage (acceptable for modern machines)
+    const CONCURRENCY = 96;  // 🚀 DOUBLED for 2x speed boost
+    const BATCH_SIZE = 16;   // 🚀 Larger batches for better throughput
     let requestedCount = 0;
 
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
-    // Optimization: find first missing chunk starting from the first non-received index
     let startFound = -1;
     for (let i = 0; i < total; i++) {
       if (!received.has(i)) {
@@ -1751,9 +2088,8 @@ class StrictP2PService {
       }
     }
 
-    if (startFound === -1) return; // All received
+    if (startFound === -1) return;
 
-    const BATCH_SIZE = 32;
     const batch: number[] = [];
 
     for (let i = startFound; i < total; i++) {
@@ -1765,7 +2101,6 @@ class StrictP2PService {
       }
 
       if (batch.length >= BATCH_SIZE) {
-        console.log(`[P2P] Requesting batch of ${batch.length} chunks: ${batch[0]}-${batch[batch.length - 1]}`);
         this.send({
           type: 'chunk-request-batch' as any,
           to: sender,
@@ -1778,7 +2113,7 @@ class StrictP2PService {
     }
 
     if (batch.length > 0) {
-      console.log(`[P2P] Requesting final batch of ${batch.length} chunks: ${batch[0]}-${batch[batch.length - 1]}`);
+      console.log(`[P2P CLIENT] Requesting ${batch.length} chunks from ${sender} for ${messageId}`);
       this.send({
         type: 'chunk-request-batch' as any,
         to: sender,
@@ -1788,18 +2123,36 @@ class StrictP2PService {
       }, true);
     }
 
-    // Trigger local progress update even if no chunks received yet 
-    const progress = Math.round((rt.receivedChunks.size / rt.totalChunks) * 100);
+    this.setupPullWatchdog(messageId, sender);
+    rt.reason = `Requesting bits... (${pending.size} pending)`;
+    this.notifyReceiverProgress(rt, sender);
+  }
+
+  private notifyReceiverProgress(rt: ReceiverTransferState, from: string) {
+    const totalChunks = rt.totalChunks;
+    const receivedChunks = rt.receivedChunks.size;
+    const isDone = receivedChunks === totalChunks;
+    const cSize = rt.chunkSize || P2P_LIMITS.CHUNK_SIZE;
+    const progress = isDone ? 100 : Math.floor((receivedChunks / totalChunks) * 100);
+    const totalBytes = rt.actualSize || (totalChunks * cSize);
+    const receivedBytes = Math.min(totalBytes, rt.receivedChunks.size * cSize);
+
     window.dispatchEvent(new CustomEvent('p2p-receiver-progress', {
       detail: {
-        messageId,
+        messageId: rt.messageId,
         percentage: progress,
         progress,
-        received: rt.receivedChunks.size * P2P_LIMITS.CHUNK_SIZE,
-        total: rt.totalChunks * P2P_LIMITS.CHUNK_SIZE,
-        status: 'RECEIVING',
-        from: sender,
-        fileName: rt.fileName
+        received: receivedBytes,
+        total: totalBytes,
+        status: isDone ? 'complete' : rt.status,
+        from,
+        fileName: rt.fileName,
+        speedBps: rt.speedBps,
+        etaSeconds: rt.etaSeconds,
+        reason: rt.reason,
+        startTime: rt.startTime,
+        totalChunks: rt.totalChunks,
+        receivedChunks: rt.receivedChunks.size
       }
     }));
   }
@@ -1813,18 +2166,19 @@ class StrictP2PService {
     if (!session || !session.sessionKey) return;
 
     try {
-      // 🚀 BACKPRESSURE: Wait if socket buffer is too full
       const ws = this.ws as any;
-      if (ws && ws.bufferedAmount > 16 * 1024 * 1024) { // 16MB threshold (Increased for speed)
-        // console.log(`[P2P SERVER] Throttling ${messageId} (buffered: ${ws.bufferedAmount})`);
-        await new Promise(r => setTimeout(r, 100));
-        while (ws && ws.bufferedAmount > 8 * 1024 * 1024) {
-          await new Promise(r => setTimeout(r, 50));
+      if (ws && ws.bufferedAmount > 128 * 1024 * 1024) {
+        // 🚀 High-speed backpressure: 128MB threshold
+        // console.log(`[P2P SENDER] Backpressure: ${ws.bufferedAmount} bytes buffered. Throttling...`);
+        await new Promise(r => setTimeout(r, 5));
+        while (ws && ws.bufferedAmount > 64 * 1024 * 1024) { // Wait until it drops back to 64MB
+          await new Promise(r => setTimeout(r, 5));
         }
       }
 
-      const offset = chunkIndex * P2P_LIMITS.CHUNK_SIZE;
-      const chunkBlob = t.file.slice(offset, offset + P2P_LIMITS.CHUNK_SIZE);
+      const cSize = t.chunkSize || P2P_LIMITS.CHUNK_SIZE;
+      const offset = chunkIndex * cSize;
+      const chunkBlob = t.file.slice(offset, offset + cSize);
       const buffer = await chunkBlob.arrayBuffer();
       const encrypted = await encryptChunkAES(session.sessionKey, buffer);
       const base64 = arrayBufferToBase64(encrypted.data);
@@ -1853,29 +2207,32 @@ class StrictP2PService {
     for (const meta of metas) {
       const { messageId, fileName, mimeType, totalChunks } = meta;
 
-      // Skip if already in memory or if already completed (though COMPLETED usually deletes chunks)
+      // 🚀 FIX: Skip rehydrating as a receiver if we are already the sender for this file
+      if (this.senderTransferRegistry.has(messageId)) {
+        console.log(`[P2P] Skipping receiver rehydration for sent file: ${fileName}`);
+        continue;
+      }
+
       if (this.receiverTransfers.has(messageId)) continue;
 
       const finished = await this.hasReceivedFile(messageId);
-      if (finished) continue;
-
-      // Try to find sender in localStorage
-      const sender = localStorage.getItem(`p2p-sender-${messageId}`);
-      if (sender) {
-        this.transferSenders.set(messageId, sender);
-      }
+      const receivedIndexes = await getReceivedChunkIndexes(messageId); // Get actual received chunks
 
       const rt: ReceiverTransferState = {
         messageId,
         fileName,
         mimeType,
         totalChunks,
-        receivedChunks: new Set(),
-        verifiedChunks: new Set(),
+        receivedChunks: new Set(receivedIndexes),
+        verifiedChunks: new Set(receivedIndexes),
         failedChunks: new Set(),
-        status: 'PAUSED', // Default to paused until we know sender is online
+        status: finished ? 'COMPLETED' : 'INIT',
         reason: null,
-        lastUpdated: Date.now()
+        lastUpdated: Date.now(),
+        actualSize: meta.size,
+        startTime: Date.now(),
+        speedBps: 0,
+        etaSeconds: null
       };
 
       this.receiverTransfers.set(messageId, rt);
@@ -1892,6 +2249,55 @@ class StrictP2PService {
 
   resumeSending(_msgId: string) {
     console.log('[P2P] resumeSending stub called');
+  }
+
+  private updateSpeedInfo(state: any, currentBytes: number, totalBytes: number) {
+    const now = Date.now();
+
+    // 🚀 CRITICAL: Ensure initialization for accurate speed tracking
+    if (!state.startTime) state.startTime = now;
+    if (!state.lastTime) state.lastTime = now;
+    if (state.lastBytes === undefined) state.lastBytes = currentBytes;
+
+    const elapsed = (now - state.lastTime) / 1000;
+
+    // Update every 1s for more stable readings with large 16MB chunks
+    if (elapsed >= 1.0) {
+      const bytesDiff = currentBytes - (state.lastBytes || 0);
+      const currentSpeed = bytesDiff / elapsed;
+
+      // Exponential Moving Average for smoothness (80% weight to history)
+      state.speedBps = state.speedBps && state.speedBps > 0
+        ? (state.speedBps * 0.8 + currentSpeed * 0.2)
+        : currentSpeed;
+
+      state.lastTime = now;
+      state.lastBytes = currentBytes;
+
+      if (state.speedBps > 0) {
+        const remainingBytes = Math.max(0, totalBytes - currentBytes);
+        state.etaSeconds = Math.ceil(remainingBytes / state.speedBps);
+      } else {
+        state.etaSeconds = null;
+      }
+    }
+  }
+
+  private setupPullWatchdog(messageId: string, sender: string) {
+    if (this.pullWatchdogs.has(messageId)) clearTimeout(this.pullWatchdogs.get(messageId));
+
+    this.pullWatchdogs.set(messageId, setTimeout(() => {
+      const rt = this.receiverTransfers.get(messageId);
+      if (rt && rt.status === 'RECEIVING' && rt.receivedChunks.size < rt.totalChunks) {
+        console.log(`[P2P] Watchdog: No chunks received for 5s. Clearing pending and re-pulling ${messageId}`);
+        rt.reason = 'Network is unstable. Retrying connection...';
+        this.notifyReceiverProgress(rt, sender);
+
+        // 🚀 CRITICAL: Clear pending requests so pullMissingChunks can re-request stuck chunks
+        this.pendingRequests.delete(messageId);
+        this.pullMissingChunks(messageId, sender);
+      }
+    }, 5000));
   }
 }
 

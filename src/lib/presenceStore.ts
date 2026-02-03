@@ -34,5 +34,11 @@ export function subscribePresence(cb: (online: Set<string>) => void) {
 }
 
 function notifyListeners() {
-    listeners.forEach(l => l(new Set(onlinePeers)));
+    const peers = new Set(onlinePeers);
+    listeners.forEach(l => l(peers));
+
+    // Dispatch legacy event for UI components relying on it
+    window.dispatchEvent(new CustomEvent('p2p-peers-updated', {
+        detail: { peers: Array.from(peers) }
+    }));
 }

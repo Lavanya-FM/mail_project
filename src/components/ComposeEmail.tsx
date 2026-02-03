@@ -56,7 +56,7 @@ export default function ComposeEmail(props: ComposeEmailProps) {
   // P2P State
   const [profile, setProfile] = useState<any>(null);
   const [p2pConnected, setP2pConnected] = useState(false);
-  const [recipientStatus, setRecipientStatus] = useState<'online' | 'offline' | 'unknown'>('unknown');
+  const [recipientStatus, setRecipientStatus] = useState<'ONLINE' | 'OFFLINE' | 'UNKNOWN'>('UNKNOWN');
   const [p2pFiles, setP2pFiles] = useState<any[]>([]);
   const [showP2PProgress, setShowP2PProgress] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -249,23 +249,24 @@ export default function ComposeEmail(props: ComposeEmailProps) {
   // Reactive Presence Detection
   useEffect(() => {
     if (!recipientEmail || !p2pConnected) {
-      setRecipientStatus('unknown');
+      setRecipientStatus('UNKNOWN');
       return;
     }
 
-    // Initial check
-    const isOnline = p2pService.isPeerOnline(recipientEmail);
-    setRecipientStatus(isOnline ? 'online' : 'offline');
+    // Initial check (normalize email for presence lookup)
+    const normalizedRecipient = recipientEmail.toLowerCase().trim();
+    const isOnline = p2pService.isPeerOnline(normalizedRecipient);
+    setRecipientStatus(isOnline ? 'ONLINE' : 'OFFLINE');
 
     const handleOnline = (e: any) => {
       if (e.detail.toLowerCase() === recipientEmail.toLowerCase()) {
-        setRecipientStatus('online');
+        setRecipientStatus('ONLINE');
       }
     };
 
     const handleOffline = (e: any) => {
       if (e.detail.toLowerCase() === recipientEmail.toLowerCase()) {
-        setRecipientStatus('offline');
+        setRecipientStatus('OFFLINE');
       }
     };
 

@@ -239,6 +239,10 @@ export default function ComposeEmail(props: ComposeEmailProps) {
 
     setSending(true);
 
+    // 🚀 Optimistic UI: Close immediately, process in background
+    onClose();
+    onSent?.();
+
     try {
       const recipients = to.split(',').map(e => e.trim()).filter(Boolean);
       const P2P_THRESHOLD = 5 * 1024 * 1024; // 5MB
@@ -309,8 +313,7 @@ export default function ComposeEmail(props: ComposeEmailProps) {
       });
 
       toast.success('✓ Email sent successfully');
-      onSent?.();
-      onClose();
+      // onSent/onClose called optimistically at start
 
     } catch (err: any) {
       console.error('[SEND FAILED]', err);

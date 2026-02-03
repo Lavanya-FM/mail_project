@@ -9,6 +9,7 @@ import { collapseForwarded } from '../lib/collapseForwarded';
 import { p2pService, AttachmentState } from '../lib/p2pService';
 import { callService } from '../lib/callService';
 import toast from 'react-hot-toast';
+import P2PAttachmentList from './P2PAttachmentList';
 
 
 type EmailViewProps = {
@@ -52,191 +53,9 @@ const formatSize = (bytes: number) => {
   return `${(kb / 1024).toFixed(1)} MB`;
 };
 
-const NormalAttachmentItem = ({ attachment, email, currentUser }: { attachment: any, email: any, currentUser: any }) => {
-  const downloadUrl = `/api/email/${email.id}/attachment/${attachment.id}?download=1&user_id=${currentUser.id}`;
-  const previewUrl = `/api/email/${email.id}/attachment/${attachment.id}?inline=1&user_id=${currentUser.id}`;
-  const isVideo = typeof attachment.mime_type === 'string' && attachment.mime_type.startsWith('video/');
+// Local attachment items handled by P2PAttachmentList.
 
-  return (
-    <div className="p-3 bg-gray-50 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center flex-shrink-0">
-          <FileText className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{attachment.filename}</p>
-          <p className="text-xs text-gray-500 dark:text-gray-400">{formatSize(attachment.size || attachment.size_bytes)}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => window.open(downloadUrl, '_blank')} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20 rounded-md transition-colors" title="Download">
-            <Download className="w-5 h-5" />
-          </button>
-          <button onClick={() => window.open(previewUrl, '_blank')} className="p-1.5 text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-slate-700 rounded-md transition-colors" title="Preview">
-            <Eye className="w-5 h-5" />
-          </button>
-        </div>
-      </div>
-      {isVideo && (
-        <div className="mt-2">
-          <video src={previewUrl} controls className="w-full max-h-64 rounded-lg bg-black" />
-        </div>
-      )}
-    </div>
-  );
-};
-
-const P2PAttachmentItem = ({ attachment: a, email, isSender, currentUser, p2pProgressMap, videoBlobUrls }: any) => {
-  // Use a strictly local state for UI to avoid flicker, sync with props
-  const [localState, setLocalState] = useState<AttachmentState>(AttachmentState.WAITING_FOR_PEER);
-
-  const senderEmail = (email.from_email || '').toLowerCase().trim();
-  const hasP2PId = !!a.p2p_message_id;
-
-  // Progress from props (global listener in parent)
-  const p2pProgress = hasP2PId ? p2pProgressMap[a.p2p_message_id] : null;
-  const serverState = a.attachment_transfer_state as AttachmentState | undefined;
-
-  // Derive effective state
-  useEffect(() => {
-    let nextState = AttachmentState.WAITING_FOR_PEER;
-
-    // 1. Final States from Server/Props are authoritative
-    if (isSender) {
-      nextState = AttachmentState.COMPLETED;
-    } else if (serverState === AttachmentState.COMPLETED || serverState === AttachmentState.FALLBACK || serverState === AttachmentState.FAILED) {
-      nextState = serverState;
-    }
-    // 2. Active Transfer State
-    else if (p2pProgress) {
-      nextState = p2pProgress.status as AttachmentState;
-    }
-    // 3. Check Persistence/Presence for initial state
-    else if (hasP2PId) {
-      if (a.delivered || a.p2p_completed || p2pService.hasReceivedFileSync(a.p2p_message_id)) {
-        nextState = AttachmentState.COMPLETED;
-      } else {
-        // Presence Check
-        const isOnline = p2pService.isPeerOnline(senderEmail);
-        nextState = isOnline ? AttachmentState.READY : AttachmentState.WAITING_FOR_PEER;
-      }
-    }
-
-    setLocalState(nextState);
-  }, [serverState, p2pProgress, isSender, hasP2PId, senderEmail, a.delivered, a.p2p_completed]);
-
-  // Presence Listener (Specific for this item)
-  useEffect(() => {
-    if (isSender || localState === AttachmentState.COMPLETED || localState === AttachmentState.TRANSFERRING) return;
-
-    const checkPresence = () => {
-      const isOnline = p2pService.isPeerOnline(senderEmail);
-      if (isOnline && localState === AttachmentState.WAITING_FOR_PEER) {
-        setLocalState(AttachmentState.READY);
-      } else if (!isOnline && localState === AttachmentState.READY) {
-        setLocalState(AttachmentState.WAITING_FOR_PEER);
-      }
-    };
-
-    // Check initially
-    checkPresence();
-
-    const handler = (e: any) => {
-      if (e.detail?.email === senderEmail || e.detail?.peer === senderEmail) {
-        checkPresence();
-      }
-    };
-
-    window.addEventListener('p2p-peer-online', handler);
-    window.addEventListener('p2p-peer-offline', handler);
-    window.addEventListener('p2p-peers-updated', checkPresence);
-    return () => {
-      window.removeEventListener('p2p-peer-online', handler);
-      window.removeEventListener('p2p-peer-offline', handler);
-      window.removeEventListener('p2p-peers-updated', checkPresence);
-    };
-  }, [senderEmail, localState, isSender]);
-
-  // Auto-Start Transfer when READY
-  useEffect(() => {
-    if (!isSender && (localState === AttachmentState.READY || localState === AttachmentState.KEY_READY) && a.p2p_message_id) {
-      // Only start if we haven't already
-      if (p2pProgress?.status !== 'RECEIVING' && p2pProgress?.status !== 'COMPLETED') {
-        console.log('[P2P UI] Auto-starting transfer for', a.filename);
-        p2pService.resumeReceive(a.p2p_message_id, senderEmail);
-      }
-    }
-  }, [localState, isSender, a.p2p_message_id, senderEmail, p2pProgress?.status]);
-
-  const isTransferComplete = localState === AttachmentState.COMPLETED;
-  const isTransferInProgress = localState === AttachmentState.TRANSFERRING || localState === AttachmentState.RECEIVING || localState === AttachmentState.HANDSHAKING;
-  // Use passed progress if available, otherwise fallback to local/prop default
-  const transferPercentage = p2pProgress?.percentage || 0;
-  const isVideo = typeof a.mime_type === 'string' && a.mime_type.startsWith('video/');
-
-  return (
-    <div className={`p-3 bg-gray-50 dark:bg-slate-800 border rounded-lg transition-colors ${isTransferInProgress ? 'border-blue-300 dark:border-blue-700' : 'border-gray-200 dark:border-slate-700'}`}>
-      <div className="flex items-center gap-3">
-        <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${isTransferInProgress ? 'bg-blue-100' : isTransferComplete ? 'bg-green-100' : 'bg-yellow-100'}`}>
-          {isTransferInProgress ? <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" /> : <FileText className="w-5 h-5 text-gray-600" />}
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{a.filename.replace(/\.p2p$/, '')}</p>
-          <p className="text-xs text-gray-500 flex items-center gap-2">
-            {formatSize(p2pProgress?.total || a.size || a.size_bytes)}
-            <span className={`font-medium ${localState === AttachmentState.COMPLETED ? 'text-green-600' :
-              (isTransferInProgress) ? 'text-blue-600' :
-                localState === AttachmentState.FAILED ? 'text-red-600' :
-                  'text-yellow-600'
-              }`}>
-              {localState === AttachmentState.COMPLETED ? 'Available' :
-                localState === AttachmentState.RECEIVING ? `Receiving... ${transferPercentage}%` :
-                  localState === AttachmentState.HANDSHAKING ? 'Handshaking...' :
-                    localState === AttachmentState.KEY_READY ? 'Key Established' :
-                      localState === AttachmentState.TRANSFERRING ? `Transferring... ${transferPercentage}%` :
-                        localState === AttachmentState.READY ? 'Ready to receive' :
-                          localState === AttachmentState.PAUSED ? `Paused - ${transferPercentage}%` :
-                            localState === AttachmentState.FAILED ? 'Failed' :
-                              localState === AttachmentState.FALLBACK ? 'Server Backup' :
-                                'Waiting for sender...'}
-            </span>
-          </p>
-          {isTransferInProgress && (
-            <div className="mt-1 w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
-              <div className="h-full bg-blue-600 transition-all duration-300" style={{ width: `${Math.max(transferPercentage, 5)}%` }} />
-            </div>
-          )}
-        </div>
-
-        {/* Actions */}
-        <div className="flex items-center gap-2">
-          {!isSender && (
-            <>
-              {(localState === AttachmentState.COMPLETED || localState === AttachmentState.FALLBACK) && (
-                <button onClick={() => window.dispatchEvent(new CustomEvent('p2p-download-file', { detail: { messageId: a.p2p_message_id, fileName: a.filename } }))}
-                  className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md">
-                  <Download className="w-5 h-5" />
-                </button>
-              )}
-              {localState === AttachmentState.TRANSFERRING && (
-                <button onClick={() => p2pService.pauseTransfer(a.p2p_message_id)} className="text-xs font-semibold text-blue-600 hover:underline">Pause</button>
-              )}
-              {(localState === AttachmentState.PAUSED || localState === AttachmentState.FAILED) && (
-                <button onClick={() => p2pService.resumeReceive(a.p2p_message_id)} className="text-xs font-semibold text-green-600 hover:underline">Resume</button>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Video Preview if Complete */}
-      {isTransferComplete && isVideo && !isSender && (
-        <div className="mt-2">
-          <video src={videoBlobUrls[a.p2p_message_id]} controls className="w-full max-h-64 rounded-lg bg-black" />
-        </div>
-      )}
-    </div>
-  );
-};
+// Local P2P attachment items removed.
 
 export default function EmailView({ email, onClose, onRefresh, onCompose: _onCompose, labels = [] }: EmailViewProps) {
   // console.log("EMAIL JSON >>>", email);
@@ -253,7 +72,6 @@ export default function EmailView({ email, onClose, onRefresh, onCompose: _onCom
   const myEmail = currentUser.email.toLowerCase();
   const senderEmail = (email?.from_email || '').toLowerCase();
   const isSender = myEmail === senderEmail;
-  const isReceiver = !isSender;
 
   const autoResizeReply = () => {
     const el = replyTextareaRef.current;
@@ -278,19 +96,9 @@ export default function EmailView({ email, onClose, onRefresh, onCompose: _onCom
   >(null);
 
   const [replyBody, setReplyBody] = useState("");
-  const [p2pProgressMap, setP2pProgressMap] = useState<
-    Record<string, {
-      percentage: number;
-      etaSeconds?: number | null;
-      received?: number;
-      total?: number;
-      speedBps?: number;
-      status?: AttachmentState;
-    }>
-  >({});
+  // p2pProgressMap removed (delegated to components)
 
-  // Track video blob URLs for inline playback
-  const [videoBlobUrls, setVideoBlobUrls] = useState<Record<string, string>>({});
+  const [videoBlobUrls] = useState<Record<string, string>>({});
 
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(initialConfirmState);
   const [showLabelDropdown, setShowLabelDropdown] = useState(false);
@@ -440,74 +248,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose: _onCom
 
 
 
-  // P2P Auto-resume logic moved to P2PAttachmentItem
-  useEffect(() => {
-    // Legacy effect removed to prevent duplicate requests
-  }, []);
-
-  // Listen for receiver-side P2P progress
-  useEffect(() => {
-    if (!isReceiver) return;
-
-    const handler = (e: any) => {
-      const { messageId, percentage, etaSeconds, received, total, speedBps, status } = e.detail;
-
-      setP2pProgressMap((prev: any) => ({
-        ...prev,
-        [messageId]: { percentage, etaSeconds, received, total, speedBps, status }
-      }));
-    };
-
-    window.addEventListener('p2p-receiver-progress', handler);
-    return () => window.removeEventListener('p2p-receiver-progress', handler);
-  }, [isReceiver]);
-
-  // Listen for Sender-side P2P progress (NEW)
-  useEffect(() => {
-    if (!isSender) return;
-
-    const handler = (e: any) => {
-      const { messageId, peer, progress, status } = e.detail;
-      const key = peer ? `${messageId}:${peer}` : messageId;
-
-      setP2pProgressMap((prev: any) => ({
-        ...prev,
-        [key]: { percentage: progress, status }
-      }));
-    };
-
-    window.addEventListener('p2p-progress', handler);
-    return () => window.removeEventListener('p2p-progress', handler);
-  }, [isSender]);
-
-  // Listen for file-ready (complete) events to force 100% on receiver and load video blobs
-  useEffect(() => {
-    if (!isReceiver) return;
-
-    const completeHandler = async (e: any) => {
-      const { messageId, fileName } = e.detail;
-      setP2pProgressMap((prev: any) => ({
-        ...prev,
-        [messageId]: { ...(prev?.[messageId] || {}), percentage: 100 }
-      }));
-
-      // Load video blob for inline playback
-      if (fileName && (fileName.endsWith('.mp4') || fileName.endsWith('.webm') || fileName.endsWith('.mov'))) {
-        try {
-          const blob = await p2pService.getReceivedBlob(messageId);
-          if (blob) {
-            const url = URL.createObjectURL(blob);
-            setVideoBlobUrls(prev => ({ ...prev, [messageId]: url }));
-          }
-        } catch (err) {
-          console.error('[EmailView] Failed to load video blob:', err);
-        }
-      }
-    };
-
-    window.addEventListener('p2p-file-ready', completeHandler);
-    return () => window.removeEventListener('p2p-file-ready', completeHandler);
-  }, [isReceiver]);
+  // P2P Listeners removed (delegated to P2PAttachmentList component)
 
   useEffect(() => {
     if (!isSender) return;
@@ -705,7 +446,9 @@ export default function EmailView({ email, onClose, onRefresh, onCompose: _onCom
       size: a.size_bytes ?? 0,
       delivery_mode: a.delivery_mode,
       p2p_message_id: a.p2p_message_id,
-      p2p_completed: a.p2p_completed
+      p2p_completed: a.p2p_completed,
+      content_base64: a.content_base64 || null,
+      p2p_status: a.p2p_status
     }))
     : [];
 
@@ -743,8 +486,8 @@ ${sanitizeBody(email.body) || ''}
   const hasMultipleRecipients = (() => {
     if (!email) return false;
     const allRecipients = [
-      ...(email.to_emails || []),
-      ...(email.cc_emails || [])
+      ...(Array.isArray(email.to_emails) ? email.to_emails : []),
+      ...(Array.isArray(email.cc_emails) ? email.cc_emails : [])
     ].filter(e => e && e !== currentUser?.email);
     return allRecipients.length > 0;
   })();
@@ -867,8 +610,8 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
       toEmails = Array.from(
         new Set([
           email.from_email,
-          ...(email.to_emails || []),
-          ...(email.cc_emails || [])
+          ...(Array.isArray(email.to_emails) ? email.to_emails : []),
+          ...(Array.isArray(email.cc_emails) ? email.cc_emails : [])
         ])
       ).filter(e => e && e !== me);
       emailSubject = email.subject?.startsWith("Re:")
@@ -884,7 +627,7 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
       if (email.from_email !== me) {
         toEmails = [email.from_email || ''];
       } else {
-        toEmails = (email.to_emails || []).filter(e => e !== me);
+        toEmails = (Array.isArray(email.to_emails) ? email.to_emails : []).filter(e => e !== me);
       }
       emailSubject = email.subject?.startsWith("Re:")
         ? email.subject
@@ -1206,48 +949,20 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
 
               return (
                 <div className="mt-4 pt-4 border-t border-gray-200 dark:border-slate-700">
-                  {/* Header - Clean Gmail Style */}
-                  <div className="flex items-center gap-2 mb-3">
-                    <Paperclip className="w-4 h-4 text-gray-400" />
-                    <span className="text-sm text-gray-600 dark:text-gray-400">
-                      {attachments.length} attachment{attachments.length > 1 ? 's' : ''}
-                    </span>
-                    {isP2PEmail && (
-                      <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
-                        <Lock className="w-3 h-3" /> Secure
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Attachment Cards - Clean Gmail-like Design */}
-                  <div className="space-y-2">
-                    {attachments.map((a: any) => {
-                      const isP2P = !!(a.delivery_mode === 'P2P' || a.is_p2p || a.p2p_message_id || isP2PEmail);
-
-                      if (isP2P) {
-                        return (
-                          <P2PAttachmentItem
-                            key={a.id || a.p2p_message_id}
-                            attachment={a}
-                            email={email}
-                            isSender={isSender}
-                            currentUser={currentUser}
-                            p2pProgressMap={p2pProgressMap}
-                            videoBlobUrls={videoBlobUrls}
-                          />
-                        );
-                      } else {
-                        return (
-                          <NormalAttachmentItem
-                            key={a.id}
-                            attachment={a}
-                            email={email}
-                            currentUser={currentUser}
-                          />
-                        );
-                      }
-                    })}
-                  </div>
+                  <P2PAttachmentList
+                    emailId={String(email.id)}
+                    senderEmail={senderEmail}
+                    attachments={attachments.map((a: any) => ({
+                      filename: a.filename,
+                      mime_type: a.mime_type,
+                      size_bytes: a.size || a.size_bytes,
+                      p2p_message_id: a.p2p_message_id,
+                      content_base64: a.content_base64 || null,
+                      is_p2p: !!(a.delivery_mode === 'P2P' || a.is_p2p || a.p2p_message_id || isP2PEmail),
+                      p2p_status: a.p2p_status
+                    }))}
+                    mode={isSender ? 'sender' : 'receiver'}
+                  />
 
                   {isP2PEmail && (
                     <p className="mt-3 text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">

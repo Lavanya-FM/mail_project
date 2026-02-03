@@ -340,7 +340,7 @@ export default function MeetingPage({ meetingId, onLeave, initialVideoOff = fals
                     peersRef.current.delete(pEmail);
                     setRemoteStreams(prev => { const n = new Map(prev); n.delete(pEmail); return n; });
                 }
-                setParticipants(prev => prev.filter(p => p.connectionId !== e.detail.connectionId));
+                setParticipants(prev => (Array.isArray(prev) ? prev : Object.values(prev || {}) as any[]).filter(p => p.connectionId !== e.detail.connectionId));
             }
         };
 
@@ -604,7 +604,7 @@ export default function MeetingPage({ meetingId, onLeave, initialVideoOff = fals
                                         </div>
                                     </div>
                                 ))}
-                                {participants.filter(p => p.email !== effectiveUser?.email && !remoteStreams.has(p.email)).map(p => (
+                                {(Array.isArray(participants) ? participants : Object.values(participants || {}) as any[]).filter(p => p.email !== effectiveUser?.email && !remoteStreams.has(p.email)).map(p => (
                                     <div key={p.email} className="bg-[#3c4043] rounded-2xl flex flex-col items-center justify-center animate-pulse gap-4">
                                         <div className="w-20 h-20 rounded-full bg-purple-600 flex items-center justify-center text-3xl font-bold">{(p.email || p.name || '?')[0].toUpperCase()}</div>
                                         <div className="text-sm font-bold text-blue-300">Joining...</div>

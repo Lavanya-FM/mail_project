@@ -1,7 +1,7 @@
 // backend/p2pSocket.js
 const WebSocket = require('ws');
 
-const clientsByEmail = new Map(); // email -> ws
+const clientsByEmail = new Map(); // email -> { ws, lastHeartbeat, isAlive }
 const rooms = new Map(); // meetingId -> Set<email>
 
 function initP2PSocket(server) {
@@ -10,6 +10,18 @@ function initP2PSocket(server) {
   wss.on('connection', (ws) => {
     let email = null;
     let joinedRooms = new Set();
+
+    // 🚀 HEARTBEAT: Mark connection as alive
+    ws.isAlive = true;
+    ws.on('pong', () => {
+      ws.isAlive = true;
+      if (email) {
+        const client = clientsByEmail.get(email);
+        if (client) {
+          client.lastHeartbeat = Date.now();
+        }
+      }
+    });
 
     ws.on('message', (raw) => {
       let msg;
@@ -20,7 +32,6 @@ function initP2PSocket(server) {
       }
 
       // 🔐 REGISTER USER
-      // 🔐 REGISTER USER
       if (msg.type === 'register' && (msg.email || msg.from)) {
         const rawEmail = msg.email || msg.from;
         email = rawEmail.trim().toLowerCase();
@@ -28,10 +39,10 @@ function initP2PSocket(server) {
         console.log(`[P2P SERVER] Registering ${email}`);
 
         // 🚨 ENFORCE: One socket per email (close old connection if exists)
-        const existingSocket = clientsByEmail.get(email);
-        if (existingSocket && existingSocket !== ws) {
+        const existingClient = clientsByEmail.get(email);
+        if (existingClient && existingClient.ws !== ws) {
           console.log(`[P2P SERVER] Closing old connection for ${email}`);
-          existingSocket.close();
+          existingClient.ws.close();
           clientsByEmail.delete(email);
         }
 
@@ -43,8 +54,12 @@ function initP2PSocket(server) {
         }));
         console.log(`[P2P SERVER] Sent current snapshot to ${email}:`, currentOnline);
 
-        // Now add this user
-        clientsByEmail.set(email, ws);
+        // Now add this user with heartbeat tracking
+        clientsByEmail.set(email, {
+          ws: ws,
+          lastHeartbeat: Date.now(),
+          isAlive: true
+        });
 
         // ✅ ACKNOWLEDGE REGISTRATION
         ws.send(JSON.stringify({
@@ -58,8 +73,8 @@ function initP2PSocket(server) {
         // 🔔 ALSO notify others individually
         const peerOnlineMsg = JSON.stringify({ type: 'peer-online', email: email });
         for (const [otherEmail, client] of clientsByEmail.entries()) {
-          if (otherEmail !== email && client.readyState === WebSocket.OPEN) {
-            client.send(peerOnlineMsg);
+          if (otherEmail !== email && client.ws.readyState === WebSocket.OPEN) {
+            client.ws.send(peerOnlineMsg);
           }
         }
       }
@@ -116,9 +131,9 @@ function initP2PSocket(server) {
       if (msg.to) {
         const recipients = Array.isArray(msg.to) ? msg.to : [msg.to];
         recipients.forEach(to => {
-          const target = clientsByEmail.get(to);
-          if (target && target.readyState === WebSocket.OPEN) {
-            target.send(JSON.stringify(msg));
+          const targetClient = clientsByEmail.get(to);
+          if (targetClient && targetClient.ws.readyState === WebSocket.OPEN) {
+            targetClient.ws.send(JSON.stringify(msg));
           }
         });
       }
@@ -140,8 +155,8 @@ function initP2PSocket(server) {
       // 🔔 ALSO notify others individually
       const peerOfflineMsg = JSON.stringify({ type: 'peer-offline', email: email });
       for (const client of clientsByEmail.values()) {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(peerOfflineMsg);
+        if (client.ws.readyState === WebSocket.OPEN) {
+          client.ws.send(peerOfflineMsg);
         }
       }
       console.log(`[P2P SERVER] Notified others that ${email} went offline`);
@@ -174,8 +189,8 @@ function initP2PSocket(server) {
 
     let sentCount = 0;
     for (const client of clientsByEmail.values()) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
+      if (client.ws.readyState === WebSocket.OPEN) {
+        client.ws.send(message);
         sentCount++;
       }
     }
@@ -189,20 +204,61 @@ function initP2PSocket(server) {
     for (const memberEmail of room) {
       if (memberEmail !== exceptEmail) {
         const client = clientsByEmail.get(memberEmail);
-        if (client && client.readyState === WebSocket.OPEN) {
-          client.send(jsonMsg);
+        if (client && client.ws.readyState === WebSocket.OPEN) {
+          client.ws.send(jsonMsg);
         }
       }
     }
   }
 
+  // 🚀 HEARTBEAT MONITOR: Ping all clients every 10 seconds
+  const heartbeatInterval = setInterval(() => {
+    const now = Date.now();
+    const staleThreshold = 30000; // 30 seconds
+
+    for (const [email, client] of clientsByEmail.entries()) {
+      // Check if connection is stale
+      if (now - client.lastHeartbeat > staleThreshold) {
+        console.log(`[P2P SERVER] Stale connection detected for ${email}, terminating...`);
+        client.ws.terminate();
+        clientsByEmail.delete(email);
+
+        // Notify others
+        broadcastOnlinePeers();
+        const peerOfflineMsg = JSON.stringify({ type: 'peer-offline', email: email });
+        for (const otherClient of clientsByEmail.values()) {
+          if (otherClient.ws.readyState === WebSocket.OPEN) {
+            otherClient.ws.send(peerOfflineMsg);
+          }
+        }
+        continue;
+      }
+
+      // Send ping
+      if (client.ws.readyState === WebSocket.OPEN) {
+        client.isAlive = false;
+        client.ws.ping();
+      } else {
+        // Connection is already closed
+        clientsByEmail.delete(email);
+        broadcastOnlinePeers();
+      }
+    }
+  }, 10000); // Every 10 seconds
+
   // 🔄 PERIODIC PRESENCE BROADCAST (every 30 seconds)
-  setInterval(() => {
+  const presenceInterval = setInterval(() => {
     if (clientsByEmail.size > 0) {
       console.log('[P2P SERVER] Periodic presence broadcast');
       broadcastOnlinePeers();
     }
   }, 30000);
+
+  // Cleanup on server shutdown
+  wss.on('close', () => {
+    clearInterval(heartbeatInterval);
+    clearInterval(presenceInterval);
+  });
 }
 
 module.exports = { initP2PSocket };

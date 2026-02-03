@@ -1,6 +1,6 @@
 // src/lib/p2pStorage.ts
 const DB_NAME = 'jeemail-p2p';
-const DB_VERSION = 3; // Bumped to 3 for pending_transfers
+const DB_VERSION = 4; // Bumped to 4 to fix version conflict
 
 let db: IDBDatabase | null = null;
 
@@ -209,6 +209,94 @@ export async function getAllPendingTransfers() {
     req.onsuccess = () => res(req.result || []);
     req.onerror = () => res([]);
   });
+}
+
+// 🚀 Migration from p2pIndexedDB.ts to fix VersionError
+export async function assembleAndDownload(messageId: string) {
+  const d = await openDB();
+
+  // 1. Get Metadata
+  const fileMeta = await new Promise<any>((resolve) => {
+    const tx = d.transaction('files', 'readonly');
+    const req = tx.objectStore('files').get(messageId);
+    req.onsuccess = () => resolve(req.result);
+  });
+
+  // Fallback: Check 'meta' store if not in 'files'
+  let meta = fileMeta;
+  if (!meta) {
+    meta = await new Promise<any>((resolve) => {
+      const tx = d.transaction('meta', 'readonly');
+      const req = tx.objectStore('meta').get(messageId);
+      req.onsuccess = () => resolve(req.result);
+    });
+  }
+
+  if (!meta) {
+    window.dispatchEvent(new CustomEvent('p2p-download-error', {
+      detail: { messageId, error: 'File not available. P2P transfer may be in progress.' }
+    }));
+    return;
+  }
+
+  // 2. Get Chunks (using Cursor or GetAll)
+  const chunks: ArrayBuffer[] = [];
+
+  await new Promise<void>((resolve) => {
+    const tx = d.transaction('chunks', 'readonly');
+    const store = tx.objectStore('chunks');
+    // We iterate entire store? No, use GetAll if possible or Cursor
+    // p2pStorage.ts didn't create an index 'byMessage' on chunks?
+    // Let's check schema in openDB...
+    // Line 16: keyPath: ['messageId', 'chunkIndex'].
+    // No index created explicitly.
+    // But we can use IDBKeyRange on the compound key?
+    // IDB 2.0 supports getAll(IDBKeyRange.bound([messageId, 0], [messageId, Infinity]))
+    // Safe approach: Cursor
+
+    // Actually, 'chunks' uses compound key. key is array.
+    // We can iterate matches.
+    const range = IDBKeyRange.bound([messageId, 0], [messageId, Infinity]);
+    const req = store.openCursor(range);
+
+    req.onsuccess = (e: any) => {
+      const cursor = e.target.result;
+      if (cursor) {
+        // cursor.key is [messageId, chunkIndex]
+        const idx = cursor.value.chunkIndex;
+        chunks[idx] = cursor.value.data; // 'data' is the property name in saveChunk
+        cursor.continue();
+      } else {
+        resolve();
+      }
+    };
+    req.onerror = () => resolve(); // Resolve even on error to not block, though ideally reject
+  });
+
+  // Verify
+  // meta.totalChunks might be in meta.totalChunks or meta.size?
+  // p2pService saves: { fileName, mimeType, totalChunks ... } 
+
+  if (meta.totalChunks && chunks.length !== meta.totalChunks) {
+    // Check if we have holes
+    let count = 0;
+    chunks.forEach(() => count++);
+    if (count !== meta.totalChunks) {
+      console.warn('[P2P] Assembly incomplete', count, '/', meta.totalChunks);
+      // Dispatch error? Or try to DL anyway?
+    }
+  }
+
+  const blob = new Blob(chunks, { type: meta.mimeType });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = meta.fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 export async function removePendingTransfer(compositeId: string) {

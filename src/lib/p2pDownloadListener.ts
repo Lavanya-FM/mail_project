@@ -1,5 +1,5 @@
 // src/lib/p2pDownloadListener.ts
-import { assembleAndDownload } from "./p2pIndexedDB";
+import { assembleAndDownload } from "./p2pStorage";
 
 export function initP2PDownloadListener() {
   window.addEventListener("p2p-download-file", (e: any) => {

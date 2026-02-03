@@ -94,7 +94,7 @@ export default function P2PReceiverHandler() {
 
     // Listen for receiver progress updates
     const handleReceiverProgress = (e: CustomEvent) => {
-      const { messageId, percentage, fileName, etaSeconds, speedBps } = e.detail;
+      const { messageId, percentage, fileName, etaSeconds, speedBps, status } = e.detail;
 
       setIncomingTransfer(prev => {
         if (!prev) return prev;
@@ -106,7 +106,7 @@ export default function P2PReceiverHandler() {
               ? {
                 ...f,
                 progress: percentage,
-                status: percentage >= 100 ? 'delivered' as const : 'sending' as const,
+                status: status === 'PAUSED' ? 'paused' as any : (percentage >= 100 ? 'delivered' as const : 'sending' as const),
                 etaSeconds,
                 speedBps
               }
