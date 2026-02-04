@@ -3,10 +3,12 @@ module.exports = {
     {
       name: "jeemail-backend",
       script: "server.js",
-      cwd: "/home/ubuntu/Mail_Project/backend",
+      cwd: "./",
       env: {
         NODE_ENV: "production"
-      }
+      },
+      max_memory_restart: "1024M",
+      node_args: "--max-old-space-size=2048"
     }
   ]
 };

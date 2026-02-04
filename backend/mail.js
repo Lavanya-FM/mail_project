@@ -63,41 +63,41 @@ async function createSystemFolders(userId) {
 
 // Initialize tables if not exists
 async function initTables() {
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS labels (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      user_id INT NOT NULL,
-      name VARCHAR(50) NOT NULL,
-      color VARCHAR(20) DEFAULT '#9ca3af',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE KEY unique_user_label (user_id, name)
-    )
-  `);
-
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS activity_log (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      user_id INT NOT NULL,
-      access_type VARCHAR(100),
-      ip VARCHAR(45),
-      location VARCHAR(100),
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // Add attachment_transfer_state to email_attachments if not exists
-  // Introduce ONE source of truth: attachment_transfer_state
   try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS labels (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        name VARCHAR(50) NOT NULL,
+        color VARCHAR(20) DEFAULT '#9ca3af',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_user_label (user_id, name)
+      )
+    `);
+
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS activity_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        access_type VARCHAR(100),
+        ip VARCHAR(45),
+        location VARCHAR(100),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Add attachment_transfer_state to email_attachments if not exists
     await db.query(`
         ALTER TABLE email_attachments 
         ADD COLUMN IF NOT EXISTS attachment_transfer_state VARCHAR(50) DEFAULT 'WAITING_FOR_PEER'
-     `);
+     `).catch(e => console.log('Migration note (transfer_state): ' + e.message));
+
   } catch (err) {
-    // Ignore/Log
-    console.log('Migration note (attachment_transfer_state): ' + err.message);
+    console.error('⚠️ DB Initialization failed (Server will run in limited mode):', err.message);
   }
 }
-initTables().catch(console.error);
+
+initTables();
 
 async function logActivity(userId, accessType, req) {
   try {

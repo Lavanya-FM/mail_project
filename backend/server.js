@@ -13,7 +13,16 @@ const http = require('http');
 const app = express();
 app.use(express.json({ limit: '200mb' }));
 app.use(express.urlencoded({ extended: true, limit: '200mb' }));
+app.use(express.urlencoded({ extended: true, limit: '200mb' }));
 app.use(cors());
+
+// Force no-cache globally
+app.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
 
 // -------------------------
 // AUTH (HTTP ONLY)
@@ -86,8 +95,8 @@ app.get(/(.*)/, (req, res) => {
   try {
     const html = require('fs').readFileSync(indexPath, 'utf8');
 
-    // Nuke the cache
-    res.setHeader('Clear-Site-Data', '"cache", "storage", "serviceWorkers"');
+    // Clear cache effectively but DO NOT clear storage (keeps user logged in)
+    res.setHeader('Clear-Site-Data', '"cache"');
 
     res.send(html);
   } catch (err) {

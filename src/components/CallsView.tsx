@@ -66,6 +66,7 @@ export default function CallsView() {
     const [onlinePeers, setOnlinePeers] = useState<string[]>([]);
     const [loadingContacts, setLoadingContacts] = useState(false);
     const [callMode, setCallMode] = useState<'video' | 'voice'>('video');
+    const [isConnected, setIsConnected] = useState(p2pService.isConnected());
 
     // Chat State
     const [selectedChatContact, setSelectedChatContact] = useState<Contact | null>(null);
@@ -236,7 +237,7 @@ export default function CallsView() {
                     id: u.id,
                     name: u.name || u.full_name,
                     email: u.email,
-                    status: onlinePeers.includes(u.email) ? 'online' : 'offline'
+                    status: p2pService.isPeerOnline(u.email) ? 'online' : 'offline'
                 })));
             }
         } catch (err) {
@@ -392,7 +393,15 @@ export default function CallsView() {
         toast.success(`Sending ${file.name}...`);
     };
 
-    // 3. Sub-views rendering
+    // Connection Status Hook
+    useEffect(() => {
+        setIsConnected(p2pService.isConnected());
+        const unsub = p2pService.onConnectionChange((status) => {
+            setIsConnected(status);
+        });
+        return () => { unsub(); };
+    }, []);
+
     const renderMeetings = () => (
         <div className="flex flex-col md:flex-row items-center gap-12 mb-12 animate-fade-in py-8 h-full">
             <div className="flex-1 max-w-lg space-y-6">
@@ -527,7 +536,7 @@ export default function CallsView() {
                                             <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-lg shadow-inner">
                                                 {contact.name[0].toUpperCase()}
                                             </div>
-                                            <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white dark:border-slate-900 ${onlinePeers.includes(contact.email) ? 'bg-green-500' : 'bg-gray-400'}`}></div>
+                                            <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white dark:border-slate-900 ${p2pService.isPeerOnline(contact.email) ? 'bg-green-500' : 'bg-gray-400'}`}></div>
                                         </div>
                                         <div className="min-w-0 flex-1">
                                             <h4 className="font-bold text-gray-900 dark:text-white truncate">{contact.name}</h4>
@@ -539,7 +548,7 @@ export default function CallsView() {
                                         <button onClick={() => startCall('voice', contact.email)} className="flex-1 py-2 bg-green-600 text-white rounded-lg text-[10px] font-bold hover:bg-green-700 transition flex items-center justify-center gap-1"><Phone size={12} /> Voice</button>
                                         <button onClick={() => setSelectedChatContact(contact)} className="flex-1 py-2 bg-indigo-600 text-white rounded-lg text-[10px] font-bold hover:bg-indigo-700 transition flex items-center justify-center gap-1"><MessageSquare size={12} /> Chat</button>
                                     </div>
-                                    {onlinePeers.includes(contact.email) && <div className="absolute top-0 right-0 py-1 px-3 bg-green-500 text-white text-[8px] font-bold uppercase rounded-bl-lg">Online</div>}
+                                    {p2pService.isPeerOnline(contact.email) && <div className="absolute top-0 right-0 py-1 px-3 bg-green-500 text-white text-[8px] font-bold uppercase rounded-bl-lg">Online</div>}
                                 </div>
                             ))
                         }
@@ -650,6 +659,27 @@ export default function CallsView() {
                     {/* Sidebar */}
                     <div className="w-full md:w-64 bg-white dark:bg-slate-900 border-r border-gray-200 dark:border-slate-800 flex flex-col p-4 space-y-2 shrink-0 overflow-y-auto">
                         <div className="space-y-3 mb-6 relative">
+                            {/* Connection Monitor */}
+                            <div className={`px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest flex items-center justify-between border ${isConnected ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                                <div className="flex items-center gap-2">
+                                    <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
+                                    <span>{isConnected ? 'Network Active' : 'Network Offline'}</span>
+                                </div>
+                                {!isConnected && (
+                                    <button
+                                        onClick={() => {
+                                            const email = localStorage.getItem('user_email');
+                                            const userId = localStorage.getItem('user_id');
+                                            if (email && userId) p2pService.connect(userId, email);
+                                            toast.loading('Attempting reconnect...', { duration: 2000 });
+                                        }}
+                                        className="bg-red-600 text-white px-2 py-0.5 rounded hover:bg-red-700 transition-colors"
+                                    >
+                                        Reconnect
+                                    </button>
+                                )}
+                            </div>
+
                             <h3 className="px-2 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Group Meetings</h3>
                             <div className="relative">
                                 <button

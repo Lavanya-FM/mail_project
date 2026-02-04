@@ -228,7 +228,7 @@ export interface ComposeUIProps {
   formatFileSize: (n: number) => string;
 
   onP2PSend: () => void;
-  onRegularSend: () => void;
+  onRegularSend?: () => void;
 
   onClose: () => void;
   onLocalAttach: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -261,7 +261,7 @@ export interface ComposeUIProps {
   recipientEmail: string;
   deliveryMode?: 'P2P' | 'EMAIL';
   fromEmail?: string;
-  p2pConnected: boolean;
+  p2pConnected?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -587,9 +587,10 @@ export default function ComposeUI(props: ComposeUIProps) {
 
         {/* SUBJECT */}
         <div className="flex items-center px-4 py-1 border-b border-gray-100 dark:border-slate-800 min-h-[40px] flex-shrink-0">
+          <label className="text-sm text-gray-500 w-12 pt-0.5">Sub:</label>
           <input
-            className="w-full bg-transparent outline-none text-gray-900 dark:text-gray-100 text-sm py-1 placeholder-gray-500"
-            placeholder="Sub:"
+            className="flex-1 bg-transparent outline-none text-gray-900 dark:text-gray-100 text-sm py-1 placeholder-gray-500"
+            placeholder=""
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
           />

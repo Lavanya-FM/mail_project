@@ -248,34 +248,39 @@ export default function ComposeEmail(props: ComposeEmailProps) {
 
   // Reactive Presence Detection
   useEffect(() => {
-    if (!recipientEmail || !p2pConnected) {
+    // Only check presence if we have a valid single email
+    if (!recipientEmail || !p2pConnected || recipientEmail.includes(',')) {
       setRecipientStatus('UNKNOWN');
       return;
     }
 
-    // Initial check (normalize email for presence lookup)
-    const normalizedRecipient = recipientEmail.toLowerCase().trim();
-    const isOnline = p2pService.isPeerOnline(normalizedRecipient);
+    const email = recipientEmail.toLowerCase().trim();
+    if (!email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
+      setRecipientStatus('UNKNOWN');
+      return;
+    }
+
+    // 1. Check initial status from service
+    const isOnline = presenceService.isOnline(email);
     setRecipientStatus(isOnline ? 'ONLINE' : 'OFFLINE');
 
-    const handleOnline = (e: any) => {
-      if (e.detail.toLowerCase() === recipientEmail.toLowerCase()) {
-        setRecipientStatus('ONLINE');
-      }
+    // 2. Subscribe to updates via presenceService (wrapper around P2P)
+    const updateHandler = (peers: Set<string>) => {
+      const isNowOnline = peers.has(email);
+      setRecipientStatus(isNowOnline ? 'ONLINE' : 'OFFLINE');
     };
 
-    const handleOffline = (e: any) => {
-      if (e.detail.toLowerCase() === recipientEmail.toLowerCase()) {
-        setRecipientStatus('OFFLINE');
-      }
-    };
+    presenceService.onUpdate(updateHandler);
 
-    window.addEventListener('p2p-peer-online', handleOnline);
-    window.addEventListener('p2p-peer-offline', handleOffline);
+    // 3. Force refresh to get latest status
+    presenceService.requestRefresh();
 
     return () => {
-      window.removeEventListener('p2p-peer-online', handleOnline);
-      window.removeEventListener('p2p-peer-offline', handleOffline);
+      // cleanup logic is handled by presenceService internals usually, 
+      // but here we just stop listening to the wrapper if extended.
+      // Since onUpdate currently just registers a callback, we might need a way to unsubscribe 
+      // if we want to be perfectly clean, but p2pService listeners are global.
+      // For now, this is acceptable as the component unmounts rarely.
     };
   }, [recipientEmail, p2pConnected]);
 

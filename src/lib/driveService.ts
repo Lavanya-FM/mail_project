@@ -222,8 +222,8 @@ export async function emptyTrash(userId: number) {
 }
 
 // Fetch trashed files
-export async function getTrashFiles() {
-    const res = await fetch('/api/drive/trash', {
+export async function getTrashFiles(userId: number) {
+    const res = await fetch(`/api/drive/trash?user_id=${userId}`, {
         credentials: 'include',
     });
 
@@ -231,7 +231,8 @@ export async function getTrashFiles() {
         throw new Error('Failed to fetch trash files');
     }
 
-    return res.json();
+    const data = await res.json();
+    return data.files || [];
 }
 
 /* ===============================

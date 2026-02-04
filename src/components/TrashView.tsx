@@ -24,7 +24,8 @@ export default function TrashView() {
     const loadTrashItems = async () => {
         setLoading(true);
         try {
-            const files = await driveService.getTrashFiles();
+            const userId = user?.id || 1;
+            const files = await driveService.getTrashFiles(userId);
             setTrashItems(files);
         } catch (error) {
             console.error('Error loading trash items:', error);

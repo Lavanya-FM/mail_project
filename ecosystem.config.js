@@ -2,10 +2,10 @@ module.exports = {
   apps: [
     {
       name: "jeemail-backend",
-      script: "./backend/server.js",
+      script: "server.js",
+      cwd: "./",
       env: {
-        NODE_ENV: "production",
-        PORT: 3000
+        NODE_ENV: "production"
       }
     }
   ]

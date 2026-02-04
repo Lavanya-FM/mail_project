@@ -10,6 +10,7 @@ const db = require('./db'); // Promise pool
 const { handleCallSignaling } = require('./callSignaling');
 const jwt = require('jsonwebtoken');
 const fs = require('fs');
+const fsPromises = fs.promises;
 const path = require('path');
 
 // Ensure uploads directory exists
@@ -34,10 +35,14 @@ function assertNoFileContent(obj) {
 
 function broadcastPresence() {
   const peers = getOnlinePeers();
-  const emails = peers.map(p => p.email);
+  // Unique emails only for the log/broadcast to avoid confusion
+  const emails = [...new Set(peers.map(p => p.email))];
+
+  console.log(`[P2P] Broadcasting presence to ${peers.length} connections. Unique Users (${emails.length}):`, emails);
+
   broadcast({
-    type: 'online-peers',
-    emails: emails // ✅ FIX: Send array of strings for client v10+
+    type: 'presence-update',
+    online: emails
   });
 }
 
@@ -83,7 +88,11 @@ const rooms = new Map();
 /* ---------------- WEBSOCKET SETUP ---------------- */
 
 function setupP2PWebSocket(server) {
-  const wss = new WebSocket.Server({ server, path: '/api/p2p' });
+  const wss = new WebSocket.Server({
+    server,
+    path: '/api/p2p',
+    maxPayload: 20 * 1024 * 1024 // 20MB Safety Limit (Prevent 1009/OOM)
+  });
 
   wss.on('connection', (ws) => {
     const connectionId = crypto.randomUUID();
@@ -102,7 +111,13 @@ function setupP2PWebSocket(server) {
         msg = JSON.parse(raw.toString());
       } catch (e) {
         console.error('[P2P] Invalid JSON received');
-        return;
+      }
+
+      // 🔒 SECURITY: Enforce Sender Identity
+      // If the socket is authenticated (has email), force msg.from to match.
+      // This prevents spoofing other users.
+      if (ws.email) {
+        msg.from = ws.email;
       }
 
       try {
@@ -114,6 +129,13 @@ function setupP2PWebSocket(server) {
         switch (msg.type) {
           case 'register':
             await handleRegister(ws, connectionId, msg, wss);
+            break;
+
+          case 'request-presence':
+            ws.send(JSON.stringify({
+              type: 'presence-update',
+              online: getOnlinePeers().map(p => p.email)
+            }));
             break;
 
           case 'join-room':
@@ -151,6 +173,9 @@ function setupP2PWebSocket(server) {
           case 'key-exchange':
           case 'key-exchange-init':
           case 'key-exchange-ack':
+          case 'p2p-offer-ack':    // Coordination signal
+          case 'progress-sync':    // Progress updates
+          case 'resume-response':  // Metadata response
             if (msg.to) {
               forwardToRecipient(msg.to, msg);
             }
@@ -217,11 +242,19 @@ function setupP2PWebSocket(server) {
   /* ---------------- HEARTBEAT ---------------- */
   setInterval(() => {
     for (const ws of wss.clients) {
-      if (!ws.isAlive) return ws.terminate();
+      if (!ws.isAlive) {
+        ws.terminate();
+        continue;
+      }
       ws.isAlive = false;
       ws.ping();
     }
-  }, 30000);
+  }, 30000); // 🚀 Relaxed heartbeat (30s) prevents false positives during heavy transfers
+
+  // 🔄 State Reconciliation: Periodically broadcast full list 
+  setInterval(() => {
+    broadcastPresence();
+  }, 20000); // More frequent updates (20s)
 
   console.log('[P2P] WebSocket initialized with Room support');
 }
@@ -286,29 +319,38 @@ async function handleRegister(ws, connectionId, msg, wss) {
       type: 'error',
       message: 'Invalid auth token'
     }));
-    ws.close();
+    // Give client time to receive the error before closing
+    setTimeout(() => ws.close(), 100);
     return;
   }
 
   let { id: userId, email: rawEmail } = user;
   const email = rawEmail ? rawEmail.trim().toLowerCase() : ''; // ✅ FIX: Normalize email
 
-  // Implicitly valid because token is valid
   try {
-    // ✅ VERIFY USER EXISTS IN DATABASE
-    const [userCheck] = await db.query(
-      'SELECT id FROM users WHERE id = ? AND email = ?',
-      [userId, email]
-    );
 
-    if (!userCheck || userCheck.length === 0) {
-      console.error(`[P2P] User not found: userId=${userId}, email=${email}`);
-      ws.send(JSON.stringify({
-        type: 'error',
-        message: 'User not found. Please log in again.'
-      }));
-      ws.close();
-      return;
+    // ✅ FAIL-OPEN DB CHECK: Trust Token if DB is down
+    try {
+      const [userCheck] = await db.query(
+        'SELECT id FROM users WHERE id = ? AND email = ?',
+        [userId, email]
+      );
+
+      if (!userCheck || userCheck.length === 0) {
+        console.error(`[P2P] User verification failed: userId=${userId}, email=${email}`);
+        ws.send(JSON.stringify({
+          type: 'error',
+          message: 'User not found. Please log in again.'
+        }));
+        ws.close();
+        return;
+      }
+    } catch (dbErr) {
+      if (dbErr.code === 'ECONNREFUSED' || dbErr.message?.includes('connect')) {
+        console.warn(`[P2P] Database unreachable during verification. Trusting token for ${email}. Error: ${dbErr.message}`);
+      } else {
+        throw dbErr; // Critical error (e.g. SQL syntax), stop registration
+      }
     }
 
     // Store connection
@@ -324,16 +366,20 @@ async function handleRegister(ws, connectionId, msg, wss) {
 
     broadcastPresence();
 
-    // Save to database with public key
-    await db.query(
-      `INSERT INTO p2p_peers (user_id, email, connection_id, is_online, public_key)
-       VALUES (?, ?, ?, 1, ?)
-       ON DUPLICATE KEY UPDATE 
-         is_online = 1,
-         connection_id = VALUES(connection_id),
-         public_key = VALUES(public_key)`,
-      [userId, email, connectionId, publicKey ? JSON.stringify(publicKey) : null]
-    );
+    // Save to database with public key (Best Effort)
+    try {
+      await db.query(
+        `INSERT INTO p2p_peers (user_id, email, connection_id, is_online, public_key)
+         VALUES (?, ?, ?, 1, ?)
+         ON DUPLICATE KEY UPDATE 
+           is_online = 1,
+           connection_id = VALUES(connection_id),
+           public_key = VALUES(public_key)`,
+        [userId, email, connectionId, publicKey ? JSON.stringify(publicKey) : null]
+      );
+    } catch (dbErr) {
+      console.warn(`[P2P] Failed to persist peer status to DB (Non-fatal): ${dbErr.message}`);
+    }
 
     // Store metadata on WebSocket
     ws.userId = userId;
@@ -345,25 +391,27 @@ async function handleRegister(ws, connectionId, msg, wss) {
       type: 'registered',
       connectionId,
       email,
-      onlinePeers: getOnlinePeers()
+      onlinePeers: getOnlinePeers().map(p => p.email)
     }));
 
-    // Notify others
-    broadcastToPeers(wss, {
-      type: 'peer-online',
-      email: email, // ✅ FIX: Client expects 'email' not 'from'
-      publicKey,
-      p2pCapable: !!publicKey
-    }, ws);
+    // Notify others - Send FULL list to everyone to ensure consistency
+    // This replaces incremental updates which were causing sync issues
+    broadcastPresence();
 
     console.log(`[P2P] Registered: ${email} (user_id: ${userId}, p2pCapable: ${!!publicKey})`);
 
     // Check for pending transfers to this user and notify sender if online
-    await notifyPendingTransfers(email);
+    try {
+      await notifyPendingTransfers(email);
+    } catch (err) {
+      console.warn(`[P2P] Failed to check pending transfers: ${err.message}`);
+    }
+
+    console.log(`[P2P] Total active connections: ${peerConnections.size}`);
 
 
   } catch (error) {
-    console.error('[P2P] Registration error:', error);
+    console.error(`[P2P] Registration error for ${email || 'unknown'}:`, error);
     ws.send(JSON.stringify({
       type: 'error',
       message: 'Registration failed'
@@ -429,16 +477,8 @@ async function handleFileChunk(ws, msg) {
   // 1. SAVE TO SERVER DISK (Optimized for resumption)
   try {
     const chunkFile = path.join(P2P_CHUNKS_DIR, `${messageId}_${chunkIndex || 0}.chunk`);
-    const chunkData = JSON.stringify({
-      payload,
-      data: msg.data, // 🚀 CRITICAL: Include the actual base64 data
-      from,
-      to,
-      timestamp: Date.now()
-    });
-
-    // Non-blocking-ish write (we don't await it if we want maximum speed, but safer to await)
-    fs.writeFileSync(chunkFile, chunkData);
+    // 🚀 ASYNC WRITE (Non-blocking)
+    await fsPromises.writeFile(chunkFile, chunkData);
 
     // Also track in DB (optional but good for cleanup)
     await db.query(`
@@ -467,7 +507,8 @@ async function handleChunkRequest(ws, msg) {
 
   if (fs.existsSync(chunkFile)) {
     try {
-      const data = JSON.parse(fs.readFileSync(chunkFile, 'utf8'));
+      const rawData = await fsPromises.readFile(chunkFile, 'utf8');
+      const data = JSON.parse(rawData);
       ws.send(JSON.stringify({
         type: 'file-chunk',
         from: data.from,
@@ -498,7 +539,8 @@ async function handleChunkRequestBatch(ws, msg) {
     const chunkFile = path.join(P2P_CHUNKS_DIR, `${messageId}_${idx}.chunk`);
     if (fs.existsSync(chunkFile)) {
       try {
-        const data = JSON.parse(fs.readFileSync(chunkFile, 'utf8'));
+        const rawData = await fsPromises.readFile(chunkFile, 'utf8');
+        const data = JSON.parse(rawData);
         ws.send(JSON.stringify({
           type: 'file-chunk',
           from: data.from,
@@ -509,6 +551,8 @@ async function handleChunkRequestBatch(ws, msg) {
           payload: data.payload,
           cached: true
         }));
+        // Small delay to prevent event loop blocking
+        if (idx % 8 === 0) await new Promise(r => setImmediate(r));
       } catch (e) {
         missingInCache.push(idx);
       }
@@ -621,36 +665,42 @@ async function handleDisconnect(connectionId, wss) {
     }
   }
 
-  broadcastPresence();
-
-  await db.query(
-    `UPDATE p2p_peers SET is_online = 0 WHERE connection_id = ?`,
-    [connectionId]
+  // Check if user has other active connections
+  const hasOtherConnections = [...peerConnections.values()].some(p =>
+    p.email === peer.email && p.ws.readyState === WebSocket.OPEN
   );
 
-  await db.query(
-    `UPDATE p2p_file_metadata
-     SET status = 'failed'
-     WHERE (sender_email = ? OR recipient_email = ?)
-       AND status IN ('initiated','transferring')`,
-    [peer.email, peer.email]
-  );
+  if (!hasOtherConnections) {
+    broadcastPresence();
 
-  await db.query(
-    `UPDATE email_attachments
-   SET delivered = 0, attachment_transfer_state = 'FAILED'
-   WHERE p2p_message_id IN (
-     SELECT message_id
-     FROM p2p_file_metadata
-     WHERE status = 'failed'
-   )`
-  );
+    await db.query(
+      `UPDATE p2p_peers SET is_online = 0 WHERE connection_id = ?`,
+      [connectionId]
+    );
 
+    // Only mark transfers as failed if NO other connection exists
+    await db.query(
+      `UPDATE p2p_file_metadata
+       SET status = 'failed'
+       WHERE (sender_email = ? OR recipient_email = ?)
+         AND status IN ('initiated','transferring')`,
+      [peer.email, peer.email]
+    );
 
-  broadcastToPeers(wss, {
-    type: 'peer-offline',
-    email: peer.email // ✅ FIX: Client expects 'email' not 'from'
-  }, peer.ws);
+    await db.query(
+      `UPDATE email_attachments
+     SET delivered = 0, attachment_transfer_state = 'FAILED'
+     WHERE p2p_message_id IN (
+       SELECT message_id
+       FROM p2p_file_metadata
+       WHERE status = 'failed'
+     )`
+    );
+
+    broadcastPresence();
+  } else {
+    console.log(`[P2P] ${peer.email} disconnected one session but remains online via another`);
+  }
 }
 
 /* ---------------- ROOM HANDLERS ---------------- */

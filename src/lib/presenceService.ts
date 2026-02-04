@@ -12,9 +12,13 @@ class PresenceService {
 
   onUpdate(fn: (online: Set<string>) => void) {
     // Convert array to Set for compatibility
-    p2pService.onPeersUpdate((peers) => {
+    p2pService.onPresenceChange((peers) => {
       fn(new Set(peers));
     });
+  }
+
+  requestRefresh() {
+    p2pService.requestPresence();
   }
 
   isOnline(email: string): boolean {

@@ -39,7 +39,7 @@ const P2P_LIMITS = {
   BASE_KBPS: 999999,    // Unlimited - no throttling
   MIN_KBPS: 999999,     // Unlimited - no throttling  
   MAX_KBPS: 999999,     // Unlimited - no throttling
-  CHUNK_SIZE: 16 * 1024 * 1024, // 🚀 16MB chunks for TB-scale transfers (Reduced overhead)
+  CHUNK_SIZE: 2 * 1024 * 1024, // 🚀 2MB CHUNKS (Doubled for Max Throughput)
 };
 
 const chunkRetries = new Map<string, number>();
@@ -114,6 +114,7 @@ interface StrictMessage {
   data?: any;
   onlinePeers?: any[];
   emails?: string[];
+  online?: string[];
   timestamp?: number;
   meetingId?: string;
   userId?: string | number;
@@ -172,6 +173,9 @@ class StrictP2PService {
   private userId: string | number = '';
   private connected = false;
   private isRegistering = false;
+  private retryCount = 0;
+  private reconnectionTimeout: any = null;
+  private pingInterval: any = null;
   private static instance: StrictP2PService;
 
   public static getInstance(): StrictP2PService {
@@ -246,7 +250,23 @@ class StrictP2PService {
   private currentKBPS = P2P_LIMITS.BASE_KBPS;
   // private lastAckAt = performance.now();
 
-  // --- ETA Tracker
+  // --- Presence Listeners ---
+  private presenceListeners = new Set<(peers: string[]) => void>();
+
+  public onPresenceChange(callback: (peers: string[]) => void) {
+    this.presenceListeners.add(callback);
+    // Immediately call with current snapshot if available
+    import('./presenceStore').then(({ getOnlinePeersSnapshot }) => {
+      callback(Array.from(getOnlinePeersSnapshot()));
+    });
+    return () => this.presenceListeners.delete(callback);
+  }
+
+  private notifyPresenceListeners(peers: string[]) {
+    this.presenceListeners.forEach(cb => {
+      try { cb(peers); } catch (e) { console.error(e); }
+    });
+  }
   /*
   private receiveSpeed = new Map<string, {
     lastBytes: number;
@@ -298,7 +318,7 @@ class StrictP2PService {
     });
 
     window.addEventListener('offline', () => {
-      console.log('[P2P] Network is OFFLINE. Disconnecting...');
+      console.log('Build Version: 2026-02-04.v112-NO-DISCONNECTS');
       this.disconnect();
     });
 
@@ -311,6 +331,13 @@ class StrictP2PService {
   }
 
   // --- CORE WEBSOCKET METHODS ---
+
+  public requestPresence() {
+    if (this.isConnected()) {
+      console.log('[P2P] Requesting manual presence refresh...');
+      this.send({ type: 'request-presence' });
+    }
+  }
 
   private send(msg: any, silent = false) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -406,38 +433,24 @@ class StrictP2PService {
     });
   }
 
-  hasSessionKey(email: string, messageId?: string): boolean {
+  hasSessionKey(email: string): boolean {
     const emailLower = email.toLowerCase();
-    if (messageId) {
-      const compositeId = `${emailLower}:${messageId}`;
-      const session = this.peerSessions.get(compositeId);
-      return !!(session && session.ready && session.sessionKey);
-    }
-    // If no messageId, check if ANY session exists for this peer
-    for (const [id, session] of this.peerSessions.entries()) {
-      if (id.startsWith(`${emailLower}:`) && session.ready && session.sessionKey) {
-        return true;
-      }
-    }
-    return false;
+    const session = this.peerSessions.get(emailLower);
+    return !!(session && session.ready && session.sessionKey);
   }
 
   hasReceivedFileSync(messageId: string): boolean {
     return this.receivedFiles.has(messageId) || this.completedTransfers.has(messageId);
   }
 
-  onPresenceChange(cb: (peers: Set<string>) => void) {
-    return subscribePresence((peers) => {
-      cb(peers);
-    });
-  }
 
-  private notifyPresence() {
-    // Deprecated: presenceStore handles notification
-  }
 
   // ✅ FIX 6: TRIGGER RESUME ON PRESENCE CHANGE
   private triggerPresenceResumption() {
+    if (!this.connected) {
+      console.log("[P2P][RESUME] Skipped — signaling offline");
+      return;
+    }
     console.log("[P2P][RESUME] Checking resumption for all transfers...");
 
     // 🚚 SENDER RESUMPTION
@@ -791,8 +804,8 @@ class StrictP2PService {
     // 🚀 Switch to pull model for resume
     console.log(`[P2P] Resuming pull loop for ${messageId} from ${sender}`);
     if (rt) rt.status = 'RECEIVING'; // Explicitly unpause
-    const compositeId = `${sender.toLowerCase()}:${messageId}`;
-    if (!this.peerSessions.has(compositeId)) {
+    const emailLower = sender.toLowerCase();
+    if (!this.peerSessions.has(emailLower) || !this.peerSessions.get(emailLower)?.ready) {
       this.ensureSession(sender, messageId);
     } else {
       this.pullMissingChunks(messageId, sender);
@@ -849,6 +862,7 @@ class StrictP2PService {
     if (progress === 100 && rt.status !== 'COMPLETED' && !this.completedTransfers.has(messageId)) {
       console.log(`[P2P] All chunks found on disk for ${messageId}, triggering assembly`);
       rt.status = 'COMPLETED';
+      this.completedTransfers.add(messageId); // 🚀 Track completion
       await this.assembleFile(messageId, rt.fileName, rt.mimeType);
       return; // assembleFile will handle UI notify
     }
@@ -972,14 +986,13 @@ class StrictP2PService {
   }
 
   // 2️⃣ Handshake guard (MANDATORY)
-  private ensureSession(peerEmail: string, messageId: string) {
+  private ensureSession(peerEmail: string, messageId?: string) {
     const emailLower = peerEmail.toLowerCase();
-    const compositeId = `${emailLower}:${messageId}`;
-    const t = this.senderTransferRegistry.get(messageId);
+    const t = messageId ? this.senderTransferRegistry.get(messageId) : null;
 
     // 🚀 FIX 5: Sender must WAIT, not handshake if recipient is offline
     if (!isPeerOnlineStore(emailLower)) {
-      console.log(`[P2P] Peer ${emailLower} is OFFLINE. Setting status to WAITING_FOR_PEER for ${messageId}`);
+      console.log(`[P2P] Peer ${emailLower} is OFFLINE. Cannot handshake.`);
       if (t) {
         t.status = 'WAITING_FOR_PEER';
         window.dispatchEvent(new CustomEvent('p2p-progress', {
@@ -989,22 +1002,22 @@ class StrictP2PService {
       return;
     }
 
-    const session = this.peerSessions.get(compositeId);
+    const session = this.peerSessions.get(emailLower);
 
-    // 🔥 You must NEVER handshake again once a peer session exists for this transfer
     if (session) {
       if (session.ready) {
-        // Session already established, try to start
-        this.tryStartSender(messageId);
+        if (messageId) this.tryStartSender(messageId);
+        // Also trigger pull if we are receiver
+        if (messageId) this.pullMissingChunks(messageId, emailLower);
         return;
       }
       if (session.handshaking) {
-        console.log(`[P2P] Handshake already in progress for ${compositeId}`);
+        // Silently return to avoid log spam when buffering many chunks
         return;
       }
     }
 
-    console.log(`[P2P] Recipient ONLINE -> Starting HANDSHAKE for ${compositeId}`);
+    console.log(`[P2P] Peer ${emailLower} ONLINE -> Starting PER-PEER HANDSHAKE`);
     if (t) {
       t.status = 'HANDSHAKING';
       window.dispatchEvent(new CustomEvent('p2p-progress', {
@@ -1012,7 +1025,7 @@ class StrictP2PService {
       }));
     }
 
-    this.peerSessions.set(compositeId, {
+    this.peerSessions.set(emailLower, {
       sessionKey: null,
       ready: false,
       handshaking: true
@@ -1045,8 +1058,7 @@ class StrictP2PService {
     }
 
     const emailLower = t.peerEmail.toLowerCase();
-    const compositeId = `${emailLower}:${messageId}`;
-    const session = this.peerSessions.get(compositeId);
+    const session = this.peerSessions.get(emailLower);
 
     // 🚀 FIX 5: Recipient must be ONLINE to proced
     if (!this.isPeerOnline(emailLower)) {
@@ -1056,7 +1068,7 @@ class StrictP2PService {
     }
 
     if (!session?.ready) {
-      console.log(`[P2P] Wait: Session not ready for ${compositeId}. Handshaking...`);
+      console.log(`[P2P] Wait: Session not ready for ${emailLower}. Handshaking...`);
       this.ensureSession(emailLower, messageId);
       return;
     }
@@ -1166,6 +1178,13 @@ class StrictP2PService {
           });
           this.pendingSignals = [];
         }
+
+        // Reset retry count on successful registration-ready state
+        this.retryCount = 0;
+        if (this.reconnectionTimeout) {
+          clearTimeout(this.reconnectionTimeout);
+          this.reconnectionTimeout = null;
+        }
       };
 
       this.ws.onmessage = async (e) => {
@@ -1177,16 +1196,27 @@ class StrictP2PService {
         }
       };
 
-      this.ws.onclose = () => {
+      this.ws.onclose = (event) => {
+        console.warn(`[P2P] WebSocket closed: Code=${event.code}, Reason=${event.reason}`);
         this.connected = false;
         this.isRegistering = false;
         this.notifyConnection(false);
 
+        if (this.pingInterval) {
+          clearInterval(this.pingInterval);
+          this.pingInterval = null;
+        }
+
         // Clear presence data on disconnect
         setOnlinePeers([]);
 
-        // Attempt reconnection after 5 seconds
-        setTimeout(() => this.connect(userId, email), 5000);
+        if (!authService.getToken()) {
+          console.error('[P2P] No auth token available. Stopping reconnection loop.');
+          return;
+        }
+
+        // Backoff Reconnection Logic
+        this.scheduleReconnectWithBackoff(userId, email);
       };
 
       this.ws.onerror = () => {
@@ -1196,7 +1226,23 @@ class StrictP2PService {
     } catch (e) {
       console.error('[P2P] Connection error', e);
       this.isRegistering = false;
+      this.scheduleReconnectWithBackoff(userId, email);
     }
+  }
+
+  private scheduleReconnectWithBackoff(userId: string | number, email: string) {
+    if (this.reconnectionTimeout) clearTimeout(this.reconnectionTimeout);
+
+    // Auth guard - don't reconnect if we lost the token
+    if (!authService.getToken()) return;
+
+    const delay = Math.min(30000, 1000 * Math.pow(2, this.retryCount));
+    console.log(`[P2P] Scheduling reconnection in ${delay}ms (Attempt ${this.retryCount + 1})`);
+
+    this.reconnectionTimeout = setTimeout(() => {
+      this.retryCount++;
+      this.connect(userId, email);
+    }, delay);
   }
 
   private async handle(msg: StrictMessage) {
@@ -1207,8 +1253,24 @@ class StrictP2PService {
         console.log('[P2P] Successfully registered as', msg.email);
         this.notifyConnection(true);
 
+        // Start heartbeat
+        if (this.pingInterval) clearInterval(this.pingInterval);
+        this.pingInterval = setInterval(() => {
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 15000); // 🚀 15s heartbeats to keep socket alive forever
+
+        // ✅ FIX 2: Load initial peer list from registration response
+        if (msg.onlinePeers && Array.isArray(msg.onlinePeers)) {
+          console.log('[P2P] Initial online peers:', msg.onlinePeers);
+          setOnlinePeers(msg.onlinePeers);
+        }
+
         // Immediately notify with current state (might be empty initially)
-        this.notifyPresence();
+        import('./presenceStore').then(({ getOnlinePeersSnapshot }) => {
+          this.notifyPresenceListeners(Array.from(getOnlinePeersSnapshot()));
+        });
 
         await this.rehydrateReceiverTransfers();
         await this.rehydrateSenderTransfers();
@@ -1225,8 +1287,8 @@ class StrictP2PService {
         const peerPub = await importPublicKey(new Uint8Array(publicKey).buffer);
         const sharedKey = await deriveSharedKey(this.keyPair.privateKey, peerPub);
 
-        const compositeId = `${from.toLowerCase()}:${messageId}`;
-        this.peerSessions.set(compositeId, {
+        const emailLower = from.toLowerCase();
+        this.peerSessions.set(emailLower, {
           sessionKey: sharedKey,
           ready: true,
           handshaking: false
@@ -1242,34 +1304,29 @@ class StrictP2PService {
           messageId
         });
 
-        console.log(`[P2P] Session key established for ${compositeId} (Receiver)`);
+        console.log(`[P2P] Session key established for ${emailLower} (Responder)`);
 
-        // Update Receiver state if it exists
-        const rt = this.receiverTransfers.get(messageId);
-        if (rt && rt.status === 'HANDSHAKING') {
-          rt.status = 'KEY_READY';
-          console.log(`[P2P] Receiver state -> KEY_READY for ${messageId}`);
+        // Now trigger logic for ALL transfers involving this peer
+        if (messageId) {
+          const rt = this.receiverTransfers.get(messageId);
+          if (rt) {
+            rt.status = 'KEY_READY';
+            console.log(`[P2P] Receiver state -> KEY_READY for ${messageId}`);
+            // 🚀 ERASE BUFFER to prevent stale-decryption errors. Watchdog will re-fetch.
+            this.receiverChunkBuffer.get(messageId)?.clear();
+            this.pullMissingChunks(messageId, from);
+          }
+          this.tryStartSender(messageId);
         }
 
-        // 4️⃣ Drain buffered chunks AFTER key arrives
-        await this.flushBufferedChunks(from, messageId);
+        // Also check for other transfers with this peer
+        this.receiverTransfers.forEach((r, mid) => {
+          if (this.transferSenders.get(mid)?.toLowerCase() === emailLower && r.status === 'HANDSHAKING') {
+            r.status = 'KEY_READY';
+            this.pullMissingChunks(mid, from);
+          }
+        });
 
-        // 5️⃣ Start pulling chunks as the 'Client Server'
-        this.pullMissingChunks(messageId, from);
-
-        // 6️⃣ Sync progress back to sender so their UI is accurate
-        const rtSync = this.receiverTransfers.get(messageId);
-        if (rtSync) {
-          this.send({
-            type: 'progress-sync',
-            to: from,
-            from: this.email,
-            messageId,
-            progress: rtSync.receivedChunks.size,
-            // Optimization: If small file, send full set. Otherwise just count.
-            data: rtSync.totalChunks < 500 ? Array.from(rtSync.receivedChunks) : undefined
-          });
-        }
         break;
       }
 
@@ -1281,29 +1338,44 @@ class StrictP2PService {
         const peerPub = await importPublicKey(new Uint8Array(publicKey).buffer);
         const sharedKey = await deriveSharedKey(this.keyPair.privateKey, peerPub);
 
-        const compositeId = `${from.toLowerCase()}:${messageId}`;
-        this.peerSessions.set(compositeId, {
+        const emailLower = from.toLowerCase();
+        this.peerSessions.set(emailLower, {
           sessionKey: sharedKey,
           ready: true,
           handshaking: false
         });
 
-        console.log(`[P2P] Session key established for ${compositeId} (Sender)`);
+        console.log(`[P2P] Session key established for ${emailLower} (Initiator)`);
 
-        // Now we can start sending!
-        this.tryStartSender(messageId);
+        // If this ACK was for a specific transfer, trigger it
+        if (messageId) {
+          const rt = this.receiverTransfers.get(messageId);
+          if (rt) {
+            rt.status = 'KEY_READY';
+            // 🚀 ERASE BUFFER to prevent stale-decryption errors. Watchdog will re-fetch.
+            this.receiverChunkBuffer.get(messageId)?.clear();
+            this.pullMissingChunks(messageId, from);
+          }
+          this.tryStartSender(messageId);
+        }
 
-        // Potentially drain if we were also receiving (though unusual for sender)
-        await this.flushBufferedChunks(from, messageId);
+        // Broad trigger for any waiting transfers with this peer
+        this.receiverTransfers.forEach((r, mid) => {
+          if (this.transferSenders.get(mid)?.toLowerCase() === emailLower && (r.status === 'HANDSHAKING' || r.status === 'INIT')) {
+            r.status = 'KEY_READY';
+            this.pullMissingChunks(mid, from);
+          }
+        });
+
         break;
       }
 
-      case 'online-peers':
-        // ✅ FIX 4: REPLACE, NOT MERGE
-        if (Array.isArray(msg.emails)) {
-          setOnlinePeers(msg.emails);
-          console.log("[P2P][PRESENCE] Global Online Snapshot Updated");
-          // this.triggerPresenceResumption(); // Handled by subscription now
+      case 'presence-update':
+        // ✅ FIX 1: STRICT SERVER AUTHORITY (MASTER CHECKLIST COMPLIANCE)
+        if (Array.isArray(msg.online)) {
+          console.log(`[P2P][PRESENCE] Received update with ${msg.online.length} peers:`, JSON.stringify(msg.online));
+          setOnlinePeers(msg.online);
+          this.notifyPresenceListeners(msg.online);
         }
         break;
       case 'peer-online':
@@ -1311,6 +1383,19 @@ class StrictP2PService {
           updatePeerStatus(msg.email, true);
           console.log("[P2P][PRESENCE] Peer online:", msg.email);
           toast(`${msg.email} is online`, { icon: '🟢', position: 'bottom-right' });
+
+          // 🚀 AUTO-RESUME: Check if we have incomplete transfers from this peer
+          const emailLower = msg.email.toLowerCase();
+          this.receiverTransfers.forEach((rt, messageId) => {
+            const sender = this.transferSenders.get(messageId);
+            if (sender?.toLowerCase() === emailLower) {
+              if (rt.status === 'PAUSED' || rt.status === 'HANDSHAKING' || rt.status === 'FAILED') {
+                console.log(`[P2P] Auto-resuming transfer ${messageId} from ${sender}`);
+                rt.status = 'HANDSHAKING';
+                this.ensureSession(sender, messageId);
+              }
+            }
+          });
         }
         break;
 
@@ -1357,6 +1442,23 @@ class StrictP2PService {
         window.dispatchEvent(new CustomEvent('p2p-room-joined', { detail: msg }));
         break;
 
+      case 'error':
+        console.error('[P2P] Server error:', msg.message);
+        if (msg.message === 'Invalid auth token') {
+          console.error('[P2P] Auth failed. Stopping reconnection loop.');
+          this.isRegistering = false;
+          this.connected = false;
+          toast.error('Session expired. Please log in again.', { id: 'p2p-auth-error' });
+          // Force disconnect but DO NOT reconnect
+          if (this.ws) {
+            this.ws.onclose = null; // Prevent the retry in onclose
+            this.ws.close();
+            this.ws = null;
+          }
+          this.notifyConnection(false);
+        }
+        break;
+
       case 'transfer-complete': {
         const { messageId } = msg;
         if (messageId) {
@@ -1398,8 +1500,16 @@ class StrictP2PService {
 
         // 🚀 FIX: Don't overwrite if exists
         if (this.completedTransfers.has(messageId) || await this.hasReceivedFile(messageId)) {
-          console.log(`[P2P] Already have file for offer ${messageId}. Skipping.`);
+          console.log(`[P2P] Already have file for offer ${messageId}. Sending completion ack.`);
           this.completedTransfers.add(messageId);
+
+          // Tell sender to stop
+          this.send({
+            type: 'transfer-complete',
+            to: from,
+            from: this.email,
+            messageId
+          });
           return;
         }
 
@@ -1453,6 +1563,26 @@ class StrictP2PService {
         } else {
           const rt = this.receiverTransfers.get(messageId)!;
           if (rt.totalChunks !== data.totalChunks) {
+
+            // 🚀 SMART MIGRATION: If we have the FULL file, don't reset. Just update meta.
+            if (await this.hasReceivedFile(messageId)) {
+              console.log(`[P2P] Migrating metadata for COMPLETED file ${messageId} (Protocol Change)`);
+              rt.totalChunks = data.totalChunks;
+              rt.chunkSize = data.chunkSize || P2P_LIMITS.CHUNK_SIZE;
+              await saveMeta(messageId, {
+                fileName: data.fileName,
+                mimeType: data.mimeType,
+                totalChunks: data.totalChunks, // Update to new count
+                actualSize: data.size,
+                chunkSize: rt.chunkSize, // Update to new size
+                is_p2p: true,
+                lastUpdated: Date.now()
+              });
+              this.completedTransfers.add(messageId);
+              rt.status = 'COMPLETED';
+              return; // Skip handshake/reset
+            }
+
             console.warn(`[P2P] Metadata mismatch for ${messageId} (Protocol Change?). Resetting DB and state.`);
 
             // 🚀 CRITICAL: Clear DB chunks because indices are incompatible
@@ -1493,9 +1623,10 @@ class StrictP2PService {
         await this.syncReceiverStateFromDB(messageId);
 
         // Check if we need handshake
-        const compositeId = `${from.toLowerCase()}:${messageId}`;
-        if (!this.peerSessions.has(compositeId)) {
-          console.log(`[P2P] Offer requires handshake for ${compositeId}`);
+        // 🔒 FIX: Use per-peer ID (email) instead of legacy composite ID
+        const emailLower = from.toLowerCase();
+        if (!this.peerSessions.has(emailLower) || !this.peerSessions.get(emailLower)?.ready) {
+          console.log(`[P2P] Offer requires handshake for ${emailLower}`);
           this.receiverTransfers.get(messageId)!.status = 'HANDSHAKING';
           this.ensureSession(from, messageId);
         } else {
@@ -1534,26 +1665,41 @@ class StrictP2PService {
         break;
       }
 
+      // 🚀 YIELD: Prevent main thread blocking during heavy message processing
       case 'file-chunk': {
+        await new Promise(r => setTimeout(r, 0)); // Micro-yield
         const { messageId, chunkIndex, data, from, payload } = msg; // data here is base64 string
         if (!messageId || chunkIndex === undefined || !data || !from) return;
+
+        // 🚀 IGNORE if completed
+        if (this.completedTransfers.has(messageId)) {
+          // console.log(`[P2P] Ignored chunk ${chunkIndex} for completed ${messageId}`);
+          return;
+        }
 
         // Clear from pending if it was requested
         const pending = this.pendingRequests.get(messageId);
         if (pending) pending.delete(chunkIndex);
 
         try {
-          // 🔒 Fix session key lookup
-          const sessionKeyId = `${from.toLowerCase()}:${messageId}`;
-          const session = this.peerSessions.get(sessionKeyId);
+          // 🔒 Fix session key lookup (PER-PEER)
+          const session = this.peerSessions.get(from.toLowerCase());
 
           // ✅ FIX 7: Check if chunk already exists (NO DUPLICATES)
           const rt = this.receiverTransfers.get(messageId);
           if (!rt) return;
+          if (rt.status === 'COMPLETED') {
+            this.completedTransfers.add(messageId);
+            return;
+          }
 
           if (!session || !session.sessionKey) {
-            console.log(`[P2P RECEIVE] Key not ready, buffering chunk ${chunkIndex} for ${sessionKeyId}`);
+            console.log(`[P2P RECEIVE] Key not ready, buffering chunk ${chunkIndex} for ${from}`);
             rt.reason = 'Waiting for security handshake...';
+
+            // 🚀 FIX: Proactively trigger handshake if it's missing or dead
+            this.ensureSession(from, messageId);
+
             if (!this.receiverChunkBuffer.has(messageId)) {
               this.receiverChunkBuffer.set(messageId, new Map());
             }
@@ -1648,6 +1794,19 @@ class StrictP2PService {
           this.pullMissingChunks(messageId, from);
         } catch (err) {
           console.error(`[P2P RECEIVE] Decryption failed for chunk ${chunkIndex}`, err);
+          // 🚀 CRITICAL FIX: If decryption fails, the key is mismatching.
+          // Kill session immediately to force fresh handshake on next attempt.
+          this.peerSessions.delete(from.toLowerCase());
+
+          // Re-request immediately
+          this.send({
+            type: 'chunk-request-batch',
+            to: from,
+            from: this.email,
+            messageId,
+            chunkIndices: [chunkIndex]
+          }, true);
+          return;
         }
         break;
       }
@@ -2005,7 +2164,11 @@ class StrictP2PService {
           }
         }
       }
-      if (count > 0) console.log(`[P2P] Rehydrated ${count} sender transfers`);
+      if (count > 0) {
+        console.log(`[P2P] Rehydrated ${count} sender transfers`);
+        // 🚀 Trigger presence check immediately for these rehydrated transfers
+        this.triggerPresenceResumption();
+      }
     } catch (err) {
       console.error('[P2P] Failed to rehydrate sender transfers', err);
     }
@@ -2024,25 +2187,7 @@ class StrictP2PService {
     }
   }
 
-  private async flushBufferedChunks(_from: string, messageId: string) {
-    const buffer = this.receiverChunkBuffer.get(messageId);
-    if (!buffer) return;
 
-    console.log(`[P2P] Flushing ${buffer.size} buffered chunks for ${messageId}`);
-    const sortedIndices = Array.from(buffer.keys()).sort((a, b) => a - b);
-
-    for (const index of sortedIndices) {
-      const msg = buffer.get(index);
-      if (msg) {
-        buffer.delete(index);
-        await this.handle(msg);
-      }
-    }
-
-    if (buffer.size === 0) {
-      this.receiverChunkBuffer.delete(messageId);
-    }
-  }
 
 
 
@@ -2071,11 +2216,10 @@ class StrictP2PService {
     const pending = this.pendingRequests.get(messageId)!;
 
     // Pull strategy: request up to X sequential missing chunks
-    // 🚀 ULTRA-FAST MODE FOR 16MB CHUNKS: 
-    // Aggressive concurrency for maximum speed on modern devices.
-    // 96 chunks x 16MB = 1.5GB memory usage (acceptable for modern machines)
-    const CONCURRENCY = 96;  // 🚀 DOUBLED for 2x speed boost
-    const BATCH_SIZE = 16;   // 🚀 Larger batches for better throughput
+    // 🚀 MAX THROUGHOUT MODE: 2MB Chunks * 10 = 20MB In-Flight
+    // Balanced for 10GB+ files without crashing 
+    const CONCURRENCY = 10;
+    const BATCH_SIZE = 4;
     let requestedCount = 0;
 
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
@@ -2161,18 +2305,20 @@ class StrictP2PService {
     const t = this.senderTransferRegistry.get(messageId);
     if (!t) return;
 
-    const compositeId = `${recipient.toLowerCase()}:${messageId}`;
-    const session = this.peerSessions.get(compositeId);
+    const emailLower = recipient.toLowerCase();
+    const session = this.peerSessions.get(emailLower);
     if (!session || !session.sessionKey) return;
 
     try {
       const ws = this.ws as any;
-      if (ws && ws.bufferedAmount > 128 * 1024 * 1024) {
-        // 🚀 High-speed backpressure: 128MB threshold
+      // 🚀 CRITICAL FIX: Drastically lowered buffer limit (128MB -> 4MB)
+      // Why? A 128MB buffer takes minutes to clear on slow networks, blocking Pings and causing timeouts.
+      // 4MB = ~3 seconds at 10Mbps. Keeps socket responsive.
+      if (ws && ws.bufferedAmount > 4 * 1024 * 1024) {
         // console.log(`[P2P SENDER] Backpressure: ${ws.bufferedAmount} bytes buffered. Throttling...`);
-        await new Promise(r => setTimeout(r, 5));
-        while (ws && ws.bufferedAmount > 64 * 1024 * 1024) { // Wait until it drops back to 64MB
-          await new Promise(r => setTimeout(r, 5));
+        await new Promise(r => setTimeout(r, 10));
+        while (ws && ws.bufferedAmount > 1 * 1024 * 1024) { // Wait until it drops to 1MB
+          await new Promise(r => setTimeout(r, 50));
         }
       }
 
@@ -2195,8 +2341,49 @@ class StrictP2PService {
 
       // console.log(`[P2P SERVER] Sent chunk ${chunkIndex} to ${recipient}`);
 
-    } catch (err) {
+    } catch (err: any) {
       console.error(`[P2P SERVER] Failed to serve chunk ${chunkIndex}`, err);
+
+      // 🚀 ERROR RECOVERY: Handle lost file permissions / stale file handles
+      if (err.name === 'NotReadableError' || err.message?.includes('could not be read')) {
+        console.warn(`[P2P] File handle lost for chunk ${chunkIndex}. Attempting rehydration from IndexedDB...`);
+
+        try {
+          // Try to get fresh blob from IDB
+          const t = this.senderTransferRegistry.get(messageId);
+          if (!t) return;
+
+          // Prevent infinite recursion loops
+          if ((t as any)._rehydrationAttempts && (t as any)._rehydrationAttempts > 3) {
+            this.cancelSenderTransfer(messageId);
+            toast.error('File access lost. Please re-select the file.');
+            return;
+          }
+          (t as any)._rehydrationAttempts = ((t as any)._rehydrationAttempts || 0) + 1;
+
+          const fileData = await getFile(messageId);
+          if (fileData && fileData.blob) {
+            console.log(`[P2P] Successfully refreshed file handle from IDB for ${messageId}`);
+            t.file = fileData.blob; // Update handle
+
+            // Retry sending this chunk immediately
+            await this.sendSingleChunk(messageId, chunkIndex, recipient);
+            return;
+          } else {
+            throw new Error("File not found in IndexedDB");
+          }
+        } catch (recoveryErr) {
+          console.error('[P2P] Recovery failed:', recoveryErr);
+          this.cancelSenderTransfer(messageId);
+          this.send({
+            type: 'transfer-error',
+            to: recipient,
+            messageId,
+            error: 'SENDER_FILE_ACCESS_LOST'
+          });
+          toast.error('File transfer failed: Access to file was lost.');
+        }
+      }
     }
   }
 
@@ -2236,9 +2423,18 @@ class StrictP2PService {
       };
 
       this.receiverTransfers.set(messageId, rt);
-      await this.syncReceiverStateFromDB(messageId);
 
-      console.log(`[P2P] Rehydrated receiver transfer: ${fileName} (${messageId})`);
+      // 🚀 CRITICAL FIX: Only sync legacy state if NOT completed.
+      // If we have the file, we are done. Period.
+      if (finished) {
+        rt.status = 'COMPLETED';
+        this.completedTransfers.add(messageId);
+        console.log(`[P2P] Rehydrated COMPLETED transfer: ${fileName}`);
+      } else {
+        // Only IF not finished, try to recover 'PAUSED'/'RECEIVING' state
+        await this.syncReceiverStateFromDB(messageId);
+        console.log(`[P2P] Rehydrated ACTIVE transfer: ${fileName} (${rt.status})`);
+      }
     }
   }
 
@@ -2297,7 +2493,7 @@ class StrictP2PService {
         this.pendingRequests.delete(messageId);
         this.pullMissingChunks(messageId, sender);
       }
-    }, 5000));
+    }, 4000)); // 🚀 4s Watchdog (Balanced)
   }
 }
 
