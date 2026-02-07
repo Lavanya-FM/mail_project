@@ -1,3 +1,5 @@
+import { authService, getToken } from './authService';
+
 const API = "/api/drive";
 
 export interface DriveFolder {
@@ -30,6 +32,19 @@ export interface DriveFile {
     is_missing?: boolean;
 }
 
+// Helper to add auth headers without messing up FormData content-type
+function getAuthHeaders(isJson = true) {
+    const token = getToken();
+    const headers: HeadersInit = {};
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    }
+    if (isJson) {
+        headers['Content-Type'] = 'application/json';
+    }
+    return headers;
+}
+
 /* ===============================
    UPLOAD FILE
 ================================ */
@@ -38,8 +53,12 @@ export async function uploadFile(file: File, userId: number, folderId: number | 
     fd.append("file", file);
     fd.append("folder_id", folderId ? folderId.toString() : "");
 
+    // Do NOT set Content-Type for FormData, browser sets boundary
+    const headers = getAuthHeaders(false);
+
     const res = await fetch(`${API}/upload?user_id=${userId}`, {
         method: "POST",
+        headers,
         body: fd
     });
 
@@ -50,7 +69,7 @@ export async function uploadFile(file: File, userId: number, folderId: number | 
    GET FOLDER CONTENTS
 ================================ */
 export async function getFolderContents(folderId: number | null, userId: number) {
-    const res = await fetch(
+    const res = await authService.fetchWithAuth(
         `${API}/contents?user_id=${userId}&folder_id=${folderId ?? ""}`
     );
 
@@ -84,7 +103,7 @@ export async function getFolderContents(folderId: number | null, userId: number)
    GET FOLDERS LIST
 ================================ */
 export async function getFolders(userId: number, parentFolderId: number | null = null) {
-    const res = await fetch(
+    const res = await authService.fetchWithAuth(
         `${API}/folders?user_id=${userId}&parent_folder_id=${parentFolderId ?? ""}`
     );
 
@@ -96,9 +115,8 @@ export async function getFolders(userId: number, parentFolderId: number | null =
    CREATE FOLDER
 ================================ */
 export async function createFolder(userId: number, parentId: number | null, name: string) {
-    const res = await fetch(`${API}/folder`, {
+    const res = await authService.fetchWithAuth(`${API}/folder`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             user_id: userId,
             parent_folder_id: parentId,
@@ -114,9 +132,8 @@ export async function createFolder(userId: number, parentId: number | null, name
    Accepts (fileId, starred, userId) - userId optional for backward compat
 ================================ */
 export async function toggleStarFile(fileId: number, starred: boolean, userId: number = 1) {
-    const res = await fetch(`${API}/toggle-star`, {
+    const res = await authService.fetchWithAuth(`${API}/toggle-star`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             file_id: fileId,
             is_starred: starred,
@@ -131,9 +148,8 @@ export async function toggleStarFile(fileId: number, starred: boolean, userId: n
    MOVE FILE TO FOLDER
 ================================ */
 export async function moveFile(fileId: number, folderId: number | null, userId: number) {
-    const res = await fetch(`${API}/move`, {
+    const res = await authService.fetchWithAuth(`${API}/move`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             file_id: fileId,
             folder_id: folderId,
@@ -148,9 +164,8 @@ export async function moveFile(fileId: number, folderId: number | null, userId: 
    MOVE TO TRASH
 ================================ */
 export async function moveToTrash(fileId: number, userId: number) {
-    const res = await fetch(`${API}/trash`, {
+    const res = await authService.fetchWithAuth(`${API}/trash`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             file_id: fileId,
             user_id: userId
@@ -164,9 +179,8 @@ export async function moveToTrash(fileId: number, userId: number) {
    DELETE FILE (Frontend calls /delete)
 ================================ */
 export async function deleteFile(fileId: number, userId: number) {
-    const res = await fetch(`${API}/delete`, {
+    const res = await authService.fetchWithAuth(`${API}/delete`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             file_id: fileId,
             user_id: userId
@@ -180,9 +194,8 @@ export async function deleteFile(fileId: number, userId: number) {
    RESTORE FROM TRASH
 ================================ */
 export async function restoreFromTrash(fileId: number, userId: number) {
-    const res = await fetch(`${API}/restore`, {
+    const res = await authService.fetchWithAuth(`${API}/restore`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             file_id: fileId,
             user_id: userId
@@ -196,9 +209,8 @@ export async function restoreFromTrash(fileId: number, userId: number) {
    DELETE PERMANENTLY
 ================================ */
 export async function deletePermanently(fileId: number, userId: number) {
-    const res = await fetch(`${API}/delete-permanent`, {
+    const res = await authService.fetchWithAuth(`${API}/delete-permanent`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             file_id: fileId,
             user_id: userId
@@ -212,9 +224,8 @@ export async function deletePermanently(fileId: number, userId: number) {
    EMPTY TRASH
 ================================ */
 export async function emptyTrash(userId: number) {
-    const res = await fetch(`${API}/empty-trash`, {
+    const res = await authService.fetchWithAuth(`${API}/empty-trash`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId })
     });
 
@@ -223,9 +234,7 @@ export async function emptyTrash(userId: number) {
 
 // Fetch trashed files
 export async function getTrashFiles(userId: number) {
-    const res = await fetch(`/api/drive/trash?user_id=${userId}`, {
-        credentials: 'include',
-    });
+    const res = await authService.fetchWithAuth(`/api/drive/trash?user_id=${userId}`);
 
     if (!res.ok) {
         throw new Error('Failed to fetch trash files');
@@ -239,7 +248,7 @@ export async function getTrashFiles(userId: number) {
    GET STARRED FILES
 ================================ */
 export async function getStarredFiles(userId: number) {
-    const res = await fetch(`${API}/starred?user_id=${userId}`);
+    const res = await authService.fetchWithAuth(`${API}/starred?user_id=${userId}`);
     const data = await res.json();
     return data.files || [];
 }
@@ -248,7 +257,7 @@ export async function getStarredFiles(userId: number) {
    GET RECENT FILES
 ================================ */
 export async function getRecentFiles(userId: number, limit = 20) {
-    const res = await fetch(`${API}/recent?user_id=${userId}&limit=${limit}`);
+    const res = await authService.fetchWithAuth(`${API}/recent?user_id=${userId}&limit=${limit}`);
     const data = await res.json();
     return data.files || [];
 }
@@ -282,7 +291,7 @@ export function formatFileSize(bytes: number) {
 // --- Safety helpers injected by dev-assistant ---
 export async function getTrash(userId: number) {
     try {
-        const res = await fetch(`/api/drive/trash?user_id=${userId}`);
+        const res = await authService.fetchWithAuth(`/api/drive/trash?user_id=${userId}`);
         const data = await res.json();
         return { files: Array.isArray(data?.files) ? data.files : [] };
     } catch (e) {
@@ -295,26 +304,26 @@ export async function getTrash(userId: number) {
    STORAGE ANALYTICS
 ================================ */
 export async function getUserQuota(userId: number) {
-    const res = await fetch(`/api/storage/quota?user_id=${userId}`);
+    const res = await authService.fetchWithAuth(`/api/storage/quota?user_id=${userId}`);
     return res.json();
 }
 
 export async function getOptimizationSuggestions(userId: number) {
-    const res = await fetch(`/api/storage/suggestions?user_id=${userId}`);
+    const res = await authService.fetchWithAuth(`/api/storage/suggestions?user_id=${userId}`);
     return res.json();
 }
 
 export async function getStorageBreakdown(userId: number) {
-    const res = await fetch(`/api/storage/breakdown?user_id=${userId}`);
+    const res = await authService.fetchWithAuth(`/api/storage/breakdown?user_id=${userId}`);
     return res.json();
 }
 
 export async function getLargeFiles(userId: number) {
-    const res = await fetch(`/api/storage/large-files?user_id=${userId}`);
+    const res = await authService.fetchWithAuth(`/api/storage/large-files?user_id=${userId}`);
     return res.json();
 }
 
 export async function getDuplicateFiles(userId: number) {
-    const res = await fetch(`/api/storage/duplicates?user_id=${userId}`);
+    const res = await authService.fetchWithAuth(`/api/storage/duplicates?user_id=${userId}`);
     return res.json();
 }

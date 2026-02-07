@@ -75,9 +75,50 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
     const [activeTab, setActiveTab] = useState<'drive' | 'recent' | 'trash' | 'recordings'>('drive');
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
+    // Unified Path Handling
+    useEffect(() => {
+        const handlePathChange = () => {
+            const path = window.location.pathname;
+            if (path.startsWith('/drive')) {
+                // Parse sub-routes
+                if (path.includes('/recent')) {
+                    setActiveTab('recent'); setActiveFilter('recent');
+                } else if (path.includes('/starred')) {
+                    setActiveTab('drive'); setActiveFilter('starred');
+                } else if (path.includes('/trash')) {
+                    setActiveTab('trash');
+                } else if (path.includes('/shared')) {
+                    setActiveTab('drive'); setActiveFilter('shared');
+                } else if (path.includes('/meetings')) {
+                    setActiveTab('recordings');
+                } else {
+                    // Default /drive
+                    setActiveTab('drive'); setActiveFilter('all');
+                }
+            }
+        };
+
+        handlePathChange(); // Initial check
+        window.addEventListener('popstate', handlePathChange);
+        window.addEventListener('app-navigate', handlePathChange as EventListener);
+
+        return () => {
+            window.removeEventListener('popstate', handlePathChange);
+            window.removeEventListener('app-navigate', handlePathChange as EventListener);
+        };
+    }, []);
+
+    // Load data when dependencies change
     useEffect(() => {
         loadDriveData();
     }, [currentFolder, activeFilter, activeTab]);
+
+    const handleNavigation = (path: string) => {
+        window.history.pushState({}, '', path);
+        // Dispatch event so other components (or this one via listener) update
+        window.dispatchEvent(new CustomEvent('app-navigate', { detail: { path } }));
+        setIsMobileMenuOpen(false);
+    };
 
     const loadDriveData = async () => {
         try {
@@ -205,7 +246,7 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
 
             <nav className="flex-1 px-4 space-y-1">
                 <button
-                    onClick={() => { setActiveTab('drive'); setActiveFilter('all'); setIsMobileMenuOpen(false); }}
+                    onClick={() => handleNavigation('/drive')}
                     className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'drive' && activeFilter === 'all'
                         ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
                         : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
@@ -215,7 +256,7 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                     My Drive
                 </button>
                 <button
-                    onClick={() => { setActiveTab('recent'); setActiveFilter('recent'); setIsMobileMenuOpen(false); }}
+                    onClick={() => handleNavigation('/drive/recent')}
                     className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'recent'
                         ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
                         : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
@@ -225,7 +266,7 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                     Recent
                 </button>
                 <button
-                    onClick={() => { setActiveTab('drive'); setActiveFilter('starred'); setIsMobileMenuOpen(false); }}
+                    onClick={() => handleNavigation('/drive/starred')}
                     className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeFilter === 'starred'
                         ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
                         : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
@@ -235,7 +276,7 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                     Starred
                 </button>
                 <button
-                    onClick={() => { setActiveTab('trash'); setIsMobileMenuOpen(false); }}
+                    onClick={() => handleNavigation('/drive/trash')}
                     className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'trash'
                         ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
                         : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
@@ -245,7 +286,7 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                     Trash
                 </button>
                 <button
-                    onClick={() => { setActiveTab('drive'); setActiveFilter('shared'); setIsMobileMenuOpen(false); }}
+                    onClick={() => handleNavigation('/drive/shared')}
                     className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeFilter === 'shared'
                         ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
                         : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'
@@ -255,7 +296,7 @@ export default function JeeDrive({ onSwitchToMail }: JeeDriveProps) {
                     Shared with me
                 </button>
                 <button
-                    onClick={() => { setActiveTab('recordings'); setIsMobileMenuOpen(false); }}
+                    onClick={() => handleNavigation('/drive/meetings')}
                     className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'recordings'
                         ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
                         : 'text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800'

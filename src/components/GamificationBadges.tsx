@@ -20,7 +20,7 @@ export default function GamificationBadges() {
 
         // Get user's emails to calculate real metrics
         const { data: emails } = await emailService.getEmails(profile.id);
-        
+
         // Calculate storage saved (based on email count and average size)
         const emailCount = emails?.length || 0;
         const avgEmailSize = 0.05; // 50KB average per email
@@ -62,57 +62,62 @@ export default function GamificationBadges() {
   return (
     <div className="space-y-4">
       {/* Carbon Credits Section */}
-      <div className="bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-lg p-4 border border-green-200 dark:border-green-800">
-        <div className="flex items-center justify-between mb-3">
+      <div className="bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-lg p-4 border border-green-200 dark:border-green-800 relative">
+
+        {/* Circular Badge - Top Right */}
+        <div className={`absolute top-3 right-3 w-14 h-14 rounded-full flex flex-col items-center justify-center shadow-lg text-white font-bold leading-tight z-10 bg-gradient-to-br ${currentBadge.color} border-2 border-white dark:border-slate-800 shadow-md transform transition hover:scale-105 cursor-default`}>
+          <div className="text-[8px] uppercase tracking-wider opacity-90">Tier</div>
+          <div className="text-[10px] text-center leading-none px-1 line-clamp-2">{currentBadge.tier.replace('Bronze', 'Brnz').replace('Silver', 'Slvr').replace('Platinum', 'Plat').replace('Diamond', 'Dmnd')}</div>
+          {/* Tier names shortened for badge fit if needed, or just let them wrap? "Bronze 1" fits. "Ace Master 1" might be tight. */}
+        </div>
+
+        <div className="flex items-center justify-between mb-4 mr-16">
           <div className="flex items-center gap-2">
             <Leaf className="w-5 h-5 text-green-600 dark:text-green-400" />
-            <h3 className="text-sm font-semibold text-green-900 dark:text-green-300">Carbon Credits</h3>
-          </div>
-          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-green-900 dark:text-green-300">Carbon Level</h3>
             <button
               onClick={() => setShowInfoModal(true)}
-              className="p-1.5 text-green-600 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-800/50 rounded-full transition"
-              title="Learn about carbon credits"
+              className="p-1 text-green-600 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-800/50 rounded-full transition"
+              title="Info"
             >
-              <Info className="w-4 h-4" />
+              <Info className="w-3.5 h-3.5" />
             </button>
-            <div className={`bg-gradient-to-br ${currentBadge.color} px-3 py-1 rounded-full text-white text-xs font-bold`}>
-              {currentBadge.icon} {currentBadge.tier}
-            </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 mb-3">
-          <div className="bg-white dark:bg-slate-800 rounded p-2">
-            <p className="text-xs text-gray-600 dark:text-slate-400">Credits</p>
-            <p className="text-lg font-bold text-green-600 dark:text-green-400">
-              {formatCarbonCredits(metrics.carbonCreditsEarned)}
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          <div className="bg-white dark:bg-slate-800 rounded-xl p-3 shadow-sm border border-green-100 dark:border-green-800/30 group hover:shadow-md transition-all">
+            <p className="text-[10px] text-gray-500 dark:text-slate-400 font-bold uppercase tracking-wider mb-0.5">Credits</p>
+            <p className="text-sm font-black text-green-600 dark:text-green-400 truncate tracking-tight" title={String(metrics.carbonCreditsEarned)}>
+              {metrics.carbonCreditsEarned < 0.000001 ? '< 0.000001' : metrics.carbonCreditsEarned.toFixed(6)}
             </p>
+            <p className="text-[10px] text-green-600/60 dark:text-green-400/60 font-medium">earned</p>
           </div>
-          <div className="bg-white dark:bg-slate-800 rounded p-2">
-            <p className="text-xs text-gray-600 dark:text-slate-400">CO₂e Saved</p>
-            <p className="text-lg font-bold text-blue-600 dark:text-blue-400">
-              {formatCO2eSavings(metrics.totalCO2eSavedKg)}
+          <div className="bg-white dark:bg-slate-800 rounded-xl p-3 shadow-sm border border-blue-100 dark:border-blue-800/30 group hover:shadow-md transition-all">
+            <p className="text-[10px] text-gray-500 dark:text-slate-400 font-bold uppercase tracking-wider mb-0.5">CO₂e Saved</p>
+            <p className="text-sm font-black text-blue-600 dark:text-blue-400 truncate tracking-tight" title={String(metrics.totalCO2eSavedKg)}>
+              {metrics.totalCO2eSavedKg < 0.000001 ? '< 0.000001' : metrics.totalCO2eSavedKg.toFixed(6)}
             </p>
+            <p className="text-[10px] text-blue-600/60 dark:text-blue-400/60 font-medium">kg</p>
           </div>
         </div>
 
-        <div className="mb-2">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-xs text-gray-700 dark:text-slate-300">Progress to Next Tier</span>
-            <span className="text-xs text-gray-600 dark:text-slate-400">{Math.round(progress.percentage)}%</span>
+        <div className="mb-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] font-semibold text-gray-500 dark:text-slate-400">Next Tier Progress</span>
+            <span className="text-[10px] font-bold text-gray-700 dark:text-slate-300">{Math.round(progress.percentage)}%</span>
           </div>
-          <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-1.5">
+          <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-2 overflow-hidden">
             <div
-              className={`bg-gradient-to-r ${currentBadge.color} h-1.5 rounded-full transition-all duration-500`}
+              className={`bg-gradient-to-r ${currentBadge.color} h-2 rounded-full transition-all duration-700 ease-out shadow-sm`}
               style={{ width: `${progress.percentage}%` }}
             ></div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 text-xs text-gray-700 dark:text-slate-300">
-          <TrendingUp className="w-3 h-3" />
-          <span>{currentBadge.description}</span>
+        <div className="flex items-start gap-2 text-xs text-gray-600 dark:text-slate-400 pt-1">
+          <TrendingUp className="w-3.5 h-3.5 text-green-500 mt-0.5 flex-shrink-0" />
+          <span className="italic leading-tight opacity-90">{currentBadge.description || "Start your journey!"}</span>
         </div>
       </div>
 

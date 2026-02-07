@@ -1,9 +1,9 @@
 // src/components/MailLayout.tsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Inbox, Send, FileEdit, Trash2, Plus, Star, Archive,
-  Search, LogOut, Sparkles, Circle, X, ChevronDown, User,
-  Clock, AlertTriangle, Tag, Mail, Menu
+  Circle, ChevronDown,
+  Clock, AlertTriangle, Tag, Mail, Menu, Wifi, Share2, CheckCircle2, Layers
 } from 'lucide-react';
 import { emailService, getFolderIdByName } from '../lib/emailService';
 import { authService } from '../lib/authService';
@@ -11,16 +11,30 @@ import EmailList from './EmailList';
 import EmailView from './EmailView';
 import ThreadView from './ThreadView';
 import ComposeEmail from './compose/ComposeEmail';
-import ThemeToggle from './ThemeToggle';
 import GamificationBadges from './GamificationBadges';
-import UserProfile from './UserProfile';
-import AddAccountModal from './AddAccountModal';
 import ActivityLogModal from './ActivityLogModal';
 import PrivacyPolicyModal from './PrivacyPolicyModal';
 import TermsOfServiceModal from './TermsOfServiceModal';
 import { animations } from '../utils/animations';
 import { Email, Folder } from '../types/email';
-import { normalizeEmailBody } from '../utils/email'; // <-- import added
+import { normalizeEmailBody } from '../utils/email';
+import { encodeEmailId, decodeEmailId } from '../utils/urlEncoding';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  horizontalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { SortableTab } from './SortableTab';
 
 const iconMap: Record<string, typeof Inbox> = {
   inbox: Inbox,
@@ -49,14 +63,12 @@ const folderColors: Record<string, string> = {
   trash: '#6b7280',   // Gray
 };
 
-export default function MailLayout() {
-  const profile = authService.getCurrentUser();
-  // P2P service is initialized in MainApp - no need to re-initialize here
+interface MailLayoutProps {
+  searchQuery?: string;
+}
 
-  const signOut = () => {
-    authService.logout();
-    window.location.reload();
-  };
+export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
+  const profile = authService.getCurrentUser();
 
   // keep raw responses and normalize when using
   const [foldersRaw, setFoldersRaw] = useState<any>([]);
@@ -64,21 +76,12 @@ export default function MailLayout() {
   const [selectedFolder, setSelectedFolder] = useState<Folder | null>(null);
   const [emailsRaw, setEmailsRaw] = useState<any>([]);
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
-  const [showProfileDropdown, setShowProfileDropdown] = useState(false);
   const [showBadges, setShowBadges] = useState(true);
-  const [showUserProfile, setShowUserProfile] = useState(false);
-  const [showAddAccount, setShowAddAccount] = useState(false);
   const [showActivityLog, setShowActivityLog] = useState(false);
   const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
   const [showTermsOfService, setShowTermsOfService] = useState(false);
-  const [userProfileTab, setUserProfileTab] = useState<'overview' | 'carbon' | 'settings'>('carbon');
-  const [labels, setLabels] = useState([
-    { id: 1, name: 'Personal', color: '#10b981' },
-    { id: 2, name: 'Work', color: '#3b82f6' },
-    { id: 3, name: 'Travel', color: '#f59e0b' },
-  ]);
+  const [labels, setLabels] = useState<any[]>([]);
   const [editingLabelId, setEditingLabelId] = useState<number | null>(null);
   const [editLabelName, setEditLabelName] = useState('');
   const [openedMailTabs, setOpenedMailTabs] = useState<Email[]>([]);
@@ -86,6 +89,71 @@ export default function MailLayout() {
   const [composeWindows, setComposeWindows] = useState<string[]>([]);
   const [nextComposeId, setNextComposeId] = useState(1);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  // Status State
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isP2PCombined, setIsP2PCombined] = useState(false);
+  const [lastSynced, setLastSynced] = useState<Date>(new Date());
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 5,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+
+    if (over && active.id !== over.id) {
+      setOpenedMailTabs((items) => {
+        const oldIndex = items.findIndex((item) => String(item.id) === active.id);
+        const newIndex = items.findIndex((item) => String(item.id) === over.id);
+        return arrayMove(items, oldIndex, newIndex);
+      });
+    }
+  }
+
+  const groupTabsBySender = () => {
+    setOpenedMailTabs(prev => {
+      const sorted = [...prev].sort((a, b) => {
+        const senderA = (a.from_name || a.from_email || '').toLowerCase();
+        const senderB = (b.from_name || b.from_email || '').toLowerCase();
+        return senderA.localeCompare(senderB);
+      });
+      return sorted;
+    });
+  };
+
+  // Storage State
+  const [storageInfo, setStorageInfo] = useState({
+    used: profile?.storage_used_bytes || 0,
+    limit: profile?.storage_limit_bytes || 1073741824
+  });
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    const i = setInterval(() => {
+      // @ts-ignore
+      const connected = window.p2p_connected || (navigator.onLine && authService.getCurrentUser());
+      setIsP2PCombined(!!connected);
+    }, 5000);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      clearInterval(i);
+    };
+  }, []);
 
   // normalize different possible shapes to array
   const normalizeArray = (v: any, hints: string[] = []) => {
@@ -99,8 +167,6 @@ export default function MailLayout() {
       if (Array.isArray(v.items)) return v.items;
       if (Array.isArray(v.folders)) return v.folders;
       if (Array.isArray(v.emails)) return v.emails;
-      // sometimes the API returns { data: {...} } where data is object map
-      // try to extract any array value
       const values = Object.values(v);
       for (const val of values) {
         if (Array.isArray(val)) return val;
@@ -111,6 +177,149 @@ export default function MailLayout() {
 
   const folders: Folder[] = normalizeArray(foldersRaw, ['folders', 'data']);
   const emails: Email[] = normalizeArray(emailsRaw, ['emails', 'data', 'items']);
+
+  const loadEmails = useCallback(async (folderId?: string | number) => {
+    try {
+      if (!profile?.id) return;
+      const folderNumericId = folderId ? Number(folderId) : undefined;
+      const resp = await emailService.getEmails(profile.id, folderNumericId);
+      if (resp.error) {
+        console.error('Error loading emails:', resp.error);
+        setEmailsRaw([]);
+      } else {
+        setEmailsRaw(resp.data ?? []);
+      }
+    } catch (err) {
+      console.error('Error loading emails:', err);
+      setEmailsRaw([]);
+    }
+  }, [profile?.id]);
+
+  const loadStarredEmails = useCallback(async () => {
+    try {
+      if (!profile?.id) return;
+      // Use existing getEmails and filter client-side if no dedicated endpoint
+      const resp = await emailService.getEmails(profile.id);
+      if (resp.error) {
+        console.error('Error loading starred emails:', resp.error);
+        setEmailsRaw([]);
+      } else {
+        const allEmails = resp.data ?? [];
+        const starredEmails = allEmails.filter((email: any) => email.is_starred);
+        setEmailsRaw(starredEmails);
+      }
+    } catch (err) {
+      console.error('Error loading starred emails:', err);
+      setEmailsRaw([]);
+    }
+  }, [profile?.id]);
+
+  const handleOpenComposeWindow = useCallback(() => {
+    const newComposeId = `compose-${nextComposeId}`;
+    setComposeWindows(prev => [...prev, newComposeId]);
+    setNextComposeId(prev => prev + 1);
+  }, [nextComposeId]);
+
+  const handleOpenMailInTab = useCallback((email: Email) => {
+    if (!openedMailTabs.some(tab => String(tab.id) === String(email.id))) {
+      setOpenedMailTabs(prev => [...prev, email]);
+    }
+    setActiveTabId(String(email.id));
+    if (selectedFolder) {
+      const folderName = selectedFolder.system_box || selectedFolder.name || 'inbox';
+      window.location.hash = `${folderName.toLowerCase()}/${encodeEmailId(email.id)}`;
+    }
+  }, [openedMailTabs, selectedFolder]);
+
+  const handleCloseTab = useCallback((emailId: string) => {
+    setOpenedMailTabs(prev => prev.filter(tab => String(tab.id) !== emailId));
+
+    if (activeTabId === emailId) {
+      const remainingTabs = openedMailTabs.filter(tab => String(tab.id) !== emailId);
+
+      if (remainingTabs.length > 0) {
+        const nextTab = remainingTabs[remainingTabs.length - 1];
+        setActiveTabId(String(nextTab.id));
+        if (selectedFolder) {
+          const folderName = selectedFolder.system_box || selectedFolder.name || 'inbox';
+          window.location.hash = `${folderName.toLowerCase()}/${encodeEmailId(nextTab.id)}`;
+        }
+      } else {
+        setActiveTabId(null);
+        setSelectedEmail(null);
+        if (selectedFolder) {
+          const folderName = selectedFolder.system_box || selectedFolder.name || 'inbox';
+          window.location.hash = folderName.toLowerCase();
+        }
+      }
+    }
+  }, [activeTabId, openedMailTabs, selectedFolder]);
+
+  // Hash Navigation Handler
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.replace('#', '');
+      if (!hash) {
+        if (!openedMailTabs.length) setActiveTabId(null);
+        return;
+      }
+
+      const [folderName, ...rest] = hash.split('/');
+
+      // Handle Compose
+      if (folderName === 'compose') {
+        handleOpenComposeWindow();
+        return;
+      }
+
+      // Handle Folders
+      if (folderName && folders.length > 0) {
+        let targetFolder = folders.find(f => (f.name || '').toLowerCase() === folderName.toLowerCase() || (f.system_box || '').toLowerCase() === folderName.toLowerCase());
+
+        // Custom handling for virtual folders
+        if (!targetFolder) {
+          if (['starred', 'snoozed', 'spam', 'trash', 'drafts', 'archive'].includes(folderName)) {
+            const systemMap: any = {
+              starred: { id: 'starred', name: 'Starred', system_box: 'starred' },
+              snoozed: { id: 'snoozed', name: 'Snoozed', system_box: 'snoozed' },
+              spam: { id: 'spam', name: 'Spam', system_box: 'spam' },
+              trash: { id: 'trash', name: 'Trash', system_box: 'trash' },
+              drafts: { id: 'drafts', name: 'Drafts', system_box: 'drafts' },
+              archive: { id: 'archive', name: 'Archive', system_box: 'archive' }
+            };
+            targetFolder = systemMap[folderName];
+          }
+        }
+
+        if (targetFolder) {
+          if (selectedFolder?.id !== targetFolder.id) {
+            setSelectedFolder(targetFolder as Folder);
+          }
+
+          // Handle Email ID in hash
+          const encodedEmailId = rest[0];
+          if (encodedEmailId) {
+            const decodedId = decodeEmailId(encodedEmailId);
+            const foundEmail = emails.find(e => String(e.id) === (decodedId || encodedEmailId));
+            if (foundEmail) {
+              if (!openedMailTabs.some(tab => String(tab.id) === String(foundEmail.id))) {
+                setOpenedMailTabs(prev => [...prev, foundEmail]);
+              }
+              setActiveTabId(String(foundEmail.id));
+            }
+          } else {
+            if (!openedMailTabs.length) setActiveTabId(null);
+          }
+        }
+      }
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    // Initial check
+    if (foldersLoaded) handleHashChange();
+
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [foldersLoaded, folders, selectedFolder, emails, openedMailTabs, handleOpenComposeWindow]);
 
   useEffect(() => {
     if (!profile?.id) return;
@@ -126,13 +335,30 @@ export default function MailLayout() {
       }
     };
 
+    const fetchStorageQuota = async () => {
+      try {
+        const res = await authService.fetchWithAuth(`/api/storage/quota?user_id=${profile.id}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.storage_used_bytes !== undefined) {
+            setStorageInfo({
+              used: data.storage_used_bytes,
+              limit: data.storage_limit_bytes || 1073741824
+            });
+          }
+        }
+      } catch (e) {
+        console.error("Failed to fetch storage quota", e);
+      }
+    };
+
     initializeUserData();
+    fetchStorageQuota();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.id]);
 
   useEffect(() => {
     if (selectedFolder) {
-      // Handle special folders differently
       if (selectedFolder.id === 'starred') {
         loadStarredEmails();
       } else if (selectedFolder.id === 'archive') {
@@ -152,6 +378,7 @@ export default function MailLayout() {
       const inboxFolder = folders.find((f) => (f.name || '').toString().toLowerCase() === 'inbox');
       if (inboxFolder) {
         setSelectedFolder({ ...inboxFolder, id: Number(inboxFolder.id) });
+        if (!window.location.hash) window.location.hash = 'inbox';
       } else {
         setSelectedFolder({ ...folders[0], id: Number(folders[0].id) });
       }
@@ -178,24 +405,28 @@ export default function MailLayout() {
     }
   };
 
-  const loadEmails = async (folderId?: string | number) => {
-    try {
-      if (!profile?.id) return;
-      const folderNumericId = folderId ? Number(folderId) : undefined;
-      const resp = await emailService.getEmails(profile.id, folderNumericId);
-      if (resp.error) {
-        console.error('Error loading emails:', resp.error);
-        setEmailsRaw([]);
-      } else {
-        setEmailsRaw(resp.data ?? []);
-      }
-    } catch (err) {
-      console.error('Error loading emails:', err);
-      setEmailsRaw([]);
+  // Sync labels with custom folders when folders update
+  useEffect(() => {
+    if (folders.length > 0) {
+      const systemNames = ['inbox', 'starred', 'snoozed', 'sent', 'drafts', 'spam', 'trash', 'archive'];
+      const customFolders = folders.filter(f =>
+        !systemNames.includes((f.name || '').toLowerCase()) &&
+        !systemNames.includes((f.system_box || '').toLowerCase())
+      );
+
+      const mappedLabels = customFolders.map((f, index) => ({
+        id: Number(f.id),
+        name: f.name,
+        color: ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'][index % 5]
+      }));
+
+      setLabels(mappedLabels);
     }
-  };
+  }, [folders]);
 
   const refreshEmails = () => {
+    setLastSynced(new Date());
+    loadFolders(); // Update counts
     if (selectedFolder) {
       if (selectedFolder.id === 'starred') {
         loadStarredEmails();
@@ -216,63 +447,12 @@ export default function MailLayout() {
     handleOpenComposeWindow();
   };
 
-  const handleAddAccount = () => {
-    setShowAddAccount(true);
-    setShowProfileDropdown(false);
-  };
-
-  const handleAccountAdded = (account: any) => {
-    // Store the new account (you can implement localStorage or backend storage)
-    const existingAccounts = JSON.parse(localStorage.getItem('additionalAccounts') || '[]');
-    existingAccounts.push(account);
-    localStorage.setItem('additionalAccounts', JSON.stringify(existingAccounts));
-
-    // Show success message or switch to the new account
-    console.log('Account added:', account);
-  };
-
-  const handleViewProfile = () => {
-    setUserProfileTab('carbon'); // Set to carbon tab by default
-    setShowUserProfile(true);
-    setShowProfileDropdown(false);
-  };
-
-  const handleOpenMailInTab = (email: Email) => {
-    const existingTab = openedMailTabs.find(tab => tab.id === email.id);
-    if (!existingTab) {
-      setOpenedMailTabs([...openedMailTabs, email]);
-    }
-    setActiveTabId(String(email.id));
-    setSelectedEmail(null); // Clear the single email view
-  };
-
-  const handleCloseTab = (emailId: string) => {
-    setOpenedMailTabs(openedMailTabs.filter(tab => String(tab.id) !== emailId));
-    if (activeTabId === emailId) {
-      const remainingTabs = openedMailTabs.filter(tab => String(tab.id) !== emailId);
-      if (remainingTabs.length > 0) {
-        setActiveTabId(String(remainingTabs[0].id));
-      } else {
-        setActiveTabId(null);
-        setSelectedEmail(null); // Clear selected email when no tabs are open
-      }
-    }
-  };
-
-  const handleOpenComposeWindow = () => {
-    // Only allow one compose window at a time
-    if (composeWindows.length === 0) {
-      const newComposeId = `compose-${nextComposeId}`;
-      setComposeWindows([newComposeId]);
-      setNextComposeId(nextComposeId + 1);
-    }
-  };
-
   const handleCloseComposeWindow = (composeId: string) => {
     setComposeWindows(composeWindows.filter(id => id !== composeId));
   };
 
   const handleFolderClick = (folderType: string, folder: Folder) => {
+    window.location.hash = folderType;
     setSelectedFolder(folder);
 
     // Load emails based on folder type
@@ -285,26 +465,6 @@ export default function MailLayout() {
       }
     } else {
       loadEmails(Number(folder.id));
-    }
-  };
-
-  const loadStarredEmails = async () => {
-    try {
-      if (!profile?.id) return;
-      // For now, load all emails and filter client-side for starred
-      // Backend teammate can implement proper starred endpoint
-      const resp = await emailService.getEmails(profile.id);
-      if (resp.error) {
-        console.error('Error loading emails:', resp.error);
-        setEmailsRaw([]);
-      } else {
-        const allEmails = resp.data ?? [];
-        const starredEmails = allEmails.filter((email: any) => email.is_starred);
-        setEmailsRaw(starredEmails);
-      }
-    } catch (err) {
-      console.error('Error loading starred emails:', err);
-      setEmailsRaw([]);
     }
   };
 
@@ -334,15 +494,6 @@ export default function MailLayout() {
     }
   };
 
-  // close profile dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = () => {
-      if (showProfileDropdown) setShowProfileDropdown(false);
-    };
-    if (showProfileDropdown) document.addEventListener('click', handleClickOutside);
-    return () => document.removeEventListener('click', handleClickOutside);
-  }, [showProfileDropdown]);
-
   const filteredEmails = emails.filter((email) => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
@@ -364,122 +515,6 @@ export default function MailLayout() {
 
   const SidebarContent = () => (
     <>
-      {/* Header */}
-      <div className="p-4 border-b border-gray-200 dark:border-slate-800">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="bg-gradient-to-br from-blue-500 to-cyan-500 p-2 rounded-lg">
-              <Sparkles className="w-5 h-5 text-white" />
-            </div>
-            <span className="text-gray-900 dark:text-white font-bold text-lg">Jeemail</span>
-          </div>
-          <button
-            onClick={() => setMobileSidebarOpen(false)}
-            className="lg:hidden p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-      </div>
-
-      {/* User Profile */}
-      <div className="p-4 border-b border-gray-200 dark:border-slate-800">
-        <div className="flex items-center justify-between">
-          <div className="relative flex-1">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowProfileDropdown(!showProfileDropdown);
-              }}
-              className="flex items-center gap-3 w-full p-2 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition"
-            >
-              <div className="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold text-lg">
-                {profile?.full_name?.charAt(0) || profile?.email?.charAt(0) || 'U'}
-              </div>
-              <div className="flex-1 min-w-0 text-left">
-                <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                  {profile?.full_name || 'User'}
-                </p>
-                <p className="text-xs text-gray-500 dark:text-slate-400 truncate">
-                  {profile?.email}
-                </p>
-              </div>
-            </button>
-
-            {/* Profile Dropdown */}
-            {showProfileDropdown && (
-              <div className={`absolute top-full left-0 right-0 mt-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-2xl shadow-2xl z-50 overflow-hidden ${animations.slideInUp}`} style={{ minWidth: '280px' }}>
-                {/* User Info Header */}
-                <div className="p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/50">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold text-xl relative">
-                      {profile?.full_name?.charAt(0) || profile?.email?.charAt(0) || 'U'}
-                      <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-white dark:border-slate-800"></div>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-900 dark:text-white">
-                        Hi, {profile?.full_name || 'User'}!
-                      </p>
-                      <p className="text-xs text-gray-600 dark:text-slate-400 truncate">
-                        {profile?.email}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => setShowProfileDropdown(false)}
-                      className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-slate-700 transition"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Manage Account Button */}
-                <div className="p-2">
-                  <button
-                    onClick={handleViewProfile}
-                    className="w-full px-4 py-3 text-left text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition border border-blue-200 dark:border-blue-800 mb-2 flex items-center gap-2"
-                  >
-                    <User className="w-4 h-4" />
-                    View Profile & Carbon Credits
-                  </button>
-                </div>
-
-                {/* Actions */}
-                <div className="p-2 space-y-1">
-                  <button
-                    onClick={handleAddAccount}
-                    className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg transition flex items-center gap-3"
-                  >
-                    <Plus className="w-4 h-4 text-blue-500" />
-                    Add account
-                  </button>
-                  <button
-                    onClick={signOut}
-                    className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg transition flex items-center gap-3"
-                  >
-                    <LogOut className="w-4 h-4 text-gray-500" />
-                    Sign out
-                  </button>
-                </div>
-
-                {/* Storage Info */}
-                <div className="p-4 border-t border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/50">
-                  <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-slate-400">
-                    <div className="w-4 h-4 rounded-full bg-gradient-to-r from-blue-500 to-purple-500"></div>
-                    <span>8% of 1 GB used</span>
-                  </div>
-                </div>
-
-
-              </div>
-            )}
-          </div>
-          <div className="ml-2">
-            <ThemeToggle />
-          </div>
-        </div>
-      </div>
-
       {/* Compose Button */}
       <div className="p-4">
         <button
@@ -516,21 +551,27 @@ export default function MailLayout() {
             const isActive = String(selectedFolder?.id) === String(folder.id);
             const iconColor = folderColors[folderType] || (isActive ? '#1e40af' : undefined);
 
-            // Calculate counts differently for special folders
+            // Calculate counts
             let folderCount = 0;
-            try {
-              if (folderType === 'starred') {
-                folderCount = emails.filter((e) => e.is_starred).length;
-              } else if (folderType === 'snoozed') {
-                folderCount = emails.filter((e) => e.is_snoozed).length;
-              } else if (folderType === 'drafts') {
-                folderCount = emails.filter((e) => String(e.folder_id) === String(folder.id)).length;
-              } else {
-                folderCount = emails.filter((e) => String(e.folder_id) === String(folder.id) && !e.is_read).length;
+
+            if (folder && typeof folder.count === 'number') {
+              folderCount = folder.count;
+            } else {
+              // Fallback for virtual folders or if count is missing
+              try {
+                if (folderType === 'starred') {
+                  folderCount = emails.filter((e) => e.is_starred).length;
+                } else if (folderType === 'snoozed') {
+                  folderCount = emails.filter((e) => e.is_snoozed).length;
+                } else if (folderType === 'drafts') {
+                  folderCount = emails.filter((e) => String(e.folder_id) === String(folder.id)).length;
+                } else {
+                  folderCount = emails.filter((e) => String(e.folder_id) === String(folder.id) && !e.is_read).length;
+                }
+                folderCount = Number(folderCount) || 0;
+              } catch (err) {
+                folderCount = 0;
               }
-              folderCount = Number(folderCount) || 0;
-            } catch (err) {
-              folderCount = 0;
             }
 
             return (
@@ -619,10 +660,10 @@ export default function MailLayout() {
         <div className="mb-3">
           <div className="flex items-center justify-between text-xs text-gray-600 dark:text-slate-400 mb-2">
             <span>Storage Used</span>
-            <span>{((profile?.storage_used_bytes || 0) / (1024 * 1024)).toFixed(1)} MB / 1024 MB</span>
+            <span>{(storageInfo.used / (1024 * 1024)).toFixed(1)} MB / {(storageInfo.limit / (1024 * 1024)).toFixed(0)} MB</span>
           </div>
           <div className="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-1.5">
-            <div className="bg-gradient-to-r from-blue-500 to-cyan-500 h-1.5 rounded-full transition-all duration-300" style={{ width: `${Math.min(((profile?.storage_used_bytes || 0) / (profile?.storage_limit_bytes || 1073741824)) * 100, 100)}%` }}></div>
+            <div className="bg-gradient-to-r from-blue-500 to-cyan-500 h-1.5 rounded-full transition-all duration-300" style={{ width: `${Math.min((storageInfo.used / storageInfo.limit) * 100, 100)}%` }}></div>
           </div>
         </div>
       </div>
@@ -661,57 +702,86 @@ export default function MailLayout() {
             <Menu className="w-6 h-6" />
           </button>
 
-          <div className="flex-1 max-w-xl relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-slate-500" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search emails..."
-              className="w-full pl-10 pr-4 py-2 bg-gray-100 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-            />
-          </div>
-          {/* Mobile Profile & Theme */}
-          <div className="flex items-center gap-2 lg:hidden">
-            <ThemeToggle />
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowProfileDropdown(!showProfileDropdown);
-              }}
-              className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold text-sm"
-            >
-              {profile?.full_name?.charAt(0) || profile?.email?.charAt(0) || 'U'}
-            </button>
-          </div>
+
+
         </div>
 
         {/* Email Tabs Bar */}
         {openedMailTabs.length > 0 && (
-          <div className="bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 px-2 py-1 flex items-center gap-1 overflow-x-auto">
-            {openedMailTabs.map((email) => (
-              <div
-                key={email.id}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-t-lg cursor-pointer transition-all duration-200 min-w-0 max-w-xs ${activeTabId === String(email.id)
-                  ? 'bg-blue-50 dark:bg-blue-900/30 border-b-2 border-blue-500'
-                  : 'bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 border-b-2 border-transparent'
-                  }`}
-                onClick={() => setActiveTabId(String(email.id))}
-              >
-                <span className="text-sm font-medium text-gray-700 dark:text-slate-300 truncate">
-                  {email.subject || 'No Subject'}
-                </span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleCloseTab(String(email.id));
-                  }}
-                  className="p-0.5 rounded-full hover:bg-gray-300 dark:hover:bg-slate-600 transition"
-                >
-                  <X className="w-3 h-3 text-gray-500 dark:text-slate-400" />
-                </button>
+          <div className="bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 px-4 py-1.5 flex items-center justify-between shadow-sm z-20">
+            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar flex-1 mr-4">
+              <div className="flex items-center gap-1.5 text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest mr-2 flex-shrink-0 bg-blue-50 dark:bg-blue-900/20 px-2 py-1 rounded">
+                <Clock className="w-3 h-3" />
+                <span>Recent</span>
               </div>
-            ))}
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={openedMailTabs.map(t => String(t.id))}
+                  strategy={horizontalListSortingStrategy}
+                >
+                  {openedMailTabs.map((email) => (
+                    <SortableTab
+                      key={email.id}
+                      email={email}
+                      isActive={activeTabId === String(email.id)}
+                      onActivate={() => handleOpenMailInTab(email)}
+                      onClose={(e) => {
+                        e.stopPropagation();
+                        handleCloseTab(String(email.id));
+                      }}
+                    />
+                  ))}
+                </SortableContext>
+              </DndContext>
+            </div>
+
+            {/* System Status Indicators - Fills blank space */}
+            <div className="hidden lg:flex items-center gap-4 px-4 border-r border-gray-200 dark:border-slate-800 mr-4">
+              <button
+                onClick={groupTabsBySender}
+                title="Group tabs by sender"
+                className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-800/50 rounded-lg transition-colors"
+              >
+                <Layers className="w-3 h-3" />
+                <span>GROUP</span>
+              </button>
+              <div className={`flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded-full transition-colors ${isOnline ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/10' : 'text-red-600 bg-red-50'}`}>
+                <Wifi className={`w-3 h-3 ${!isOnline ? 'animate-pulse' : ''}`} />
+                <span>{isOnline ? 'Online' : 'Offline'}</span>
+              </div>
+
+              <div
+                title="Peer-to-Peer file sharing network status"
+                className={`flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded-full hidden xl:flex transition-colors cursor-help ${isP2PCombined ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/10' : 'text-gray-400 bg-gray-100'}`}>
+                <Share2 className="w-3 h-3" />
+                <span>{isP2PCombined ? 'P2P Ready' : 'P2P Offline'}</span>
+              </div>
+
+              <div
+                onClick={refreshEmails}
+                className="flex items-center gap-1.5 text-[10px] font-medium text-gray-500 dark:text-slate-400 hidden 2xl:flex cursor-pointer hover:text-blue-500 transition-colors"
+                title={`Last synced: ${lastSynced.toLocaleTimeString()}`}
+              >
+                <CheckCircle2 className="w-3 h-3" />
+                <span>Synced {Math.floor((new Date().getTime() - lastSynced.getTime()) / 60000)}m ago</span>
+              </div>
+            </div>
+
+            <button
+              onClick={() => {
+                setOpenedMailTabs([]);
+                setActiveTabId(null);
+                setSelectedEmail(null);
+              }}
+              className="text-[10px] font-bold text-gray-400 hover:text-red-500 dark:text-slate-500 dark:hover:text-red-400 uppercase tracking-widest flex items-center gap-1 flex-shrink-0 transition-colors px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-900/20"
+            >
+              <Trash2 className="w-3 h-3" />
+              <span>Close All</span>
+            </button>
           </div>
         )}
 
@@ -726,9 +796,6 @@ export default function MailLayout() {
                 handleOpenMailInTab(email);
               }}
               onRefresh={refreshEmails}
-              onViewActivity={() => setShowActivityLog(true)}
-              onViewPrivacy={() => setShowPrivacyPolicy(true)}
-              onViewTerms={() => setShowTermsOfService(true)}
             />
           </div>
           <div className="flex-1 flex flex-col min-w-0 min-h-0">
@@ -785,23 +852,8 @@ export default function MailLayout() {
         />
       ))}
 
-      {/* User Profile Modal */}
-      {showUserProfile && (
-        <UserProfile
-          onClose={() => setShowUserProfile(false)}
-          userEmail={profile?.email}
-          userName={profile?.full_name || profile?.email}
-          initialTab={userProfileTab}
-        />
-      )}
-
       {/* Add Account Modal */}
-      {showAddAccount && (
-        <AddAccountModal
-          onClose={() => setShowAddAccount(false)}
-          onSuccess={handleAccountAdded}
-        />
-      )}
+
 
       {/* Activity Log Modal */}
       <ActivityLogModal

@@ -131,6 +131,7 @@ export const emailService = {
       id: Number(f.id),
       name: f.name || f.system_box || "unknown",
       system_box: (f.system_box || f.name).toLowerCase(),
+      count: Number(f.count || 0),
     }));
     localStorage.setItem("folders", JSON.stringify(folders));
     return { data: folders, status: result.status };

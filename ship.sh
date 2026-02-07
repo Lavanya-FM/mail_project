@@ -8,12 +8,15 @@ DEST_DIR="/home/ubuntu/Mail_Project"
 echo "=== 🚀 Shipping to Production ($SERVER_IP) ==="
 
 # 1. Build Local
-echo "Step 1: Building locally..."
+echo "Step 1: Cleaning & Building locally..."
+rm -rf dist
 npm install
 npm run build
 
 # 2. Sync Files (using rsync if available, otherwise scp)
 echo "Step 2: Uploading files..."
+echo "  - Cleaning remote dist folder..."
+ssh $USER@$SERVER_IP "rm -rf $DEST_DIR/dist"
 if command -v rsync &> /dev/null; then
     rsync -avz --exclude 'node_modules' --exclude '.env' --exclude '.git' --exclude 'dist' ./backend $USER@$SERVER_IP:$DEST_DIR/
     rsync -avz --delete ./dist $USER@$SERVER_IP:$DEST_DIR/

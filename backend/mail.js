@@ -8,7 +8,14 @@
  */
 
 const express = require("express");
+const app = express();
+app.use(express.json({ limit: '200mb' }));
+const { scanEmail, processUserRules, saveScanResults } = require('./services/inboxScanService');
+const { performFullScan } = require('./services/fileScanService');
 const bcrypt = require("bcryptjs");
+console.log('--- MAIL.JS LOADED (v9-unified-scanning) ---');
+console.log('BCRYPT TYPE:', typeof bcrypt);
+if (typeof bcrypt.compare !== 'function') console.error('BCRYPT.COMPARE IS MISSING!');
 const nodemailer = require("nodemailer");
 const jwt = require("jsonwebtoken");
 
@@ -79,18 +86,64 @@ async function initTables() {
       CREATE TABLE IF NOT EXISTS activity_log (
         id INT AUTO_INCREMENT PRIMARY KEY,
         user_id INT NOT NULL,
-        access_type VARCHAR(100),
+        access_type TEXT,
         ip VARCHAR(45),
         location VARCHAR(100),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
 
+    // Migration for access_type length
+    await db.query(`ALTER TABLE activity_log MODIFY COLUMN access_type TEXT`).catch(() => { });
+
     // Add attachment_transfer_state to email_attachments if not exists
     await db.query(`
         ALTER TABLE email_attachments 
-        ADD COLUMN IF NOT EXISTS attachment_transfer_state VARCHAR(50) DEFAULT 'WAITING_FOR_PEER'
-     `).catch(e => console.log('Migration note (transfer_state): ' + e.message));
+        ADD COLUMN IF NOT EXISTS attachment_transfer_state VARCHAR(50) DEFAULT 'WAITING_FOR_PEER',
+        ADD COLUMN IF NOT EXISTS scan_status VARCHAR(20) DEFAULT 'pending',
+        ADD COLUMN IF NOT EXISTS scan_reason TEXT DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS scan_engine VARCHAR(20) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS scan_timestamp BIGINT DEFAULT NULL
+     `).catch(e => console.log('Migration note (email_attachments columns): ' + e.message));
+
+    // INBOX SCANNING: Create Rules Table
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS email_rules (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        condition_json JSON,
+        action_json JSON,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_user_rules (user_id)
+      )
+    `);
+
+    // INBOX SCANNING: Create Scan Index (v2) - No FK for stability, TEXT for compatibility
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS email_scan_results_v2 (
+        email_id INT PRIMARY KEY,
+        spam_score INT DEFAULT 0,
+        phishing BOOLEAN DEFAULT 0,
+        malware BOOLEAN DEFAULT 0,
+        priority BOOLEAN DEFAULT 0,
+        tags TEXT,
+        extracted_keywords TEXT,
+        warnings TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_scan_email (email_id)
+      )
+    `);
+
+    // INBOX SCANNING: Spam Learning Database (Feedback Loop)
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS spam_learning_db (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        type VARCHAR(20) DEFAULT 'keyword',
+        pattern VARCHAR(255) NOT NULL,
+        reported_count INT DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
   } catch (err) {
     console.error('⚠️ DB Initialization failed (Server will run in limited mode):', err.message);
@@ -568,6 +621,37 @@ router.post("/register", async (req, res) => {
   }
 });
 
+// ACTIVITY LOG
+router.get("/activity", async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+    const [rows] = await db.query(
+      `SELECT access_type, location, ip, created_at as date 
+       FROM activity_log 
+       WHERE user_id = ? 
+       ORDER BY created_at DESC 
+       LIMIT 20`,
+      [userId]
+    );
+
+    // Map to frontend interface
+    const activities = rows.map((row, index) => ({
+      access_type: row.access_type || 'Unknown',
+      location: row.location || 'Unknown',
+      ip: row.ip || 'Unknown',
+      date: row.date,
+      is_current: index === 0 // Assuming most recent is current for now
+    }));
+
+    res.json(activities);
+  } catch (err) {
+    console.error("ACTIVITY LOG ERROR:", err);
+    res.status(500).json({ error: "Failed to fetch activity log" });
+  }
+});
+
 // LOGIN
 router.post("/login", async (req, res) => {
   try {
@@ -982,13 +1066,31 @@ router.get("/folders/:userId", async (req, res) => {
   const userId = req.params.userId;
 
   const [rows] = await db.query(
-    `SELECT id, name, system_box 
-     FROM mailboxes 
-     WHERE user_id = ? ORDER BY id ASC`,
-    [userId]
+    `SELECT m.id, m.name, m.system_box,
+     (SELECT COUNT(*) 
+      FROM email_mailbox em 
+      WHERE em.mailbox_id = m.id 
+      AND em.user_id = ? 
+      AND (
+        CASE 
+            WHEN m.system_box IN ('drafts', 'trash', 'spam', 'starred') THEN 1
+            ELSE em.is_read = 0
+        END
+      )
+     ) as count
+     FROM mailboxes m 
+     WHERE m.user_id = ? 
+     ORDER BY m.id ASC`,
+    [userId, userId]
   );
 
-  res.json({ data: rows });
+  // Convert BigInt count to number if necessary (MySQL COUNT returns BigInt sometimes)
+  const results = rows.map(r => ({
+    ...r,
+    count: Number(r.count || 0)
+  }));
+
+  res.json({ data: results });
 });
 
 // -------------------- GET THREAD (Conversation View) --------------------
@@ -1003,9 +1105,11 @@ router.get("/email/thread/:threadId", async (req, res) => {
 
     const [emails] = await db.query(
       `
-      SELECT e.*, m.is_read, m.is_starred, m.mailbox_id
+      SELECT e.*, m.is_read, m.is_starred, m.mailbox_id,
+             s.spam_score, s.phishing, s.malware, s.tags as scan_tags, s.warnings as scan_warnings, s.priority as scan_priority
       FROM emails e
       JOIN email_mailbox m ON e.id = m.email_id
+      LEFT JOIN email_scan_results_v2 s ON e.id = s.email_id
       WHERE e.thread_id = ?
         AND m.user_id = ?
       ORDER BY e.created_at ASC
@@ -1027,7 +1131,8 @@ router.get("/email/thread/:threadId", async (req, res) => {
       // ✅ attachment metadata including P2P fields
       const [atts] = await db.query(
         `
-        SELECT id, filename, mime_type, size_bytes, delivery_mode, delivered, p2p_message_id, attachment_transfer_state
+        SELECT id, filename, mime_type, size_bytes, delivery_mode, delivered, p2p_message_id, 
+               attachment_transfer_state, scan_status, scan_reason, scan_engine, scan_timestamp
         FROM email_attachments
         WHERE email_id = ?
         `,
@@ -1043,12 +1148,19 @@ router.get("/email/thread/:threadId", async (req, res) => {
       email.attachment_count = atts.length;
 
       email.body = sanitizeBody(email.body);
+
+      // Fix for MariaDB TEXT columns not auto-parsing JSON
+      try {
+        if (typeof email.scan_tags === 'string') email.scan_tags = JSON.parse(email.scan_tags);
+        if (typeof email.scan_warnings === 'string') email.scan_warnings = JSON.parse(email.scan_warnings);
+        if (typeof email.extracted_keywords === 'string') email.extracted_keywords = JSON.parse(email.extracted_keywords);
+      } catch (e) { /* ignore parse errors */ }
     }
 
     return res.json({ data: emails });
   } catch (err) {
     console.error("THREAD FETCH ERROR:", err);
-    return res.status(500).json({ error: "Failed to fetch thread" });
+    return res.status(500).json({ error: "Failed to fetch thread", details: err.message });
   }
 });
 
@@ -1079,10 +1191,12 @@ router.get("/emails/:userId/:folder", async (req, res) => {
     if (!folderId) return res.status(400).json({ error: "Invalid folder" });
 
     const [emails] = await db.query(
-      `SELECT e.*, m.is_read, m.is_starred, m.mailbox_id
+      `SELECT e.*, m.is_read, m.is_starred, m.mailbox_id,
+              s.spam_score, s.phishing, s.malware, s.tags as scan_tags, s.warnings as scan_warnings, s.priority as scan_priority
        FROM emails e
        JOIN email_mailbox m 
        ON e.id = m.email_id
+       LEFT JOIN email_scan_results_v2 s ON e.id = s.email_id
        WHERE m.user_id = ? AND m.mailbox_id = ?
        ORDER BY e.created_at DESC`,
       [userId, folderId]
@@ -1101,12 +1215,23 @@ router.get("/emails/:userId/:folder", async (req, res) => {
     delivery_mode,
     delivered,
     p2p_message_id,
-    attachment_transfer_state
+    attachment_transfer_state,
+    scan_status,
+    scan_reason,
+    scan_engine,
+    scan_timestamp
   FROM email_attachments
   WHERE email_id = ?
   `,
         [email.id]
       );
+
+      // Fix for MariaDB TEXT columns not auto-parsing JSON
+      try {
+        if (typeof email.scan_tags === 'string') email.scan_tags = JSON.parse(email.scan_tags);
+        if (typeof email.scan_warnings === 'string') email.scan_warnings = JSON.parse(email.scan_warnings);
+        if (typeof email.extracted_keywords === 'string') email.extracted_keywords = JSON.parse(email.extracted_keywords);
+      } catch (e) { /* ignore parse errors */ }
 
       // Mark P2P attachments with is_p2p flag for frontend
       email.attachments = atts.map(att => ({
@@ -1135,8 +1260,8 @@ router.get("/emails/:userId/:folder", async (req, res) => {
 
     res.json({ data: emails });
   } catch (err) {
-    console.error("FETCH EMAILS ERROR:", err);
-    res.status(500).json({ error: "Failed to fetch emails" });
+    console.error("FETCH EMAILS ERROR (Full):", err);
+    res.status(500).json({ error: "Failed to fetch emails", details: err.message, sqlMessage: err.sqlMessage });
   }
 });
 
@@ -1341,13 +1466,18 @@ router.post("/email/create", async (req, res) => {
           a.p2p_message_id.length > 0;
 
 
+        // PERFORM SECURITY SCAN
+        const buffer = content_base64 ? Buffer.from(content_base64, 'base64') : Buffer.alloc(0);
+        const scanResult = await performFullScan(buffer, filename);
+
         // For P2P: store content_base64 as FALLBACK (like torrent seeder)
         // This allows download even if direct P2P transfer fails
         await conn.query(
           `INSERT INTO email_attachments
        (email_id, filename, mime_type, size_bytes,
-        content_base64, delivery_mode, delivered, p2p_message_id, attachment_transfer_state, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        content_base64, delivery_mode, delivered, p2p_message_id, attachment_transfer_state, 
+        scan_status, scan_reason, scan_engine, scan_timestamp, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
           [
             emailId,
             filename,
@@ -1357,7 +1487,11 @@ router.post("/email/create", async (req, res) => {
             isP2P ? 'P2P' : 'EMAIL',
             isP2P ? 0 : 1,
             a.p2p_message_id || null,
-            isP2P ? 'WAITING_FOR_PEER' : 'COMPLETED'
+            isP2P ? 'WAITING_FOR_PEER' : 'COMPLETED',
+            scanResult.scan_status,
+            scanResult.scan_reason,
+            scanResult.scan_engine,
+            scanResult.scan_timestamp
           ]
         );
       }
@@ -1385,6 +1519,28 @@ router.post("/email/create", async (req, res) => {
         emailId
       ]
     );
+
+    // ----------------------------------------------------
+    // 🛡️ INBOX SCANNING (GLOBAL)
+    // ----------------------------------------------------
+    // Scan only once per email (content is same for all)
+    let scanResults = null;
+    try {
+      const emailDataForScan = {
+        from_email: sender.email,
+        from_name: sender.name,
+        subject: subject || '',
+        body: cleanBody || '',
+      };
+
+      console.log(`[InboxScan] Scanning email ${emailId}...`);
+      scanResults = await scanEmail(emailDataForScan, attachmentsList);
+      await saveScanResults(emailId, scanResults);
+      console.log(`[InboxScan] Results for ${emailId}:`, JSON.stringify(scanResults.tags));
+    } catch (scanErr) {
+      console.error('[InboxScan] Error:', scanErr);
+    }
+
 
     // send SMTP if not draft and not P2P delivered
     if (!is_draft && !p2p_enabled) {
@@ -1444,11 +1600,33 @@ router.post("/email/create", async (req, res) => {
           );
           if (!inbox) continue;
 
+
+          // 🛡️ RULE ENGINE & AUTOMATION
+          let targetMailboxId = inbox.id;
+          let markRead = 0;
+          let markStarred = 0; // Priority
+
+          if (scanResults) {
+            const rules = await processUserRules(rcp.id, {
+              from_email: sender.email,
+              subject: subject || '',
+              body: cleanBody || '',
+              attachments: attachmentsList
+            }, scanResults);
+
+            if (rules.moveToFolderId) targetMailboxId = rules.moveToFolderId;
+            if (rules.markRead) markRead = 1;
+            if (rules.markImportant) markStarred = 1;
+
+            // Auto-flag based on scan
+            if (scanResults.priority) markStarred = 1;
+          }
+
           // Use INSERT IGNORE to prevent duplicate entries
           await conn.query(
-            `INSERT IGNORE INTO email_mailbox (user_id, email_id, mailbox_id, is_read)
-             VALUES (?, ?, ?, 0)`,
-            [rcp.id, emailId, inbox.id]
+            `INSERT IGNORE INTO email_mailbox (user_id, email_id, mailbox_id, is_read, is_starred)
+             VALUES (?, ?, ?, ?, ?)`,
+            [rcp.id, emailId, targetMailboxId, markRead, markStarred]
           );
         }
       }
@@ -2213,6 +2391,52 @@ router.post("/email/attachment/update", async (req, res) => {
   } catch (err) {
     console.error("[Fallback Error]", err);
     res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// -------------------- INBOX RULES MANAGEMENT --------------------
+
+router.get("/rules/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const [rules] = await db.query("SELECT * FROM email_rules WHERE user_id = ? ORDER BY id DESC", [userId]);
+    res.json({ data: rules });
+  } catch (err) {
+    console.error("GET RULES ERROR:", err);
+    res.status(500).json({ error: "Failed to fetch rules" });
+  }
+});
+
+router.post("/rules", async (req, res) => {
+  try {
+    const { user_id, condition, action } = req.body;
+    if (!user_id || !condition || !action) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const conditionJson = JSON.stringify(condition);
+    const actionJson = JSON.stringify(action);
+
+    const [result] = await db.query(
+      "INSERT INTO email_rules (user_id, condition_json, action_json) VALUES (?, ?, ?)",
+      [user_id, conditionJson, actionJson]
+    );
+
+    res.json({ success: true, id: result.insertId });
+  } catch (err) {
+    console.error("CREATE RULE ERROR:", err);
+    res.status(500).json({ error: "Failed to create rule" });
+  }
+});
+
+router.delete("/rules/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.query("DELETE FROM email_rules WHERE id = ?", [id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("DELETE RULE ERROR:", err);
+    res.status(500).json({ error: "Failed to delete rule" });
   }
 });
 

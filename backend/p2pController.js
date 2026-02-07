@@ -198,6 +198,10 @@ function setupP2PWebSocket(server) {
             await handleTransferComplete(msg);
             break;
 
+          case 'file-scan-update':
+            await handleFileScanUpdate(msg);
+            break;
+
           case 'CALL_EVENT':
             // NEW: Handle call signaling
             await handleCallSignaling(ws, msg, peerConnections);
@@ -467,38 +471,34 @@ async function handleEmailInitiate(ws, msg) {
 
 
 async function handleFileChunk(ws, msg) {
-  const { to, from, payload, messageId, chunkIndex } = msg;
+  const { to, from, data, payload, messageId, chunkIndex } = msg;
 
   if (!messageId || !payload || !to) {
     console.error('[P2P] Invalid file-chunk message', msg);
     return;
   }
 
-  // 1. SAVE TO SERVER DISK (Optimized for resumption)
-  try {
-    const chunkFile = path.join(P2P_CHUNKS_DIR, `${messageId}_${chunkIndex || 0}.chunk`);
-    // 🚀 ASYNC WRITE (Non-blocking)
-    await fsPromises.writeFile(chunkFile, chunkData);
-
-    // Also track in DB (optional but good for cleanup)
-    await db.query(`
-      INSERT INTO p2p_server_chunks (message_id, chunk_index, sender_email, recipient_email, data_path)
-      VALUES (?, ?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE data_path = VALUES(data_path), expires_at = (CURRENT_TIMESTAMP + INTERVAL 24 HOUR)
-    `, [messageId, chunkIndex || 0, from, to, chunkFile]).catch(e => { });
-
-  } catch (err) {
-    console.error('[P2P] Failed to cache chunk on server:', err.message);
-  }
-
-  // 2. FORWARD IF RECIPIENT ONLINE
+  // 1. FORWARD IMMEDIATELY (Turbo Relay)
   const peer = findPeerByEmail(to);
   if (peer && peer.ws.readyState === WebSocket.OPEN) {
     peer.ws.send(JSON.stringify(msg));
   }
 
-  // 3. ACK SENDER
+  // 2. ACK SENDER IMMEDIATELY
   ws.send(JSON.stringify({ type: 'chunk-ack', messageId, chunkIndex }));
+
+  // 3. SAVE TO SERVER DISK (Background)
+  const chunkFile = path.join(P2P_CHUNKS_DIR, `${messageId}_${chunkIndex || 0}.chunk`);
+  const buffer = Buffer.from(data, 'base64');
+  fsPromises.writeFile(chunkFile, buffer).then(() => {
+    return db.query(`
+      INSERT INTO p2p_server_chunks (message_id, chunk_index, sender_email, recipient_email, data_path)
+      VALUES (?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE data_path = VALUES(data_path), expires_at = (CURRENT_TIMESTAMP + INTERVAL 24 HOUR)
+    `, [messageId, chunkIndex || 0, from, to, chunkFile]);
+  }).catch(err => {
+    // Silent fail for background tasks
+  });
 }
 
 async function handleChunkRequest(ws, msg) {
@@ -630,6 +630,47 @@ async function handleTransferComplete(msg) {
     }
   } catch (e) {
     console.error('[P2P] Quota update failed:', e);
+  }
+}
+
+async function handleFileScanUpdate(msg) {
+  const { messageId, scan_status, scan_reason, scan_engine, scan_timestamp, from, to } = msg;
+
+  console.log(`[P2P] Scan update for ${messageId}: ${scan_status}`);
+
+  try {
+    // 1. Update DB
+    await db.query(
+      `UPDATE email_attachments 
+       SET scan_status = ?, scan_reason = ?, scan_engine = ?, scan_timestamp = ?
+       WHERE p2p_message_id = ?`,
+      [scan_status, scan_reason, scan_engine, scan_timestamp, messageId]
+    );
+
+    // 2. Broadcast to involved parties (all their sessions)
+    const updateMsg = {
+      type: 'file-scan-update',
+      fileId: messageId,
+      scan_status,
+      scan_reason,
+      scan_engine,
+      scan_timestamp
+    };
+
+    if (from) broadcastToUser(from, updateMsg);
+    if (to) broadcastToUser(to, updateMsg);
+
+  } catch (err) {
+    console.error('[P2P] Failed to update scan status:', err);
+  }
+}
+
+function broadcastToUser(email, msg) {
+  const emailLower = email.toLowerCase();
+  for (const peer of peerConnections.values()) {
+    if (peer.email === emailLower && peer.ws.readyState === WebSocket.OPEN) {
+      peer.ws.send(JSON.stringify(msg));
+    }
   }
 }
 

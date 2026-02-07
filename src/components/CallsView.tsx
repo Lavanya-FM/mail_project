@@ -79,15 +79,36 @@ export default function CallsView() {
     const user = authService.getCurrentUser();
     const chatEndRef = useRef<HTMLDivElement>(null);
 
-    // Initial Path check hook
+    // Unified Path Handling
     useEffect(() => {
-        const path = window.location.pathname;
-        if (path.startsWith('/meet/') && path.length > 6) {
-            const mid = path.split('/meet/')[1];
-            if (mid) setActiveMeetingId(mid);
-        }
+        const handlePathChange = () => {
+            const path = window.location.pathname;
+            if (path.startsWith('/meet')) {
+                if (path.includes('/history')) setActiveTab('history');
+                else if (path.includes('/contacts')) setActiveTab('contacts');
+                else if (path.includes('/settings')) setActiveTab('settings');
+                else if (path.includes('/notifications')) setActiveTab('notifications');
+                else if (path.length > 6 && !path.includes('/')) {
+                    // Check if it looks like a meeting ID (simple check)
+                    const parts = path.split('/meet/');
+                    if (parts[1] && parts[1].length > 2) {
+                        setActiveMeetingId(parts[1]);
+                    } else {
+                        setActiveMeetingId(null);
+                        setActiveTab('meetings');
+                    }
+                } else {
+                    setActiveMeetingId(null);
+                    setActiveTab('meetings');
+                }
+            }
+        };
 
-        // Load data from localStorage
+        handlePathChange(); // Initial
+        window.addEventListener('popstate', handlePathChange);
+        window.addEventListener('app-navigate', handlePathChange as EventListener);
+
+        // Load local storage data
         const storedHistory = localStorage.getItem('meeting_history');
         if (storedHistory) {
             try { setHistory(JSON.parse(storedHistory)); } catch (e) { }
@@ -96,9 +117,18 @@ export default function CallsView() {
         if (storedNotifs) {
             try { setNotifications(JSON.parse(storedNotifs)); } catch (e) { }
         }
-
         if (user) setLocalName(user.full_name || user.name || '');
+
+        return () => {
+            window.removeEventListener('popstate', handlePathChange);
+            window.removeEventListener('app-navigate', handlePathChange as EventListener);
+        };
     }, [user]);
+
+    const handleNavigation = (path: string) => {
+        window.history.pushState({}, '', path);
+        window.dispatchEvent(new CustomEvent('app-navigate', { detail: { path } }));
+    };
 
     // Save Notifications Effect
     useEffect(() => {
@@ -338,7 +368,7 @@ export default function CallsView() {
 
     const handleLeaveMeeting = () => {
         setActiveMeetingId(null);
-        window.history.pushState({}, '', '/meet');
+        handleNavigation('/meet');
     };
 
     const sendDirectMessage = (content: string) => {
@@ -714,10 +744,10 @@ export default function CallsView() {
 
                         <div className="px-2 pb-2 text-[10px] font-bold text-gray-500 uppercase tracking-widest bg-white dark:bg-slate-900 z-10">Direct Navigation</div>
                         <nav className="space-y-1">
-                            <NavItem icon={Users} label="Contacts & Direct Call" active={activeTab === 'contacts'} onClick={() => setActiveTab('contacts')} />
-                            <NavItem icon={Clock} label="Call History" active={activeTab === 'history'} onClick={() => setActiveTab('history')} />
-                            <NavItem icon={Bell} label="Notifications" active={activeTab === 'notifications'} badge={(Array.isArray(notifications) ? notifications : Object.values(notifications || {}) as Notification[]).filter((n) => !n.read).length} onClick={() => setActiveTab('notifications')} />
-                            <NavItem icon={Settings} label="Settings" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
+                            <NavItem icon={Users} label="Contacts & Direct Call" active={activeTab === 'contacts'} onClick={() => handleNavigation('/meet/contacts')} />
+                            <NavItem icon={Clock} label="Call History" active={activeTab === 'history'} onClick={() => handleNavigation('/meet/history')} />
+                            <NavItem icon={Bell} label="Notifications" active={activeTab === 'notifications'} badge={(Array.isArray(notifications) ? notifications : Object.values(notifications || {}) as Notification[]).filter((n) => !n.read).length} onClick={() => handleNavigation('/meet/notifications')} />
+                            <NavItem icon={Settings} label="Settings" active={activeTab === 'settings'} onClick={() => handleNavigation('/meet/settings')} />
                         </nav>
                         <div className="mt-auto p-4 bg-blue-50 dark:bg-blue-900/10 rounded-2xl border border-blue-100 dark:border-blue-900/30">
                             <div className="flex items-center gap-2 mb-3"><div className="w-2 h-2 rounded-full bg-green-500"></div><span className="text-xs font-bold text-blue-800 dark:text-blue-300 uppercase tracking-tighter">Fast Quick Call</span></div>

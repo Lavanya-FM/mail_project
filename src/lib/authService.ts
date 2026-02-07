@@ -178,19 +178,22 @@ export interface ActivityLog {
 }
 
 export async function getRecentActivity(): Promise<ActivityLog[]> {
-  // In a real app, this would fetch from API
-  // return fetch(`${API}/activity`).then(res => res.json());
-
-  // Return current session for now
-  return [
-    {
-      access_type: 'Browser (Chrome)',
-      location: 'India (TN)', // Placeholder
-      ip: '127.0.0.1',
-      date: new Date().toISOString(),
-      is_current: true
+  try {
+    const res = await fetchWithAuth(`${API}/activity`);
+    if (res.ok) {
+      const data = await res.json();
+      return Array.isArray(data) ? data.map((d: any) => ({
+        access_type: d.access_type,
+        location: d.location,
+        ip: d.ip,
+        date: d.date,
+        is_current: d.is_current
+      })) : [];
     }
-  ];
+  } catch (e) {
+    console.warn("Failed to fetch activity log", e);
+  }
+  return [];
 }
 
 // convenience object used elsewhere in the app
@@ -202,7 +205,31 @@ export const authService = {
   logout,
   isAuthenticated,
   getRecentActivity,
-  fetchWithAuth
+  fetchWithAuth,
+  switchUser
 };
+
+export function switchUser(account: any) {
+  if (!account) return;
+
+  // ensure we save in the format the app expects
+  const userToSave = {
+    id: account.id,
+    full_name: account.name || account.full_name,
+    email: account.email,
+    storage_used: account.storage_used || 0,
+    storage_limit: account.storage_limit || 1073741824
+  };
+
+  localStorage.setItem("user", JSON.stringify(userToSave));
+
+  if (account.token) {
+    localStorage.setItem("user_token", account.token);
+  } else {
+    localStorage.removeItem("user_token");
+  }
+
+  window.location.assign("/"); // Redirect to home/refresh
+}
 
 export default authService;

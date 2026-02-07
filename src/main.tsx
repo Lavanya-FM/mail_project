@@ -5,7 +5,7 @@ import './index.css';
 import { initP2PDownloadListener } from "./lib/p2pDownloadListener";
 
 initP2PDownloadListener();
-console.log('Build Version: 2026-02-04.v116-STRICT-COMPLETION');
+console.log('Build Version: 2026-02-05.v118-NETWORK-RESILIENCE');
 
 // TEMPORARILY DISABLED: Unregister ALL service workers to force fresh load
 if ('serviceWorker' in navigator) {

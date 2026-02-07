@@ -1,44 +1,33 @@
 import { useState, useEffect } from 'react';
-import { X } from 'lucide-react';
+import { X, Minus, Square } from 'lucide-react';
+import { authService } from '../lib/authService';
 
 interface ActivityModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-interface Session {
-  id: string;
-  accessType: string;
-  deviceType: string;
-  location: string;
-  ip: string;
-  timestamp: Date;
-  isCurrent: boolean;
-  userAgent: string;
-  browser: string;
-  browserVersion?: string;
-  os: string;
-}
-
-interface ActivityLog {
+interface ActivityItem {
   id: number;
-  type: string;
-  action: string;
-  details: string;
+  accessType: string;
   location: string;
   ip: string;
-  timestamp: Date;
-  device: string;
-  status: string;
+  date: Date;
+  isCurrent: boolean;
+  details?: string;
+  browser?: string;
 }
 
 export default function ActivityModal({ isOpen, onClose }: ActivityModalProps) {
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
-  const [expandedSessions, setExpandedSessions] = useState(new Set<string>());
+  const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [currentIP, setCurrentIP] = useState('');
+  const [currentLocation, setCurrentLocation] = useState('');
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'sessions' | 'logs'>('sessions');
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+
+  // Window states
+  const [isMaximized, setIsMaximized] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -49,533 +38,261 @@ export default function ActivityModal({ isOpen, onClose }: ActivityModalProps) {
   const fetchActivityData = async () => {
     setLoading(true);
     try {
-      const ipResponse = await fetch('https://api.ipify.org?format=json');
-      const ipData = await ipResponse.json();
+      // 1. Get Current Session Info (Client-side)
+      let ipData = { ip: 'Unknown' };
+      let geoData: any = {};
+
+      try {
+        const ipResponse = await fetch('https://api.ipify.org?format=json');
+        ipData = await ipResponse.json();
+
+        if (ipData.ip && ipData.ip !== 'Unknown') {
+          const geoResponse = await fetch(`https://ipapi.co/${ipData.ip}/json/`);
+          geoData = await geoResponse.json();
+        }
+      } catch (e) {
+        console.warn("Failed to fetch IP/Geo data", e);
+      }
+
       setCurrentIP(ipData.ip);
+      const locString = geoData.city ? `${geoData.city}, ${geoData.region}` : (geoData.country_name || 'India (TN)');
+      setCurrentLocation(`${locString}`);
 
-      const geoResponse = await fetch(`https://ipapi.co/${ipData.ip}/json/`);
-      const geoData = await geoResponse.json();
+      // 2. Fetch Backend Activity Logs
+      const backendLogs = await authService.getRecentActivity();
 
-      const browserInfo = getBrowserInfo();
-      const deviceType = getDeviceType();
+      const mappedLogs: ActivityItem[] = backendLogs.map((log, index) => {
+        const isCurrent = log.ip === ipData.ip; // Simple check for now
 
-      const currentSession: Session = {
-        id: 'current',
-        accessType: browserInfo.name,
-        deviceType: deviceType,
-        location: `${geoData.city || geoData.region || 'Unknown'}, ${geoData.country_name || geoData.country_code || 'Unknown'}`,
-        ip: ipData.ip,
-        timestamp: new Date(),
-        isCurrent: true,
-        userAgent: navigator.userAgent,
-        browser: browserInfo.name,
-        browserVersion: browserInfo.version,
-        os: getOS(),
-      };
+        // Parse access type for better display if needed, or just use what we have
+        let displayAccessType = "Browser (Chrome)"; // Defaulting for now as backend sends generic "Login" usually
+        if (log.access_type && log.access_type !== 'Unknown') {
+          displayAccessType = log.access_type;
+        }
 
-      const storedSessions = getStoredSessions();
-      
-      setSessions([currentSession, ...storedSessions]);
-      storeSession(currentSession);
-      
-      generateActivityLogs(currentSession);
+        return {
+          id: index,
+          accessType: displayAccessType,
+          location: log.location && log.location !== 'Unknown' ? log.location : `${geoData.country_name || 'India (TN)'} (${log.ip})`,
+          ip: log.ip || 'Unknown',
+          date: new Date(log.date),
+          isCurrent: index === 0 && isCurrent, // Assuming most recent and IP match
+          details: log.details || `User Agent: ${navigator.userAgent}`, // Fallback details
+          browser: "Chrome" // Simplified
+        };
+      });
+
+      // Ensure we have at least one entry if empty
+      if (mappedLogs.length === 0) {
+        mappedLogs.push({
+          id: 0,
+          accessType: "Browser (Chrome)",
+          location: `${locString} (${ipData.ip})`,
+          ip: ipData.ip,
+          date: new Date(),
+          isCurrent: true,
+          details: `User Agent: ${navigator.userAgent}`,
+          browser: "Chrome"
+        });
+      }
+
+      setActivities(mappedLogs);
+
     } catch (error) {
       console.error('Error fetching activity data:', error);
-      const basicSession: Session = {
-        id: 'current',
-        accessType: 'Browser',
-        deviceType: 'Desktop',
-        location: 'Unknown Location',
-        ip: 'Unavailable',
-        timestamp: new Date(),
-        isCurrent: true,
-        userAgent: navigator.userAgent,
-        browser: getBrowserInfo().name,
-        os: getOS(),
-      };
-      setSessions([basicSession]);
-      generateActivityLogs(basicSession);
     } finally {
       setLoading(false);
     }
   };
 
-  const getBrowserInfo = () => {
-    const ua = navigator.userAgent;
-    let name = 'Browser';
-    let version = '';
-
-    if (ua.includes('Chrome') && !ua.includes('Edg')) {
-      name = 'Chrome';
-      version = ua.match(/Chrome\/(\d+)/)?.[1] || '';
-    } else if (ua.includes('Firefox')) {
-      name = 'Firefox';
-      version = ua.match(/Firefox\/(\d+)/)?.[1] || '';
-    } else if (ua.includes('Safari') && !ua.includes('Chrome')) {
-      name = 'Safari';
-      version = ua.match(/Version\/(\d+)/)?.[1] || '';
-    } else if (ua.includes('Edg')) {
-      name = 'Edge';
-      version = ua.match(/Edg\/(\d+)/)?.[1] || '';
-    }
-
-    return { name, version };
-  };
-
-  const getOS = () => {
-    const ua = navigator.userAgent;
-    if (ua.includes('Win')) return 'Windows';
-    if (ua.includes('Mac')) return 'macOS';
-    if (ua.includes('Linux')) return 'Linux';
-    if (ua.includes('Android')) return 'Android';
-    if (ua.includes('iOS')) return 'iOS';
-    return 'Unknown';
-  };
-
-  const getDeviceType = () => {
-    const ua = navigator.userAgent;
-    if (/(tablet|ipad|playbook|silk)|(android(?!.*mobi))/i.test(ua)) {
-      return 'Tablet';
-    }
-    if (/Mobile|Android|iP(hone|od)|IEMobile|BlackBerry|Kindle|Silk-Accelerated|(hpw|web)OS|Opera M(obi|ini)/.test(ua)) {
-      return 'Mobile';
-    }
-    return 'Desktop';
-  };
-
-  const getStoredSessions = (): Session[] => {
-    return [];
-  };
-
-  const storeSession = (session: Session) => {
-    // Memory-only storage
-  };
-
-  const generateActivityLogs = (currentSession: Session) => {
-    const now = new Date();
-    const logs: ActivityLog[] = [
-      {
-        id: 1,
-        type: 'sign_in',
-        action: 'Account sign-in',
-        details: `Signed in via ${currentSession.browser} on ${currentSession.deviceType}`,
-        location: currentSession.location,
-        ip: currentSession.ip,
-        timestamp: now,
-        device: `${currentSession.browser} • ${currentSession.os}`,
-        status: 'success'
-      },
-      {
-        id: 2,
-        type: 'password_check',
-        action: 'Password checked',
-        details: 'Your password was checked as part of sign-in',
-        location: currentSession.location,
-        ip: currentSession.ip,
-        timestamp: new Date(now.getTime() - 1000 * 60 * 2),
-        device: `${currentSession.browser} • ${currentSession.os}`,
-        status: 'success'
-      },
-      {
-        id: 3,
-        type: 'security',
-        action: 'Security activity',
-        details: 'Account access from new device detected',
-        location: currentSession.location,
-        ip: currentSession.ip,
-        timestamp: new Date(now.getTime() - 1000 * 60 * 60 * 3),
-        device: `${currentSession.browser} • ${currentSession.os}`,
-        status: 'info'
-      },
-      {
-        id: 4,
-        type: 'mail_access',
-        action: 'Mail accessed',
-        details: 'Inbox opened',
-        location: currentSession.location,
-        ip: currentSession.ip,
-        timestamp: new Date(now.getTime() - 1000 * 60 * 60 * 5),
-        device: `${currentSession.browser} • ${currentSession.os}`,
-        status: 'success'
-      },
-      {
-        id: 5,
-        type: 'sign_in',
-        action: 'Account sign-in',
-        details: `Signed in via ${currentSession.browser}`,
-        location: currentSession.location,
-        ip: currentSession.ip,
-        timestamp: new Date(now.getTime() - 1000 * 60 * 60 * 24),
-        device: `${currentSession.browser} • ${currentSession.os}`,
-        status: 'success'
-      },
-      {
-        id: 6,
-        type: 'app_access',
-        action: 'App-specific password used',
-        details: 'Third-party app accessed your account',
-        location: currentSession.location,
-        ip: currentSession.ip,
-        timestamp: new Date(now.getTime() - 1000 * 60 * 60 * 24 * 2),
-        device: 'Mail App • iOS',
-        status: 'info'
-      },
-      {
-        id: 7,
-        type: 'settings',
-        action: 'Account settings changed',
-        details: 'Recovery email updated',
-        location: currentSession.location,
-        ip: currentSession.ip,
-        timestamp: new Date(now.getTime() - 1000 * 60 * 60 * 24 * 3),
-        device: `${currentSession.browser} • ${currentSession.os}`,
-        status: 'success'
-      },
-      {
-        id: 8,
-        type: 'failed_attempt',
-        action: 'Failed sign-in attempt',
-        details: 'Incorrect password entered',
-        location: 'Unknown Location',
-        ip: '192.168.1.1',
-        timestamp: new Date(now.getTime() - 1000 * 60 * 60 * 24 * 5),
-        device: 'Chrome • Windows',
-        status: 'warning'
-      },
-      {
-        id: 9,
-        type: 'sign_in',
-        action: 'Account sign-in',
-        details: 'Successful authentication',
-        location: currentSession.location,
-        ip: currentSession.ip,
-        timestamp: new Date(now.getTime() - 1000 * 60 * 60 * 24 * 7),
-        device: `${currentSession.browser} • ${currentSession.os}`,
-        status: 'success'
-      },
-      {
-        id: 10,
-        type: 'security',
-        action: 'Two-factor authentication verified',
-        details: 'Authentication code verified successfully',
-        location: currentSession.location,
-        ip: currentSession.ip,
-        timestamp: new Date(now.getTime() - 1000 * 60 * 60 * 24 * 10),
-        device: `${currentSession.browser} • ${currentSession.os}`,
-        status: 'success'
-      }
-    ];
-    
-    setActivityLogs(logs);
-  };
-
-  const getActivityIcon = (type: string, status: string) => {
-    const baseClasses = "w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold";
-    
-    switch (type) {
-      case 'sign_in':
-        return <div className={`${baseClasses} bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400`}>✓</div>;
-      case 'password_check':
-        return <div className={`${baseClasses} bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400`}>🔑</div>;
-      case 'security':
-        return <div className={`${baseClasses} bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400`}>🛡️</div>;
-      case 'mail_access':
-        return <div className={`${baseClasses} bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400`}>📧</div>;
-      case 'app_access':
-        return <div className={`${baseClasses} bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400`}>📱</div>;
-      case 'settings':
-        return <div className={`${baseClasses} bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-400`}>⚙️</div>;
-      case 'failed_attempt':
-        return <div className={`${baseClasses} bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400`}>⚠️</div>;
-      default:
-        return <div className={`${baseClasses} bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-400`}>•</div>;
-    }
-  };
-
-  const toggleSession = (id: string) => {
-    setExpandedSessions(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(id)) {
-        newSet.delete(id);
+  const toggleDetails = (id: number) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
       } else {
-        newSet.add(id);
+        next.add(id);
       }
-      return newSet;
+      return next;
     });
   };
 
-  const formatTimestamp = (date: Date) => {
+  const formatTimeAgo = (date: Date) => {
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
     const diffMins = Math.floor(diffMs / 60000);
     const diffHours = Math.floor(diffMs / 3600000);
     const diffDays = Math.floor(diffMs / 86400000);
 
-    if (diffMins < 1) return '0 minutes ago';
-    if (diffMins < 60) return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
-    if (diffHours < 24) {
-      const time = date.toLocaleTimeString('en-US', { 
-        hour: 'numeric', 
-        minute: '2-digit',
-        hour12: true 
-      });
-      return `${time} (${diffHours} hour${diffHours > 1 ? 's' : ''} ago)`;
+    const timeString = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+    const dateString = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+    if (diffDays > 0) {
+      return `${dateString} (${diffDays} day${diffDays > 1 ? 's' : ''} ago)`;
     }
-    if (diffDays < 7) {
-      const monthDay = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      return `${monthDay} (${diffDays} day${diffDays > 1 ? 's' : ''} ago)`;
+    if (diffHours > 0) {
+      return `${timeString} (${diffHours} hour${diffHours > 1 ? 's' : ''} ago)`; // e.g. 10:41 am (1.5 hours ago) - keeping simple for now
     }
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    return `${timeString} (${diffMins} minutes ago)`;
   };
 
   if (!isOpen) return null;
 
+  // Dynamic classes for window state
+  const containerClasses = isMaximized
+    ? "bg-white shadow-2xl border border-gray-400 flex flex-col font-sans text-[13px] rounded-none w-full h-full fixed inset-0 m-0"
+    : `bg-white shadow-2xl border border-gray-400 flex flex-col font-sans text-[13px] rounded-none ${isMinimized ? 'w-[300px] h-auto fixed bottom-0 left-10 rounded-t-lg' : 'w-[800px] h-[600px] relative'}`;
+
+  // If minimized, we assume it's like a taskbar item or minimized window at bottom
+  // Backdrop: if minimized, we remove backdrop pointer events so user can interact with app? 
+  // But usually modals block interaction. Let's keep it blocking but minimal visual footprint.
+
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-gray-900 shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col rounded-lg">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900">
-          <h2 className="text-base font-normal text-gray-900 dark:text-white">
-            Activity on this account
-          </h2>
-          <button
-            onClick={onClose}
-            className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
-          >
-            <X className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-          </button>
+    <div className={`fixed inset-0 bg-transparent flex ${isMinimized ? 'items-end justify-start pointer-events-none' : (isMaximized ? 'items-start justify-start' : 'items-center justify-center')} z-50 animate-in fade-in duration-200`}>
+      <div className={`${containerClasses} pointer-events-auto transition-all duration-200`}>
+
+        {/* Header - Classic Style with Controls */}
+        <div
+          className="bg-[#e8f0fe] px-4 py-3 flex items-center justify-between border-b border-gray-300 select-none"
+          onDoubleClick={() => !isMinimized && setIsMaximized(!isMaximized)}
+        >
+          <div className="flex-1 overflow-hidden whitespace-nowrap overflow-ellipsis">
+            {!isMinimized && (
+              <>
+                <h1 className="text-lg font-normal text-black">
+                  Activity on this account
+                </h1>
+                <div className="text-black mt-1 text-xs">
+                  This feature provides information about the last activity on this mail account and any concurrent activity.
+                  <br />
+                  <a href="#" className="text-blue-700 hover:underline">Learn more</a>
+                </div>
+              </>
+            )}
+            {isMinimized && (
+              <span className="font-bold text-black px-2">Activity on this account</span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1 self-start ml-4">
+            <button
+              onClick={() => setIsMinimized(!isMinimized)}
+              className="w-6 h-6 flex items-center justify-center hover:bg-gray-300 rounded text-gray-600"
+              title="Minimize"
+            >
+              <Minus size={14} />
+            </button>
+            <button
+              onClick={() => {
+                setIsMinimized(false);
+                setIsMaximized(!isMaximized);
+              }}
+              className="w-6 h-6 flex items-center justify-center hover:bg-gray-300 rounded text-gray-600"
+              title={isMaximized ? "Restore" : "Maximize"}
+            >
+              <Square size={12} fill={isMaximized ? "currentColor" : "none"} className={isMaximized ? "text-gray-600 opacity-50" : ""} />
+            </button>
+            <button
+              onClick={onClose}
+              className="w-6 h-6 flex items-center justify-center hover:bg-red-500 hover:text-white rounded text-gray-600 ml-1"
+              title="Close"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
-          {loading ? (
-            <div className="flex items-center justify-center py-20">
-              <div className="text-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-200 border-t-blue-600 dark:border-gray-700 dark:border-t-blue-500 mx-auto mb-4"></div>
-                <p className="text-sm text-gray-600 dark:text-gray-400">Loading activity data...</p>
+        {/* Content - Hidden if Minimized */}
+        {!isMinimized && (
+          <>
+            <div className="flex-1 overflow-y-auto p-4 bg-white">
+
+              <p className="mb-4 text-black">
+                This account does not seem to be open in any other location. However, there may be sessions that have not been signed out.
+              </p>
+
+              <div className="mb-4">
+                <span className="text-black">Visit </span>
+                <a href="#" className="text-blue-700 hover:underline">Security Checkup</a>
+                <span className="text-black"> for more details</span>
+              </div>
+
+              <h2 className="font-bold text-black mb-2">Recent activity:</h2>
+
+              <div className="border border-black overflow-x-auto">
+                <table className="w-full text-left border-collapse min-w-[600px]">
+                  <thead>
+                    <tr className="bg-[#e8f0fe] border-b border-black">
+                      <th className="p-1 border-r border-black font-semibold text-black align-top w-1/3">
+                        Access Type [ <span className="text-blue-700 cursor-pointer">?</span> ]<br />
+                        <span className="font-normal">(Browser, mobile, POP3, etc.)</span>
+                      </th>
+                      <th className="p-1 border-r border-black font-semibold text-black align-top w-1/3">
+                        Location (IP address) [ <span className="text-blue-700 cursor-pointer">?</span> ]
+                      </th>
+                      <th className="p-1 font-semibold text-black align-top w-1/3">
+                        Date/Time<br />
+                        <span className="font-normal">(Displayed in your time zone)</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activities.map((activity) => (
+                      <tr key={activity.id} className="border-b border-black last:border-b-0">
+                        <td className="p-1 border-r border-black align-top">
+                          <div className="text-black">
+                            {activity.accessType}
+                            <button
+                              onClick={() => toggleDetails(activity.id)}
+                              className="ml-2 text-blue-700 hover:underline cursor-pointer bg-transparent border-none p-0 inline"
+                            >
+                              Show details
+                            </button>
+                            {expandedIds.has(activity.id) && (
+                              <div className="mt-2 p-2 bg-gray-100 border border-gray-300 text-xs shadow-sm">
+                                {activity.details}
+                                <br />
+                                <button
+                                  onClick={() => toggleDetails(activity.id)}
+                                  className="text-blue-700 hover:underline mt-1"
+                                >
+                                  Hide details
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="p-1 border-r border-black align-top">
+                          <div className="text-black">
+                            {activity.isCurrent && <span className="font-bold">* </span>}
+                            {activity.location}
+                          </div>
+                        </td>
+                        <td className="p-1 align-top">
+                          <div className="text-black">
+                            {formatTimeAgo(activity.date)}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mt-4 text-gray-600 text-[12px]">
+                <p>* indicates activity from the current session.</p>
+                <p className="mt-2">This computer is using IP address {currentIP}. ({currentLocation})</p>
               </div>
             </div>
-          ) : (
-            <>
-              {/* Tabs */}
-              <div className="flex gap-1 border-b border-gray-300 dark:border-gray-600 mb-6">
-                <button
-                  onClick={() => setActiveTab('sessions')}
-                  className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${
-                    activeTab === 'sessions'
-                      ? 'border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400'
-                      : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                  }`}
-                >
-                  Active Sessions
-                </button>
-                <button
-                  onClick={() => setActiveTab('logs')}
-                  className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${
-                    activeTab === 'logs'
-                      ? 'border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400'
-                      : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                  }`}
-                >
-                  Activity Log
-                </button>
-              </div>
 
-              {activeTab === 'sessions' ? (
-                <>
-                  {/* Info Alert */}
-                  <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-3 mb-4 rounded">
-                    <div className="text-sm text-gray-700 dark:text-gray-300">
-                      <p className="mb-2">
-                        This feature provides information about the last activity on this mail account and any concurrent activity.
-                      </p>
-                      <p>
-                        Visit <a href="#" className="text-blue-600 dark:text-blue-400 hover:underline">Security Checkup</a> for more details
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Status Message */}
-                  <p className="text-sm text-gray-700 dark:text-gray-300 mb-4">
-                    This account does not seem to be open in any other location. However, there may be sessions that have not been signed out.
-                  </p>
-
-                  {/* Activity Table */}
-                  <div className="mb-6">
-                    <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
-                      Recent activity:
-                    </h3>
-
-                    <div className="border border-gray-300 dark:border-gray-600 overflow-hidden rounded">
-                      {/* Table Header */}
-                      <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 border-b border-gray-300 dark:border-gray-600">
-                        <div className="grid grid-cols-12 gap-3 text-xs font-semibold text-gray-700 dark:text-gray-300">
-                          <div className="col-span-3">Access Type [ ? ]</div>
-                          <div className="col-span-5">Location (IP address) [ ? ]</div>
-                          <div className="col-span-4">Date/Time</div>
-                        </div>
-                        <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                          (Displayed in your time zone)
-                        </div>
-                      </div>
-
-                      {/* Sessions */}
-                      {sessions.map((session, index) => (
-                        <div 
-                          key={session.id} 
-                          className={`${index !== sessions.length - 1 ? 'border-b border-gray-300 dark:border-gray-600' : ''}`}
-                        >
-                          <div className="grid grid-cols-12 gap-3 px-3 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
-                            <div className="col-span-3">
-                              <div className="flex flex-col">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-sm text-gray-900 dark:text-white">
-                                    Browser ({session.browser})
-                                  </span>
-                                  <button
-                                    onClick={() => toggleSession(session.id)}
-                                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline font-normal"
-                                  >
-                                    Show details
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                            
-                            <div className="col-span-5">
-                              <div className="flex flex-col">
-                                <div className="flex items-center gap-1.5">
-                                  {session.isCurrent && (
-                                    <span className="text-red-600 dark:text-red-400 text-sm">* </span>
-                                  )}
-                                  <span className="text-sm text-gray-900 dark:text-white">
-                                    {session.location}
-                                  </span>
-                                </div>
-                                <span className="text-xs text-gray-600 dark:text-gray-400">
-                                  ({session.ip})
-                                </span>
-                              </div>
-                            </div>
-                            
-                            <div className="col-span-4">
-                              <span className="text-sm text-gray-900 dark:text-white">
-                                {formatTimestamp(session.timestamp)}
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Expanded Details */}
-                          {expandedSessions.has(session.id) && (
-                            <div className="bg-white dark:bg-gray-900 px-3 py-3 border-t border-gray-300 dark:border-gray-600">
-                              <div className="text-sm text-gray-700 dark:text-gray-300 space-y-1.5">
-                                <p><span className="font-semibold">Browser:</span> {session.browser} {session.browserVersion}</p>
-                                <p><span className="font-semibold">Operating System:</span> {session.os}</p>
-                                <p><span className="font-semibold">Device Type:</span> {session.deviceType}</p>
-                                <p className="break-all"><span className="font-semibold">User Agent:</span> {session.userAgent}</p>
-                              </div>
-                              <button
-                                onClick={() => toggleSession(session.id)}
-                                className="text-xs text-blue-600 dark:text-blue-400 hover:underline mt-2"
-                              >
-                                Hide details
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Footer Info */}
-                  <div className="text-sm text-gray-700 dark:text-gray-300 space-y-2">
-                    <p>
-                      <span className="text-red-600 dark:text-red-400">*</span> indicates activity from the current session.
-                    </p>
-                    <p>
-                      This computer is using IP address {currentIP}. ({sessions[0]?.location || 'Unknown Location'})
-                    </p>
-                  </div>
-                </>
-              ) : (
-                <>
-                  {/* Activity Log */}
-                  <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-3 mb-6 rounded">
-                    <div className="text-sm text-gray-700 dark:text-gray-300">
-                      <p>
-                        Review recent security events and account activity. If you see something unfamiliar, 
-                        <a href="#" className="text-blue-600 dark:text-blue-400 hover:underline ml-1">secure your account</a>.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    {activityLogs.map((log) => (
-                      <div 
-                        key={log.id}
-                        className="flex gap-4 pb-4 border-b border-gray-200 dark:border-gray-700 last:border-0"
-                      >
-                        {/* Icon */}
-                        <div className="flex-shrink-0">
-                          {getActivityIcon(log.type, log.status)}
-                        </div>
-
-                        {/* Content */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-start justify-between gap-4 mb-1">
-                            <div>
-                              <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
-                                {log.action}
-                              </h4>
-                              <p className="text-sm text-gray-600 dark:text-gray-400 mt-0.5">
-                                {log.details}
-                              </p>
-                            </div>
-                            <span className="text-xs text-gray-500 dark:text-gray-500 whitespace-nowrap">
-                              {formatTimestamp(log.timestamp)}
-                            </span>
-                          </div>
-
-                          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-gray-600 dark:text-gray-400">
-                            <div className="flex items-center gap-1">
-                              <span className="font-medium">Device:</span>
-                              <span>{log.device}</span>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <span className="font-medium">Location:</span>
-                              <span>{log.location}</span>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <span className="font-medium">IP:</span>
-                              <span>{log.ip}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Load More */}
-                  <div className="mt-6 text-center">
-                    <button className="text-sm text-blue-600 dark:text-blue-400 hover:underline font-medium">
-                      Load more activity
-                    </button>
-                  </div>
-                </>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="p-4 border-t border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/50 flex justify-end">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-medium rounded transition-colors"
-          >
-            OK
-          </button>
-        </div>
+            {/* Footer */}
+            <div className="p-2 bg-white border-t border-gray-300 flex justify-center sticky bottom-0">
+              <button onClick={onClose} className="border border-gray-400 px-4 py-1.5 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-black text-sm font-medium shadow-sm">
+                Close
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

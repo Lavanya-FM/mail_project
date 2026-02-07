@@ -36,6 +36,8 @@ export default function ThreadView({
 }: ThreadViewProps) {
   const [emails, setEmails] = useState<ThreadEmail[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeSubject, setActiveSubject] = useState<string>("");
+  const [expandedEmailIds, setExpandedEmailIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     fetchThread();
@@ -46,13 +48,48 @@ export default function ThreadView({
     try {
       setLoading(true);
       const res = await emailService.getThread(threadId, userId);
-      setEmails(res?.data || []);
+      const threadEmails = res?.data || [];
+      setEmails(threadEmails);
+
+      if (threadEmails.length > 0) {
+        setActiveSubject(threadEmails[0].subject || "No Subject");
+
+        // Logic: Expand unread emails, or the last one if all are read
+        const newExpanded = new Set<number>();
+        let hasUnread = false;
+
+        threadEmails.forEach((e: ThreadEmail) => {
+          if (!e.is_read) {
+            newExpanded.add(e.id);
+            hasUnread = true;
+          }
+        });
+
+        // If no unread, expand the very last message (newest)
+        if (!hasUnread && threadEmails.length > 0) {
+          newExpanded.add(threadEmails[threadEmails.length - 1].id);
+        }
+
+        setExpandedEmailIds(newExpanded);
+      }
     } catch (err) {
       console.error("Thread fetch error:", err);
     } finally {
       setLoading(false);
     }
   }
+
+  const toggleEmailCollapse = (emailId: number) => {
+    setExpandedEmailIds(prev => {
+      const next = new Set(prev);
+      if (next.has(emailId)) {
+        next.delete(emailId);
+      } else {
+        next.add(emailId);
+      }
+      return next;
+    });
+  };
 
   // ✅ SAFE compose wrapper (prevents 400 error)
   function handleCompose(email: ThreadEmail, data: any) {
@@ -86,12 +123,14 @@ export default function ThreadView({
     <div className="w-full h-full overflow-y-auto bg-white dark:bg-slate-900 rounded-xl shadow-xl border border-gray-200 dark:border-slate-700">
 
       {/* HEADER */}
-      <div className="flex justify-between items-center p-4 border-b border-gray-200 dark:border-slate-700">
-        <h2 className="text-lg font-semibold">Conversation</h2>
+      <div className="flex justify-between items-center p-4 border-b border-gray-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm sticky top-0 z-10 transition-all">
+        <h2 className="text-lg font-semibold truncate pr-4 text-gray-800 dark:text-gray-100">
+          {activeSubject || "Conversation"}
+        </h2>
 
         <button
           onClick={onClose}
-          className="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-800"
+          className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800 text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
         >
           <X className="w-5 h-5" />
         </button>
@@ -99,12 +138,14 @@ export default function ThreadView({
 
       {/* THREAD EMAILS */}
       <div className="space-y-4 p-4">
-        {emails.map((email) => (
+        {emails.map((email, index) => (
           <EmailView
             key={email.id}
             email={email}
             hideClose
-            hideToolbar
+            hideToolbar={expandedEmailIds.has(email.id) && index !== emails.length - 1} // Hide toolbar if expanded but not last? Or keep it? keeping it for actions.
+            collapsed={!expandedEmailIds.has(email.id)}
+            onToggleCollapse={() => toggleEmailCollapse(email.id)}
             onCompose={(data: any) => handleCompose(email, data)}
             onClose={() => { }}
             onRefresh={fetchThread}

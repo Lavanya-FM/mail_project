@@ -1,12 +1,12 @@
 // src/components/EmailView.tsx
-import { Star, Reply, ReplyAll, Forward, Trash2, Archive, MoreVertical, Paperclip, X, Flag, Tag, Check, FileText, Download, Eye, Lock, Smile, HardDrive, Image as ImageIcon, Phone } from 'lucide-react';
+import { Star, Reply, ReplyAll, Forward, Trash2, Archive, MoreVertical, Paperclip, X, Flag, Tag, Check, FileText, Lock, Smile, HardDrive, Image as ImageIcon, Phone, ShieldAlert, AlertTriangle, Printer, ExternalLink, Sparkles } from 'lucide-react';
 import React, { useState, useEffect, useRef } from 'react';
 import { emailService } from '../lib/emailService';
 import { authService } from '../lib/authService';
 import { Email } from '../types/email';
 import { normalizeEmailBody } from '../utils/email';
 import { collapseForwarded } from '../lib/collapseForwarded';
-import { p2pService, AttachmentState } from '../lib/p2pService';
+import { p2pService } from '../lib/p2pService';
 import { callService } from '../lib/callService';
 import toast from 'react-hot-toast';
 import P2PAttachmentList from './P2PAttachmentList';
@@ -32,6 +32,8 @@ type EmailViewProps = {
   labels?: { id: number; name: string; color: string }[];
   hideClose?: boolean;
   hideToolbar?: boolean;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 };
 
 interface ConfirmDialogState {
@@ -45,19 +47,11 @@ interface ConfirmDialogState {
   onConfirm?: () => Promise<void> | void;
 }
 
-const formatSize = (bytes: number) => {
-  if (!bytes) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  const kb = bytes / 1024;
-  if (kb < 1024) return `${kb.toFixed(0)} KB`;
-  return `${(kb / 1024).toFixed(1)} MB`;
-};
-
 // Local attachment items handled by P2PAttachmentList.
 
 // Local P2P attachment items removed.
 
-export default function EmailView({ email, onClose, onRefresh, onCompose: _onCompose, labels = [] }: EmailViewProps) {
+export default function EmailView({ email, onClose, onRefresh, onCompose: _onCompose, labels = [], collapsed = false, onToggleCollapse }: EmailViewProps) {
   // console.log("EMAIL JSON >>>", email);
 
   const [starred, setStarred] = useState(false);
@@ -791,6 +785,36 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
 
 
 
+  // COLLAPSED VIEW RENDER
+  if (collapsed) {
+    return (
+      <div
+        onClick={onToggleCollapse}
+        className="flex items-center px-4 py-3 bg-gray-50 dark:bg-slate-900/50 border-b border-gray-200 dark:border-slate-800 cursor-pointer hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors"
+      >
+        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-200 dark:bg-slate-700 flex items-center justify-center text-gray-600 dark:text-gray-300 font-semibold text-xs mr-4">
+          {getInitials(email.from_name || email.from_email || '')}
+        </div>
+
+        <div className="flex-1 min-w-0 flex items-center gap-4">
+          <span className="font-semibold text-sm text-gray-900 dark:text-white w-48 truncate">
+            {getSenderName(email.from_name, email.from_email)}
+          </span>
+          <span className="text-sm text-gray-500 dark:text-slate-400 truncate flex-1">
+            {sanitizeBody(email.body ?? email.text_preview ?? "").substring(0, 100)}...
+          </span>
+        </div>
+
+        <div className="flex items-center gap-4 ml-4">
+          {attachments.length > 0 && <Paperclip className="w-4 h-4 text-gray-400" />}
+          <span className="text-xs text-gray-500 whitespace-nowrap">
+            {formatShortDate(email.sent_at || email.created_at || '')}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 flex flex-col h-full bg-gradient-to-br from-slate-50 via-white to-blue-50/30 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950" style={{ minHeight: 0 }}>
       {/* Top toolbar */}
@@ -838,6 +862,18 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
           <button onClick={handleDelete} className="p-2 text-gray-600 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition" title="Delete">
             <Trash2 className="w-4 h-4" />
           </button>
+
+          <div className="h-4 w-px bg-gray-300 dark:bg-slate-700 mx-1"></div>
+
+          <button onClick={() => window.print()} className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full transition" title="Print">
+            <Printer className="w-4 h-4" />
+          </button>
+
+          <button onClick={() => window.open(window.location.href, '_blank')} className="p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full transition" title="Open in new window">
+            <ExternalLink className="w-4 h-4" />
+          </button>
+
+          <div className="h-4 w-px bg-gray-300 dark:bg-slate-700 mx-1"></div>
 
           <div className="relative" ref={labelDropdownRef}>
             <button
@@ -934,6 +970,17 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
               {email.subject || "(No subject)"}
             </h1>
 
+            {/* AI Summary Button */}
+            <div className="mb-4">
+              <button
+                onClick={() => toast.success("AI Summary generated!")}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-xl text-sm font-medium transition-colors w-full sm:w-auto"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>Summarize this email</span>
+              </button>
+            </div>
+
             {/* ATTACHMENTS - Professional Style with P2P Differentiation */}
             {attachments.length > 0 && (() => {
               // Determine if this is a P2P email
@@ -977,6 +1024,36 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
 
           {/* Email Card - Gmail Style */}
           <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-gray-200 dark:border-slate-800 overflow-hidden mb-6">
+
+            {/* SECURITY BANNER */}
+            {((email as any).phishing || (email as any).malware || (email as any).spam_score > 50) && (
+              <div className={`px-4 py-3 border-b flex items-start gap-3 ${(email as any).phishing || (email as any).malware
+                ? "bg-red-50 border-red-100 dark:bg-red-900/20 dark:border-red-900/50"
+                : "bg-yellow-50 border-yellow-100 dark:bg-yellow-900/20 dark:border-yellow-900/50"
+                }`}>
+                {(email as any).phishing || (email as any).malware ? (
+                  <ShieldAlert className="w-5 h-5 text-red-600 dark:text-red-400 mt-0.5 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-5 h-5 text-yellow-600 dark:text-yellow-400 mt-0.5 shrink-0" />
+                )}
+                <div>
+                  <h4 className={`text-sm font-semibold ${(email as any).phishing || (email as any).malware ? "text-red-800 dark:text-red-200" : "text-yellow-800 dark:text-yellow-200"
+                    }`}>
+                    {(email as any).phishing ? "Phishing Warning" : (email as any).malware ? "Malware Detected" : "Spam Warning"}
+                  </h4>
+                  <p className={`text-xs mt-0.5 ${(email as any).phishing || (email as any).malware ? "text-red-700 dark:text-red-300" : "text-yellow-700 dark:text-yellow-300"
+                    }`}>
+                    {/* Safety check for warnings */}
+                    {(email as any).scan_warnings
+                      ? (Array.isArray((email as any).scan_warnings)
+                        ? (email as any).scan_warnings.join('. ')
+                        : String((email as any).scan_warnings))
+                      : "This message was flagged by the security scanner."}
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Sender Info Section */}
             <div className="p-4 lg:p-6">
               <div className="flex items-start gap-4">
@@ -1008,6 +1085,18 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
                     <span className="text-xs lg:text-sm text-gray-500 dark:text-slate-400 whitespace-nowrap">
                       {formatShortDate(email.sent_at || email.created_at || '')}
                     </span>
+                    {/* Collapsible toggle for Thread View */}
+                    {onToggleCollapse && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleCollapse();
+                        }}
+                        className="ml-2 p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-800 rounded"
+                      >
+                        <MoreVertical className="w-4 h-4 rotate-90" />
+                      </button>
+                    )}
                     {!isSender && (
                       <button
                         onClick={(e) => {

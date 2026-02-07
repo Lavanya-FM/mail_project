@@ -4,6 +4,7 @@ import { Download, FileIcon, CheckCircle, XCircle, Loader, AlertCircle, Pause, P
 import { p2pService } from '../lib/p2pService';
 import { enhancedP2PService } from '../lib/enhancedP2PService';
 import toast from 'react-hot-toast';
+import { canDownload, ScanStatus } from '../utils/fileScanner';
 
 interface P2PAttachment {
   filename: string;
@@ -13,6 +14,49 @@ interface P2PAttachment {
   content_base64: string | null;
   is_p2p: boolean;
   p2p_status?: 'pending' | 'delivered' | 'failed';
+  // New Scan Fields
+  id?: number; // Needed for keying
+  scan_status?: 'pending' | 'scanning' | 'clean' | 'infected';
+  scan_message?: string;
+}
+
+function ScanStatusBadge({ status, message }: { status: string, message: string }) {
+  const s = status?.toLowerCase();
+
+  // Minimalistic Indications
+  if (s === 'scanning' || s === 'pending') {
+    return (
+      <span className="text-blue-500" title="Scanning...">
+        <Loader className="w-3 h-3 animate-spin" />
+      </span>
+    );
+  }
+
+  if (s === 'clean') {
+    return (
+      <span className="text-green-500" title="Scan complete: Safe">
+        <CheckCircle className="w-3 h-3" />
+      </span>
+    );
+  }
+
+  if (s === 'not_scanned') {
+    return (
+      <span className="text-amber-500 cursor-help" title={`Scan skipped/timeout: ${message || 'Proceed with caution'}`}>
+        <AlertCircle className="w-3 h-3" />
+      </span>
+    );
+  }
+
+  if (s === 'infected' || s === 'malware' || s === 'risk' || s === 'blocked') {
+    return (
+      <span className="text-red-500" title={`Blocked: ${message}`}>
+        <XCircle className="w-3 h-3" />
+      </span>
+    );
+  }
+
+  return null;
 }
 
 interface P2PAttachmentListProps {
@@ -33,16 +77,28 @@ export default function P2PAttachmentList({
   const [downloadStatus, setDownloadStatus] = useState<Record<string, 'idle' | 'downloading' | 'complete' | 'failed' | 'waiting' | 'paused'>>({});
   const [transferDetails, setTransferDetails] = useState<Record<string, { speedBps?: number; etaSeconds?: number | null }>>({});
 
+  // New Scan State
+  const [scanStatuses, setScanStatuses] = useState<Record<string, { status: string, message: string }>>({});
+
   // Track P2P delivery status for each file
   useEffect(() => {
     const handleProgress = (e: CustomEvent) => {
       const { messageId, progress, speedBps, etaSeconds, status } = e.detail;
       setDownloadProgress(prev => ({ ...prev, [messageId]: progress }));
       setTransferDetails(prev => ({ ...prev, [messageId]: { speedBps, etaSeconds } }));
-      if (status === 'paused') {
+
+      const s = status?.toUpperCase();
+      if (s === 'PAUSED' || status === 'paused') {
         setDownloadStatus(prev => ({ ...prev, [messageId]: 'paused' }));
-      } else if (status === 'transferring') {
+      } else if (s === 'TRANSFERRING' || status === 'transferring' || s === 'SENDING') {
         setDownloadStatus(prev => ({ ...prev, [messageId]: 'downloading' }));
+      } else if (s === 'COMPLETED' || status === 'complete' || s === 'DONE') {
+        setDownloadStatus(prev => ({ ...prev, [messageId]: 'complete' }));
+        setDownloadProgress(prev => ({ ...prev, [messageId]: 100 }));
+      } else if (s === 'WAITING_FOR_PEER' || s === 'QUEUED') {
+        setDownloadStatus(prev => ({ ...prev, [messageId]: 'waiting' }));
+      } else if (s === 'FAILED') {
+        setDownloadStatus(prev => ({ ...prev, [messageId]: 'failed' }));
       }
     };
 
@@ -65,12 +121,16 @@ export default function P2PAttachmentList({
       const { messageId, percentage, status, speedBps, etaSeconds } = e.detail;
       setDownloadProgress(prev => ({ ...prev, [messageId]: percentage }));
       setTransferDetails(prev => ({ ...prev, [messageId]: { speedBps, etaSeconds } }));
-      if (status === 'RECEIVING' || status === 'downloading') {
+
+      const s = status?.toUpperCase();
+      if (s === 'RECEIVING' || s === 'TRANSFERRING' || status === 'downloading') {
         setDownloadStatus(prev => ({ ...prev, [messageId]: 'downloading' }));
-      } else if (status === 'PAUSED') {
+      } else if (s === 'PAUSED') {
         setDownloadStatus(prev => ({ ...prev, [messageId]: 'paused' }));
-      } else if (status === 'COMPLETED' || status === 'complete') {
+      } else if (s === 'COMPLETED' || status === 'complete') {
         setDownloadStatus(prev => ({ ...prev, [messageId]: 'complete' }));
+      } else if (s === 'WAITING_FOR_PEER') {
+        setDownloadStatus(prev => ({ ...prev, [messageId]: 'waiting' }));
       }
     };
 
@@ -105,11 +165,37 @@ export default function P2PAttachmentList({
       }
     };
 
+    // Listen for WebSocket scan updates
+    const handleScanUpdate = (e: CustomEvent) => {
+      const detail = e.detail;
+      const fileId = detail.fileId || detail.messageId; // Support both
+      if (fileId) {
+        setScanStatuses(prev => ({
+          ...prev,
+          [fileId]: {
+            status: detail.scan_status || detail.status,
+            message: detail.scan_reason || detail.message
+          }
+        }));
+      }
+    };
+
     window.addEventListener('p2p-progress', handleProgress as EventListener);
     window.addEventListener('p2p-receiver-progress', handleReceiverProgress as EventListener);
     window.addEventListener('p2p-delivered', handleDelivered as EventListener);
+    // Add listener for file-scan-status events (dispatched from generic message handler usually)
+    window.addEventListener('file-scan-status', handleScanUpdate as EventListener);
     window.addEventListener('p2p-error', handleError as EventListener);
     window.addEventListener('p2p-message', handleMessage as EventListener);
+    p2pService.on('file-scan-status', handleScanUpdate);
+    window.addEventListener('p2p-scan-status', handleScanUpdate as EventListener);
+
+    // 🚀 NEW: Listen for presence changes to update UI instantly when sender goes offline
+    const unsubscribePresence = p2pService.onPresenceChange(() => {
+      // Force re-render by updating a dummy state or just rely on the component re-rendering
+      // Actually let's just trigger a setState to force render
+      setDownloadStatus(prev => ({ ...prev }));
+    });
 
     return () => {
       window.removeEventListener('p2p-progress', handleProgress as EventListener);
@@ -117,6 +203,10 @@ export default function P2PAttachmentList({
       window.removeEventListener('p2p-delivered', handleDelivered as EventListener);
       window.removeEventListener('p2p-error', handleError as EventListener);
       window.removeEventListener('p2p-message', handleMessage as EventListener);
+      window.removeEventListener('file-scan-status', handleScanUpdate as EventListener);
+      p2pService.off('file-scan-status', handleScanUpdate);
+      window.removeEventListener('p2p-scan-status', handleScanUpdate as EventListener);
+      unsubscribePresence();
     };
   }, []);
 
@@ -267,6 +357,17 @@ export default function P2PAttachmentList({
     switch (status) {
       case 'downloading':
         const details = transferDetails[attachment.p2p_message_id];
+        const isSenderOnline = mode === 'receiver' ? p2pService.isPeerOnline(senderEmail) : true;
+
+        if (mode === 'receiver' && !isSenderOnline) {
+          return (
+            <div className="flex items-center gap-2" title="Sender is offline">
+              <Loader className="w-5 h-5 text-yellow-500 animate-pulse" />
+              <span className="text-xs text-yellow-600">Waiting for sender...</span>
+            </div>
+          );
+        }
+
         return (
           <div className="flex flex-col items-end gap-1">
             <div className="flex items-center gap-2">
@@ -313,7 +414,12 @@ export default function P2PAttachmentList({
       if (attachment.p2p_status === 'failed') return 'Failed to deliver';
     }
     if (attachment.content_base64) return 'Email attachment';
-    if (status === 'downloading') return 'Downloading...';
+    const isSenderOnline = mode === 'receiver' ? p2pService.isPeerOnline(senderEmail) : true;
+
+    if (status === 'downloading') {
+      if (mode === 'receiver' && !isSenderOnline) return 'Waiting for sender online...';
+      return 'Downloading...';
+    }
     if (status === 'paused') return 'Paused';
     if (status === 'complete') return mode === 'sender' ? 'File Received' : 'Downloaded';
     if (status === 'failed') return 'Transfer failed';
@@ -351,6 +457,38 @@ export default function P2PAttachmentList({
                   <span className="text-xs text-gray-500">{formatFileSize(attachment.size_bytes)}</span>
                   {isP2P && <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 rounded">P2P Transfer</span>}
                   <span className="text-xs text-gray-500">{getStatusLabel(attachment)}</span>
+
+                  {/* Scan Status Badge (Inline) */}
+                  <ScanStatusBadge
+                    status={attachment.p2p_message_id ? (scanStatuses[attachment.p2p_message_id]?.status || (attachment as any).scan_status || 'pending') : 'pending'}
+                    message={attachment.p2p_message_id ? (scanStatuses[attachment.p2p_message_id]?.message || (attachment as any).scan_reason || '') : ''}
+                  />
+
+                  {/* Open File Link if available */}
+                  {(status === 'complete' || (mode === 'receiver' && isSenderWithFile) || (mode === 'sender' && isSenderWithFile)) && (
+                    <button
+                      onClick={async () => {
+                        let blob: Blob | null | undefined = await p2pService.getReceivedBlob(attachment.p2p_message_id);
+                        if (!blob && mode === 'sender') {
+                          // Sender might have it in TransferRegistry but not receivedFiles map? 
+                          // Actually sender has it in p2pService.senderTransferRegistry.get(id).file
+                          blob = p2pService.getSenderFileBlob(attachment.p2p_message_id);
+                        }
+
+                        if (blob) {
+                          const url = URL.createObjectURL(blob);
+                          window.open(url, '_blank');
+                          setTimeout(() => URL.revokeObjectURL(url), 60000); // 1 min validity
+                        } else {
+                          toast.error('File not found locally');
+                        }
+                      }}
+                      className="text-xs text-indigo-600 hover:text-indigo-800 underline ml-2 cursor-pointer z-10"
+                      title="Open file in new tab"
+                    >
+                      View File
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -365,10 +503,24 @@ export default function P2PAttachmentList({
                     {(status === 'idle' || status === 'failed' || status === 'complete' || isStandardAttachment) && !isDownloading && !isPaused && (
                       <button
                         onClick={() => handleDownload(attachment)}
-                        className="p-2 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
-                        title={status === 'complete' ? "Save to computer" : "Download"}
+                        className={`p-2 rounded-full transition-colors ${(attachment.p2p_message_id && (scanStatuses[attachment.p2p_message_id]?.status === 'blocked' || (attachment as any).scan_status === 'blocked'))
+                          ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                          : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
+                          }`}
+                        title={
+                          (attachment.p2p_message_id && (scanStatuses[attachment.p2p_message_id]?.status === 'blocked' || (attachment as any).scan_status === 'blocked'))
+                            ? 'Download blocked for security reasons'
+                            : 'Download file'
+                        }
+                        disabled={
+                          !canDownload(
+                            ((attachment.p2p_message_id && scanStatuses[attachment.p2p_message_id]?.status)
+                              || (attachment as any).scan_status
+                              || 'pending') as ScanStatus
+                          )
+                        }
                       >
-                        <Download className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                        <Download className="w-4 h-4" />
                       </button>
                     )}
 
@@ -405,6 +557,8 @@ export default function P2PAttachmentList({
                   </button>
                 )}
               </div>
+
+
             </div>
           );
         })}

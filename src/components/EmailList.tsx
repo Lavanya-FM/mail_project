@@ -1,15 +1,14 @@
 // src/components/EmailList.tsx
-import { Paperclip, Inbox, Tag, Users, Share2 } from 'lucide-react';
+import { Paperclip, Inbox, Tag, Users, Square, CheckSquare, Star, RotateCw, MoreVertical } from 'lucide-react';
 import { Email } from '../types/email';
-import { useState, useEffect } from 'react';
+import { useState, useMemo } from 'react';
+import { emailService } from '../lib/emailService';
+import { authService } from '../lib/authService';
 
 type EmailListProps = {
   emails: Email[];
   selectedEmail: Email | null;
   onSelectEmail: (email: Email) => void;
-  onViewActivity?: () => void;
-  onViewPrivacy?: () => void;
-  onViewTerms?: () => void;
   onRefresh?: () => void;
 };
 
@@ -17,362 +16,286 @@ export default function EmailList({
   emails,
   selectedEmail,
   onSelectEmail,
-  onViewActivity,
-  onViewPrivacy,
-  onViewTerms
+  onRefresh
 }: EmailListProps) {
   const [activeTab, setActiveTab] = useState<'primary' | 'social' | 'promotions'>('primary');
-  const [lastActivity, setLastActivity] = useState<Date>(new Date());
-  const [activityText, setActivityText] = useState<string>('Just now');
-
-  // Update last activity timestamp whenever user interacts
-  useEffect(() => {
-    const updateActivity = () => {
-      setLastActivity(new Date());
-    };
-
-    window.addEventListener('click', updateActivity);
-    window.addEventListener('keypress', updateActivity);
-    window.addEventListener('scroll', updateActivity);
-
-    return () => {
-      window.removeEventListener('click', updateActivity);
-      window.removeEventListener('keypress', updateActivity);
-      window.removeEventListener('scroll', updateActivity);
-    };
-  }, []);
-
-  // Update activity text periodically
-  useEffect(() => {
-    const updateActivityText = () => {
-      const now = new Date();
-      const diffMs = now.getTime() - lastActivity.getTime();
-      const diffMinutes = Math.floor(diffMs / (1000 * 60));
-
-      if (diffMinutes < 1) {
-        setActivityText('Just now');
-      } else if (diffMinutes === 1) {
-        setActivityText('1 minute ago');
-      } else {
-        setActivityText(`${diffMinutes} minutes ago`);
-      }
-    };
-
-    updateActivityText();
-    const interval = setInterval(updateActivityText, 10000);
-    return () => clearInterval(interval);
-  }, [lastActivity]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const formatDate = (dateString: string) => {
     if (!dateString) return '';
     const date = new Date(dateString);
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-    if (diffHours < 24) {
-      return date.toLocaleTimeString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-      });
-    } else if (diffDays < 7) {
-      return date.toLocaleDateString('en-US', { weekday: 'short' });
-    } else {
-      return date.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-      });
+    if (diffMs < 24 * 60 * 60 * 1000) {
+      return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
     }
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   };
 
-  const stripHtmlTags = (html: string): string => {
-    const div = document.createElement("div");
-    div.innerHTML = html;
-    return div.textContent || div.innerText || "";
-  };
-
-  const truncateText = (text: string, maxLength: number) => {
-    if (!text) return "";
-    if (text.length <= maxLength) return text;
-    return text.slice(0, maxLength) + "...";
-  };
-
-  const getInitials = (name?: string) => {
-    if (!name) return "U";
-    const safe = String(name).trim();
-    if (!safe) return "U";
-    return safe
-      .split(" ")
-      .filter(Boolean)
-      .map((n) => n.charAt(0))
-      .join("")
-      .toUpperCase()
-      .slice(0, 2);
+  const stripHtmlTags = (html: string) => {
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+    return temp.textContent || temp.innerText || "";
   };
 
   const getSenderName = (name?: string, email?: string) => {
-    const safeEmail = email || "";
-    // If name exists and doesn't look like an email, use it
     if (name && !name.includes('@')) return name;
-    // Otherwise extract username from email
-    return safeEmail.split('@')[0];
+    return (email || "").split('@')[0];
   };
 
-  // Thread grouping
-  const groupEmailsByThread = (emails: Email[]) => {
+  const toggleSelection = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) newSet.delete(id);
+    else newSet.add(id);
+    setSelectedIds(newSet);
+  };
+
+  const toggleStar = async (e: React.MouseEvent, email: Email) => {
+    e.stopPropagation();
+    const user = authService.getCurrentUser();
+    if (!user) return;
+
+    try {
+      // Optimistic update could be done here if we had local state for emails, 
+      // but onRefresh will handle it.
+      await emailService.star(Number(email.id), user.id, !email.is_starred);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error("Failed to toggle star", err);
+    }
+  };
+
+  const handleSelectAll = () => {
+    // Check if all *currently visible* threads are selected
+    const allVisibleIds = threadList.map(t => String(t.latestEmail.id));
+    const allSelected = allVisibleIds.every(id => selectedIds.has(id));
+
+    if (allSelected) {
+      // Deselect all visible
+      const newSet = new Set(selectedIds);
+      allVisibleIds.forEach(id => newSet.delete(id));
+      setSelectedIds(newSet);
+    } else {
+      // Select all visible
+      const newSet = new Set(selectedIds);
+      allVisibleIds.forEach(id => newSet.add(id));
+      setSelectedIds(newSet);
+    }
+  };
+
+  // Auto-categorize emails (Dynamic Logic)
+  const categorizedEmails = useMemo(() => {
+    const categories: Record<'primary' | 'social' | 'promotions', Email[]> = {
+      primary: [],
+      social: [],
+      promotions: []
+    };
+
+    emails.forEach(email => {
+      const textToCheck = (
+        (email.from_name || '') + ' ' +
+        (email.subject || '') + ' ' +
+        (email.labels?.map((l: any) => typeof l === 'string' ? l : l.name).join(' ') || '')
+      ).toLowerCase();
+
+      if (textToCheck.match(/social|linkedin|twitter|facebook|instagram|slack|discord|tiktok/)) {
+        categories.social.push(email);
+      } else if (textToCheck.match(/promotion|newsletter|offer|sale|discount|deal|marketing|update/)) {
+        categories.promotions.push(email);
+      } else {
+        categories.primary.push(email);
+      }
+    });
+    return categories;
+  }, [emails]);
+
+  const filteredEmails = categorizedEmails[activeTab];
+
+  // Counts
+  const socialUnread = categorizedEmails.social.filter(e => !e.is_read).length;
+  const promotionsUnread = categorizedEmails.promotions.filter(e => !e.is_read).length;
+
+  // Group emails by thread based on *filtered* list
+  const groupEmailsByThread = (list: Email[]) => {
     const map: Record<string | number, Email[]> = {};
-    for (const email of emails) {
+    for (const email of list) {
       const threadId = email.thread_id || email.id;
       if (!map[threadId]) map[threadId] = [];
       map[threadId].push(email);
     }
-
-    for (const t in map) {
-      map[t].sort(
-        (a, b) =>
-          new Date(b.created_at || "").getTime() -
-          new Date(a.created_at || "").getTime()
-      );
-    }
-
     return map;
   };
 
-  const threads = groupEmailsByThread(emails);
+  const threads = groupEmailsByThread(filteredEmails);
+  const threadList = Object.values(threads)
+    .map((list) => {
+      // Sort within thread desc
+      list.sort((a, b) => new Date(b.created_at || "").getTime() - new Date(a.created_at || "").getTime());
+      return {
+        latestEmail: list[0],
+        allEmails: list,
+        unreadCount: list.filter(e => !e.is_read).length
+      };
+    })
+    .sort((a, b) => new Date(b.latestEmail.created_at || "").getTime() - new Date(a.latestEmail.created_at || "").getTime());
 
-  const threadList = Object.entries(threads)
-    .map(([threadId, list]) => ({
-      threadId,
-      latestEmail: list[0],
-      unreadCount: list.filter(e => !e.is_read).length,
-      allEmails: list
-    }))
-    .sort(
-      (a, b) =>
-        new Date(b.latestEmail.created_at || "").getTime() -
-        new Date(a.latestEmail.created_at || "").getTime()
-    );
 
   return (
-    <div className="w-full lg:w-96 border-r border-gray-200 dark:border-gray-700 flex flex-col bg-white dark:bg-gray-900 h-full">
+    <div className="flex flex-col h-full bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800">
 
-      {/* Tabs */}
-      <div className="border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
-        <div className="flex">
+      {/* 1. Header Actions Toolbar */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100 dark:border-gray-800 h-14 bg-white dark:bg-gray-900 sticky top-0 z-10">
+        <div className="flex items-center gap-4">
           <button
-            onClick={() => setActiveTab("primary")}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3.5 text-sm font-medium transition-all ${activeTab === "primary"
-              ? "text-blue-600 dark:text-blue-500 border-b-2 border-blue-600 dark:border-blue-500 bg-blue-50/50 dark:bg-blue-900/10"
-              : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
-              }`}
+            onClick={handleSelectAll}
+            className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-500 dark:text-gray-400"
+            title="Select All"
           >
-            <Inbox className="w-4 h-4" />
-            <span>Primary</span>
+            {threadList.length > 0 && threadList.every(t => selectedIds.has(String(t.latestEmail.id))) ? (
+              <CheckSquare className="w-4 h-4 text-blue-600" />
+            ) : (
+              <Square className="w-4 h-4" />
+            )}
           </button>
-
           <button
-            onClick={() => setActiveTab("social")}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3.5 text-sm font-medium transition-all ${activeTab === "social"
-              ? "text-blue-600 dark:text-blue-500 border-b-2 border-blue-600 dark:border-blue-500 bg-blue-50/50 dark:bg-blue-900/10"
-              : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
-              }`}
-          >
-            <Users className="w-4 h-4" />
-            <span>Social</span>
+            onClick={onRefresh}
+            className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-500 dark:text-gray-400" title="Refresh">
+            <RotateCw className="w-4 h-4" />
           </button>
-
-          <button
-            onClick={() => setActiveTab("promotions")}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3.5 text-sm font-medium transition-all ${activeTab === "promotions"
-              ? "text-blue-600 dark:text-blue-500 border-b-2 border-blue-600 dark:border-blue-500 bg-blue-50/50 dark:bg-blue-900/10"
-              : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
-              }`}
-          >
-            <Tag className="w-4 h-4" />
-            <span>Promotions</span>
+          <button className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded text-gray-500 dark:text-gray-400">
+            <MoreVertical className="w-4 h-4" />
           </button>
+        </div>
+        <div className="text-xs text-gray-400 dark:text-gray-500 font-medium">
+          {threadList.length} items
         </div>
       </div>
 
-      {/* Email Thread List */}
-      <div className="flex-1 overflow-y-auto flex flex-col">
-        <div className="flex-1">
-          {threadList.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-gray-500 dark:text-gray-400 py-16">
-              <div className="text-center">
-                <Inbox className="w-16 h-16 mx-auto mb-4 opacity-30" />
-                <p className="text-lg font-medium">No emails in {activeTab}</p>
-                <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
-                  Your inbox is empty
-                </p>
+      {/* 2. Tabs - Google Style */}
+      <div className="flex items-center border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900">
+        <button
+          onClick={() => setActiveTab("primary")}
+          className={`flex-1 flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-[3px] transition-colors ${activeTab === "primary"
+            ? "border-emerald-600 text-emerald-700 dark:text-emerald-400 bg-emerald-50/10"
+            : "border-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+            }`}
+        >
+          <Inbox className={`w-4 h-4 ${activeTab === 'primary' ? 'fill-current' : ''}`} />
+          <span>Primary</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab("social")}
+          className={`flex-1 flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-[3px] transition-colors ${activeTab === "social"
+            ? "border-blue-600 text-blue-700 dark:text-blue-400 bg-blue-50/10"
+            : "border-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+            }`}
+        >
+          <Users className={`w-4 h-4 ${activeTab === 'social' ? 'fill-current' : ''}`} />
+          <span>Social</span>
+          {socialUnread > 0 && (
+            <span className="ml-auto bg-blue-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">{socialUnread} new</span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab("promotions")}
+          className={`flex-1 flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-[3px] transition-colors ${activeTab === "promotions"
+            ? "border-gray-600 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800"
+            : "border-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+            }`}
+        >
+          <Tag className={`w-4 h-4 ${activeTab === 'promotions' ? 'fill-current' : ''}`} />
+          <span className="hidden sm:inline">Promotions</span>
+          {promotionsUnread > 0 && (
+            <span className="ml-2 bg-gray-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">{promotionsUnread} new</span>
+          )}
+        </button>
+      </div>
+
+      {/* 3. Email List */}
+      <div className="flex-1 overflow-y-auto">
+        {threadList.map(({ latestEmail: email, allEmails, unreadCount }) => {
+          const isSelected = selectedEmail?.id === email.id;
+          const isChecked = selectedIds.has(String(email.id));
+          const isRead = unreadCount === 0;
+          const messageCount = allEmails.length;
+
+          return (
+            <div
+              key={email.id}
+              onClick={() => onSelectEmail(email)}
+              className={`group flex items-center gap-3 px-3 py-2 border-b border-gray-100 dark:border-gray-800 cursor-pointer hover:shadow-md hover:z-10 relative transition-all ${isSelected ? 'bg-blue-50 dark:bg-blue-900/10' : 'bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800'
+                } ${!isRead ? 'font-semibold bg-gray-50/50' : ''}`}
+            >
+              {/* Checkbox */}
+              <div onClick={(e) => toggleSelection(e, String(email.id))} className="text-gray-300 hover:text-gray-500 dark:text-gray-600 dark:hover:text-gray-400">
+                {isChecked ? <CheckSquare className="w-5 h-5 text-blue-600" /> : <Square className="w-5 h-5" />}
+              </div>
+
+              {/* Star */}
+              <button
+                onClick={(e) => toggleStar(e, email)}
+                className="text-gray-300 hover:text-yellow-400 dark:text-gray-600 focus:outline-none transition-colors"
+                title={email.is_starred ? "Unstar" : "Star"}
+              >
+                {email.is_starred ? <Star className="w-5 h-5 text-yellow-400 fill-current" /> : <Star className="w-5 h-5" />}
+              </button>
+
+              {/* Content Container - Table Layout */}
+              <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 select-none">
+
+                {/* Column 1: Sender (Fixed Width) */}
+                <span className={`text-sm truncate sm:w-48 flex-shrink-0 ${!isRead ? 'text-gray-900 dark:text-white font-bold' : 'text-gray-700 dark:text-gray-300 font-medium'}`}>
+                  {getSenderName(email.from_name, email.from_email)}
+                  {messageCount > 1 && <span className="ml-1 text-gray-500 font-normal">({messageCount})</span>}
+                </span>
+
+                {/* Column 2: Subject & Snippet (Flex Fill) */}
+                <div className="flex-1 min-w-0 flex items-center pr-2">
+                  <span className={`text-sm truncate ${!isRead ? 'text-gray-900 dark:text-white font-semibold' : 'text-gray-600 dark:text-gray-400'}`}>
+                    {email.subject || '(No Subject)'}
+                    <span className="font-normal text-gray-400 dark:text-gray-500 ml-1">
+                      - {stripHtmlTags(email.body || '').slice(0, 50)}
+                    </span>
+                  </span>
+                </div>
+
+                {/* Column 3: Badges (Right Aligned) */}
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {/* P2P Badge */}
+                  {((email as any).p2p_enabled || (email as any).p2p_delivered) && (
+                    <div className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 text-[10px] rounded font-bold border border-green-200 dark:border-green-800 flex items-center gap-1" title="P2P Transfer">
+                      <span>P2P</span>
+                    </div>
+                  )}
+                  {/* Attachment Paperclip */}
+                  {(email.has_attachments || Number(email.attachment_count) > 0) && (
+                    <Paperclip className="w-3.5 h-3.5 text-gray-400" />
+                  )}
+                </div>
+
+                {/* Column 4: Date (Fixed Width) */}
+                <span className={`text-xs ml-2 whitespace-nowrap w-16 text-right ${!isRead ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-gray-500 dark:text-gray-500'}`}>
+                  {formatDate(email.sent_at || email.created_at || '')}
+                </span>
               </div>
             </div>
-          ) : (
-            <div>
-              {threadList.map(
-                ({ threadId, latestEmail, unreadCount, allEmails }) => {
-                  const isSelected = selectedEmail?.id === latestEmail.id;
-                  const hasAttachments = allEmails.some(
-                    e => e.has_attachments === true || (e.attachment_count ?? 0) > 0
-                  );
+          );
+        })}
 
-                  // Check for P2P emails - both email-level and attachment-level
-                  const isP2PEmail = allEmails.some(e => (e as any).p2p_enabled || (e as any).p2p_delivered);
-                  const p2pAttachments = allEmails.reduce((count, e) => {
-                    if (e.attachments && Array.isArray(e.attachments)) {
-                      return count + e.attachments.filter((a: any) => a.delivery_mode === 'P2P' || a.is_p2p || a.p2p_message_id).length;
-                    }
-                    return count;
-                  }, 0);
-                  const hasP2P = isP2PEmail || p2pAttachments > 0;
-
-                  const normalize = (value: any): string => {
-                    if (value === null || value === undefined) return "";
-                    const s = String(value).trim().replace(/\r/g, "");
-                    if (s === "") return "";
-                    if (/^0+$/.test(s)) return "";     // handles "0", "00", "0\n", " 0 "
-                    return s;
-                  };
-
-                  const cleanBody = stripHtmlTags(normalize(latestEmail.body));
-
-                  return (
-                    <button
-                      key={threadId}
-                      onClick={() => onSelectEmail(latestEmail)}
-                      className={`w-full text-left px-4 py-3.5 transition-all border-b border-gray-100 dark:border-gray-800 ${isSelected
-                        ? "bg-blue-50 dark:bg-blue-900/20 border-l-4 border-l-blue-600 dark:border-l-blue-500"
-                        : "hover:bg-gray-50 dark:hover:bg-gray-800/50 border-l-4 border-l-transparent"
-                        } ${unreadCount > 0
-                          ? "bg-white dark:bg-gray-900"
-                          : "bg-gray-50/30 dark:bg-gray-900/50"
-                        }`}
-                    >
-                      <div className="flex items-start gap-3">
-
-                        {/* Avatar */}
-                        <div className="flex-shrink-0 mt-0.5">
-                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 dark:from-blue-600 dark:to-indigo-700 flex items-center justify-center text-white text-sm font-semibold shadow-sm">
-                            {getInitials(
-                              latestEmail.from_name ||
-                              latestEmail.from_email
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Email Content */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between gap-2 mb-0.5">
-                            <span
-                              className={`text-sm truncate ${unreadCount > 0
-                                ? "font-semibold text-gray-900 dark:text-white"
-                                : "font-normal text-gray-700 dark:text-gray-300"
-                                }`}
-                            >
-                              {getSenderName(latestEmail.from_name, latestEmail.from_email)}
-                            </span>
-
-                            {/* Date */}
-                            <span className={`text-xs flex-shrink-0 ${unreadCount > 0
-                              ? "text-gray-700 dark:text-gray-300 font-medium"
-                              : "text-gray-500 dark:text-gray-400"
-                              }`}>
-                              {formatDate(
-                                latestEmail.sent_at ||
-                                latestEmail.created_at ||
-                                ""
-                              )}
-                            </span>
-                          </div>
-
-                          <div className="flex items-center gap-2 mb-1">
-                            <h3
-                              className={`text-sm truncate flex-1 ${unreadCount > 0
-                                ? "font-semibold text-gray-900 dark:text-white"
-                                : "font-normal text-gray-700 dark:text-gray-300"
-                                }`}
-                            >
-                              {latestEmail.subject || "(No subject)"}
-                            </h3>
-
-                            {/* 📎 Attachment Indicator — Gmail style */}
-                            {hasAttachments && (
-                              <Paperclip className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                            )}
-
-                            {/* P2P Secure Badge - Clear differentiation from regular mail */}
-                            {hasP2P && (
-                              <div className="flex items-center gap-1 px-2 py-0.5 bg-emerald-500 text-white rounded-full text-[10px] font-bold flex-shrink-0 shadow-sm">
-                                <Share2 className="w-3 h-3" />
-                                <span>P2P</span>
-                                {p2pAttachments > 1 && (
-                                  <span className="ml-0.5 bg-white/20 px-1 rounded">{p2pAttachments}</span>
-                                )}
-                              </div>
-                            )}
-
-                            {/* Unread Count Badge */}
-                            {unreadCount > 0 && (
-                              <span className="text-xs bg-blue-600 dark:bg-blue-500 text-white px-1.5 py-0.5 rounded font-medium flex-shrink-0">
-                                {unreadCount}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Preview */}
-                          <p className="text-xs text-gray-600 dark:text-gray-400 line-clamp-1">
-                            {truncateText(cleanBody, 90)}
-                          </p>
-
-                          {/* Thread size */}
-                          {allEmails.length > 1 && (
-                            <p className="text-xs text-gray-500 dark:text-gray-500 mt-1.5 flex items-center gap-1">
-                              <span className="inline-block w-1 h-1 rounded-full bg-gray-400 dark:bg-gray-500"></span>
-                              {allEmails.length} messages
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                }
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50/80 dark:bg-gray-800/50">
-          <div className="flex justify-between items-center mb-2.5">
-            <span className="text-xs text-gray-600 dark:text-gray-400">
-              Last account activity: {activityText}
-            </span>
-            <button
-              onClick={onViewActivity}
-              className="text-xs text-blue-600 dark:text-blue-500 hover:text-blue-700 dark:hover:text-blue-400 font-medium transition-colors"
-            >
-              Details
-            </button>
+        {threadList.length === 0 && (
+          <div className="p-8 text-center text-gray-500">
+            No emails in {activeTab}.
           </div>
-          <div className="flex justify-center gap-3 text-xs text-gray-500 dark:text-gray-400">
-            <button
-              className="hover:text-blue-600 dark:hover:text-blue-500 transition-colors"
-              onClick={onViewPrivacy}
-            >
-              Privacy
-            </button>
-            <span className="text-gray-300 dark:text-gray-600">•</span>
-            <button
-              className="hover:text-blue-600 dark:hover:text-blue-500 transition-colors"
-              onClick={onViewTerms}
-            >
-              Terms
-            </button>
-          </div>
-        </div>
+        )}
+      </div>
 
+      {/* Footer */}
+      <div className="p-2 border-t border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 text-[10px] text-center text-gray-500 flex justify-between px-4">
+        <span>{threadList.length} conversations</span>
+        <span>{((emails.length > 0 ? threadList.length / emails.length : 0) * 100).toFixed(0)}% storage</span>
       </div>
     </div>
   );

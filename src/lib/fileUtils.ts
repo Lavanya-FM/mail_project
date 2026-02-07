@@ -7,16 +7,9 @@ export async function filesToBase64(files: File[]): Promise<Array<{
   content: string;
 }>> {
   const results = [];
-  
+
   for (const file of files) {
-    const buffer = await file.arrayBuffer();
-    const base64 = btoa(
-      new Uint8Array(buffer).reduce(
-        (data, byte) => data + String.fromCharCode(byte),
-        ''
-      )
-    );
-    
+    const base64 = await fileToBase64(file);
     results.push({
       filename: file.name,
       mime_type: file.type,
@@ -24,16 +17,21 @@ export async function filesToBase64(files: File[]): Promise<Array<{
       content: base64
     });
   }
-  
+
   return results;
 }
 
-export async function fileToBase64(file: File): Promise<string> {
-  const buffer = await file.arrayBuffer();
-  return btoa(
-    new Uint8Array(buffer).reduce(
-      (data, byte) => data + String.fromCharCode(byte),
-      ''
-    )
-  );
+export function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // result is "data:mime;base64,....."
+      // we usually just want the base64 part
+      const result = reader.result as string;
+      const base64 = result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }

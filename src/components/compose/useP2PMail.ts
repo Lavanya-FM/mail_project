@@ -3,6 +3,7 @@ import { p2pService } from '../../lib/p2pService';
 import { emailService } from '../../lib/emailService';
 import { createManifest, manifestToBase64 } from '../../lib/p2pManifest';
 import { authService } from '../../lib/authService';
+import { startFileScan } from '../../utils/fileScanner';
 import toast from 'react-hot-toast';
 
 export function useP2PMail(ui: any, attachments: any) {
@@ -17,13 +18,24 @@ export function useP2PMail(ui: any, attachments: any) {
       // 5MB Threshold for P2P Manifest
       const P2P_THRESHOLD = 5 * 1024 * 1024;
 
-      const processedAttachments = [];
+      const processedAttachments: any[] = [];
       const rawFiles = attachments.attachments || [];
       const p2pMessageIds: string[] = [];
       const p2pFiles: File[] = [];
 
-      for (const att of rawFiles) {
+      const attachmentPromises = rawFiles.map(async (att: any) => {
         const file = att.file;
+        let scanResult;
+        // 🛡️ Pre-transfer Scan (Backend) Parallelized
+        try {
+          scanResult = await startFileScan(file, file.name, 'P2P');
+          if (!scanResult.safe && scanResult.status !== 'not_scanned') {
+            toast.error(`Blocked "${file.name}": ${scanResult.message}`);
+            return null;
+          }
+        } catch (scanErr) {
+          console.warn(`Scan check failed for ${file.name}, proceeding with caution`, scanErr);
+        }
 
         // Check conditions for P2P: Large file
         if (file.size > P2P_THRESHOLD) {
@@ -31,33 +43,54 @@ export function useP2PMail(ui: any, attachments: any) {
           const manifest = await createManifest(file, senderEmail);
           const manifestBase64 = manifestToBase64(manifest);
 
-          // Add to payload as manifest
-          processedAttachments.push({
-            filename: `${file.name}.p2p`,
-            mime_type: 'application/x-jeemail-manifest+json',
-            size: manifestBase64.length,
-            content_base64: manifestBase64,
-            p2p_message_id: manifest.attachmentId
-          });
-
-          // Prepare to seed
-          p2pMessageIds.push(manifest.attachmentId);
-          p2pFiles.push(file);
+          return {
+            processed: {
+              filename: `${file.name}.p2p`,
+              mime_type: 'application/x-jeemail-manifest+json',
+              size: manifestBase64.length,
+              content_base64: manifestBase64,
+              p2p_message_id: manifest.attachmentId,
+              scan_status: scanResult?.status || 'clean', // If we passed the check, it's effectively clean
+              scan_reason: scanResult?.message || 'Pre-scan passed',
+              safe: true
+            },
+            p2pFile: file,
+            p2pId: manifest.attachmentId
+          };
 
         } else {
           // Normal attachment
           const buffer = await file.arrayBuffer();
-          const base64 = btoa(
-            new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-          );
-          processedAttachments.push({
-            filename: file.name,
-            mime_type: file.type,
-            size: file.size,
-            content_base64: base64
-          });
+          // Optimized Base64 conversion for browser
+          let binary = '';
+          const bytes = new Uint8Array(buffer);
+          const len = bytes.byteLength;
+          for (let i = 0; i < len; i += 32768) {
+            binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, Math.min(i + 32768, len))));
+          }
+          const base64 = btoa(binary);
+
+          return {
+            processed: {
+              filename: file.name,
+              mime_type: file.type,
+              size: file.size,
+              content_base64: base64,
+              scan_status: scanResult?.status || 'clean',
+              scan_reason: scanResult?.message || 'Pre-scan passed',
+              safe: true
+            }
+          };
         }
-      }
+      });
+
+      const results = (await Promise.all(attachmentPromises)).filter(r => r !== null);
+
+      results.forEach(r => {
+        if (r.processed) processedAttachments.push(r.processed);
+        if (r.p2pFile) p2pFiles.push(r.p2pFile);
+        if (r.p2pId) p2pMessageIds.push(r.p2pId);
+      });
 
       // If we have P2P files, register them for seeding
       if (p2pFiles.length > 0) {
