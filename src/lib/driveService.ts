@@ -5,6 +5,7 @@ const API = "/api/drive";
 export interface DriveFolder {
     id: number;
     user_id: number;
+    owner_id?: number;
     parent_folder_id: number | null;
     name: string;
     created_at: string;
@@ -16,6 +17,7 @@ export interface DriveFolder {
 export interface DriveFile {
     id: number;
     user_id: number;
+    owner_id?: number;
     folder_id: number | null;
     filename: string;
     name: string;
@@ -260,6 +262,31 @@ export async function getRecentFiles(userId: number, limit = 20) {
     const res = await authService.fetchWithAuth(`${API}/recent?user_id=${userId}&limit=${limit}`);
     const data = await res.json();
     return data.files || [];
+}
+
+/* ===============================
+   PREVIEW & DOWNLOAD URLS
+================================ */
+export function getPreviewUrl(fileId: number, userId: number) {
+    return `${API}/files/${fileId}/preview?user_id=${userId}`;
+}
+
+export function getDownloadUrl(fileId: number, userId: number) {
+    const token = getToken();
+    const url = `${API}/files/${fileId}/download?user_id=${userId}`;
+    return token ? `${url}&token=${token}` : url;
+}
+
+export interface PreviewInfo {
+    success: boolean;
+    fileType: string;
+    mimeType: string;
+    previewUrl: string;
+}
+
+export async function getPreviewInfo(fileId: number, userId: number): Promise<PreviewInfo> {
+    const res = await authService.fetchWithAuth(`${API}/files/${fileId}/preview-info?user_id=${userId}`);
+    return res.json();
 }
 
 /* ===============================

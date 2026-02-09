@@ -21,6 +21,7 @@ const jwt = require("jsonwebtoken");
 
 const db = require("./db"); // expects exported promise-based query/getConnection interface
 const { sanitizeBody, normalizeEmail, isValidEmailFormat } = require("./utils");
+const storageService = require("./storageService");
 
 const router = express.Router();
 
@@ -42,6 +43,7 @@ async function createSystemFolders(userId) {
     ["Spam", "spam"],
     ["Trash", "trash"],
     ["Starred", "starred"],
+    ["Archive", "archive"],
   ];
 
   for (const [name, system_box] of folderList) {
@@ -1166,6 +1168,56 @@ router.get("/email/thread/:threadId", async (req, res) => {
 
 // -------------------- FETCH EMAILS --------------------
 
+router.get("/email/:emailId", async (req, res) => {
+  try {
+    const { emailId } = req.params;
+    console.log(`[REQ] Fetching single email: ${emailId}`);
+
+    const [rows] = await db.query(
+      `SELECT e.*, m.is_read, m.is_starred, m.mailbox_id
+       FROM emails e
+       LEFT JOIN email_mailbox m ON e.id = m.email_id
+       WHERE e.id = ? OR e.message_id = ?`,
+      [emailId, emailId]
+    );
+
+    if (rows.length === 0) {
+      console.warn(`[404] Email not found: ${emailId}`);
+      return res.status(404).json({ error: "Email not found" });
+    }
+
+    const email = rows[0];
+
+    // Fetch recipients
+    const [rcp] = await db.query(
+      "SELECT address, type FROM email_recipients WHERE email_id = ?",
+      [email.id]
+    );
+    email.to_emails = rcp.filter(r => r.type === "to").map(r => ({ email: r.address }));
+    email.cc_emails = rcp.filter(r => r.type === "cc").map(r => ({ email: r.address }));
+    email.bcc_emails = rcp.filter(r => r.type === "bcc").map(r => ({ email: r.address }));
+
+    // Fetch attachments
+    const [atts] = await db.query(
+      `SELECT id, filename, mime_type, size_bytes, delivery_mode, delivered, p2p_message_id, 
+              attachment_transfer_state, scan_status, scan_reason, scan_engine, scan_timestamp, delivery_status
+       FROM email_attachments
+       WHERE email_id = ?`,
+      [email.id]
+    );
+    email.attachments = atts.map(att => ({
+      ...att,
+      status: att.attachment_transfer_state || att.delivery_status || 'PENDING',
+      is_p2p: att.delivery_mode === 'P2P'
+    }));
+
+    res.json({ data: email });
+  } catch (error) {
+    console.error("Fetch email error:", error);
+    res.status(500).json({ error: "Internal server error", details: error.message });
+  }
+});
+
 router.get("/emails/:userId/:folder", async (req, res) => {
   try {
     const userId = req.params.userId;
@@ -1346,6 +1398,15 @@ router.post("/email/create", async (req, res) => {
   resolvedThreadId = null;
 
   try {
+    // Rule 11: Enforce space check before sending
+    const totalAttachmentsSize = attachmentsList.reduce((s, a) => s + Number(a.size || a.size_bytes || 0), 0);
+    if (totalAttachmentsSize > 0) {
+      const canUpload = await storageService.hasSpace(user_id, totalAttachmentsSize);
+      if (!canUpload) {
+        return res.status(403).json({ error: "Storage quota exceeded. Cannot send attachments." });
+      }
+    }
+
     const [[sender]] = await conn.query(
       "SELECT full_name, email_username, email FROM users WHERE id = ? LIMIT 1",
       [user_id]
@@ -1439,61 +1500,44 @@ router.post("/email/create", async (req, res) => {
     await conn.query(
       `
   INSERT INTO email_mailbox
-    (user_id, email_id, mailbox_id, is_read)
-  VALUES (?, ?, ?, ?)
+    (user_id, email_id, mailbox_id, is_read, is_starred)
+  VALUES (?, ?, ?, ?, 0)
   ON DUPLICATE KEY UPDATE
     mailbox_id = VALUES(mailbox_id),
-    is_read = VALUES(is_read)
+    is_read = VALUES(is_read),
+    is_starred = VALUES(is_starred)
   `,
       [user_id, emailId, resolvedFolderId, 1]
     );
 
-    // store attachments into DB (base64) - only if not sent via P2P
+    // 🚀 SPEED OPTIMIZATION: Scan all attachments in parallel
     if (attachmentsList.length) {
-      for (const a of attachmentsList) {
+      const scans = await Promise.all(attachmentsList.map(async (a) => {
+        const content_base64 = typeof a.content_base64 === 'string' ? a.content_base64 : (typeof a.content === 'string' ? a.content : null);
+        const buffer = content_base64 ? Buffer.from(content_base64, 'base64') : Buffer.alloc(0);
+        const result = await performFullScan(buffer, a.filename || "attachment.bin");
+        return { ...a, scanResult: result, content_base64 };
+      }));
+
+      for (const a of scans) {
         const filename = a.filename || "attachment.bin";
         const mime_type = a.mime_type || a.contentType || null;
         const size_bytes = Number(a.size || a.size_bytes || 0);
-        const content_base64 =
-          typeof a.content_base64 === 'string'
-            ? a.content_base64
-            : typeof a.content === 'string'
-              ? a.content
-              : null;
+        const isP2P = typeof a.p2p_message_id === 'string' && a.p2p_message_id.length > 0;
 
-        const isP2P =
-          typeof a.p2p_message_id === 'string' &&
-          a.p2p_message_id.length > 0;
-
-
-        // PERFORM SECURITY SCAN
-        const buffer = content_base64 ? Buffer.from(content_base64, 'base64') : Buffer.alloc(0);
-        const scanResult = await performFullScan(buffer, filename);
-
-        // For P2P: store content_base64 as FALLBACK (like torrent seeder)
-        // This allows download even if direct P2P transfer fails
         await conn.query(
           `INSERT INTO email_attachments
-       (email_id, filename, mime_type, size_bytes,
-        content_base64, delivery_mode, delivered, p2p_message_id, attachment_transfer_state, 
-        scan_status, scan_reason, scan_engine, scan_timestamp, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+             (email_id, filename, mime_type, size_bytes, content_base64, delivery_mode, delivered, p2p_message_id, attachment_transfer_state, 
+              scan_status, scan_reason, scan_engine, scan_timestamp, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
           [
-            emailId,
-            filename,
-            mime_type,
-            size_bytes,
-            content_base64, // Always store content as fallback
-            isP2P ? 'P2P' : 'EMAIL',
-            isP2P ? 0 : 1,
-            a.p2p_message_id || null,
+            emailId, filename, mime_type, size_bytes, a.content_base64,
+            isP2P ? 'P2P' : 'EMAIL', isP2P ? 0 : 1, a.p2p_message_id || null,
             isP2P ? 'WAITING_FOR_PEER' : 'COMPLETED',
-            scanResult.scan_status,
-            scanResult.scan_reason,
-            scanResult.scan_engine,
-            scanResult.scan_timestamp
+            a.scanResult.scan_status, a.scanResult.scan_reason, a.scanResult.scan_engine, a.scanResult.scan_timestamp
           ]
         );
+        await storageService.updateUsage(user_id, size_bytes);
       }
     }
 
@@ -1542,90 +1586,29 @@ router.post("/email/create", async (req, res) => {
     }
 
 
-    // send SMTP if not draft and not P2P delivered
-    if (!is_draft && !p2p_enabled) {
-      const transporter = nodemailer.createTransport({
-        host: "127.0.0.1",
-        port: 25,
-        secure: false,
-        tls: { rejectUnauthorized: false },
-      });
-
-      const sendOptions = {
-        from: `"${sender.name}" <${sender.email}>`,
-        to: toList.join(", "),
-        subject: subject || "(No Subject)",
-        html: cleanBody,
-      };
-      if (ccList.length) sendOptions.cc = ccList.join(", ");
-      if (bccList.length) sendOptions.bcc = bccList.join(", ");
-
-      // attach using Base64 content
-      if (attachmentsList.length) {
-        sendOptions.attachments = attachmentsList
-          .map((a) => {
-            if (!a.filename) return null;
-            const content = a.content_base64 || a.content;
-            if (!content && a.p2p_message_id) return null; // Skip binary for P2P
-            return {
-              filename: a.filename,
-              content: content,
-              encoding: "base64",
-              contentType: a.mime_type || "application/octet-stream"
-            };
-          })
-          .filter(Boolean);
-      }
-
-      try {
-        await transporter.sendMail(sendOptions);
-      } catch (smtpErr) {
-        console.error("SMTP send error:", smtpErr);
-      }
-    }
-
-    // deliver to recipients inbox (for local users) - only if not P2P delivered AND NOT DRAFT
+    // 🚀 IMMEDIATE LOCAL DELIVERY
     if (!is_draft) {
       const all = [...new Set([...toList, ...ccList, ...bccList])];
       if (all.length) {
         const placeholders = all.map(() => "?").join(",");
-        const [users] = await conn.query(
-          `SELECT id, email FROM users WHERE email IN (${placeholders})`,
-          all
-        );
+        const [users] = await conn.query(`SELECT id, email FROM users WHERE email IN (${placeholders})`, all);
         for (const rcp of users) {
-          const [[inbox]] = await conn.query(
-            "SELECT id FROM mailboxes WHERE user_id = ? AND system_box = 'inbox' LIMIT 1",
-            [rcp.id]
-          );
+          const [[inbox]] = await conn.query("SELECT id FROM mailboxes WHERE user_id = ? AND system_box = 'inbox' LIMIT 1", [rcp.id]);
           if (!inbox) continue;
 
-
-          // 🛡️ RULE ENGINE & AUTOMATION
           let targetMailboxId = inbox.id;
-          let markRead = 0;
-          let markStarred = 0; // Priority
+          let markRead = 0, markStarred = 0;
 
           if (scanResults) {
-            const rules = await processUserRules(rcp.id, {
-              from_email: sender.email,
-              subject: subject || '',
-              body: cleanBody || '',
-              attachments: attachmentsList
-            }, scanResults);
-
+            const rules = await processUserRules(rcp.id, { from_email: sender.email, subject: subject || '', body: cleanBody || '', attachments: attachmentsList }, scanResults);
             if (rules.moveToFolderId) targetMailboxId = rules.moveToFolderId;
             if (rules.markRead) markRead = 1;
             if (rules.markImportant) markStarred = 1;
-
-            // Auto-flag based on scan
             if (scanResults.priority) markStarred = 1;
           }
 
-          // Use INSERT IGNORE to prevent duplicate entries
           await conn.query(
-            `INSERT IGNORE INTO email_mailbox (user_id, email_id, mailbox_id, is_read, is_starred)
-             VALUES (?, ?, ?, ?, ?)`,
+            `INSERT IGNORE INTO email_mailbox (user_id, email_id, mailbox_id, is_read, is_starred) VALUES (?, ?, ?, ?, ?)`,
             [rcp.id, emailId, targetMailboxId, markRead, markStarred]
           );
         }
@@ -1634,6 +1617,29 @@ router.post("/email/create", async (req, res) => {
 
     await conn.commit();
     res.json({ success: true, email_id: emailId });
+
+    // 🚀 BACKGROUND TASKS (Non-blocking for response)
+    if (!is_draft && !p2p_enabled) {
+      setImmediate(async () => {
+        try {
+          const transporter = nodemailer.createTransport({ host: "127.0.0.1", port: 25, secure: false, tls: { rejectUnauthorized: false } });
+          const sendOptions = { from: `"${sender.name}" <${sender.email}>`, to: toList.join(", "), subject: subject || "(No Subject)", html: cleanBody };
+          if (ccList.length) sendOptions.cc = ccList.join(", ");
+          if (bccList.length) sendOptions.bcc = bccList.join(", ");
+          if (attachmentsList.length) {
+            sendOptions.attachments = attachmentsList.map((a) => {
+              if (!a.filename) return null;
+              const content = a.content_base64 || a.content;
+              if (!content && a.p2p_message_id) return null;
+              return { filename: a.filename, content: content, encoding: "base64", contentType: a.mime_type || "application/octet-stream" };
+            }).filter(Boolean);
+          }
+          await transporter.sendMail(sendOptions);
+        } catch (smtpErr) {
+          console.error("SMTP background send error:", smtpErr);
+        }
+      });
+    }
   } catch (err) {
     try { await conn.rollback(); } catch (e) { /* ignore */ }
     console.error("EMAIL CREATE ERROR:", err);
@@ -1869,6 +1875,114 @@ router.post("/email/delete", async (req, res) => {
   res.json({ success: true });
 });
 
+router.post("/email/bulk-actions", async (req, res) => {
+  const { user_id, email_ids, action, value } = req.body;
+
+  if (!user_id || !email_ids || !Array.isArray(email_ids) || !action) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  if (email_ids.length === 0) return res.json({ success: true, count: 0 });
+
+  try {
+    if (action === 'delete') {
+      const [[trash]] = await db.query(
+        "SELECT id FROM mailboxes WHERE user_id = ? AND system_box = 'trash' LIMIT 1",
+        [user_id]
+      );
+
+      if (trash) {
+        await db.query(
+          `UPDATE email_mailbox 
+           SET mailbox_id = ?, is_deleted = 1, deleted_at = NOW()
+           WHERE user_id = ? AND email_id IN (?)`,
+          [trash.id, user_id, email_ids]
+        );
+      }
+    } else if (action === 'delete_permanent') {
+      // 1. Delete from user's mailbox
+      await db.query(
+        "DELETE FROM email_mailbox WHERE user_id = ? AND email_id IN (?)",
+        [user_id, email_ids]
+      );
+
+      // 2. Identify orphaned emails (no mailbox references)
+      // Check which of the deleted IDs no longer exist in email_mailbox
+      const [orphans] = await db.query(
+        "SELECT id, user_id FROM emails WHERE id IN (?) AND id NOT IN (SELECT email_id FROM email_mailbox)",
+        [email_ids]
+      );
+
+      // 3. Clean up orphaned emails and update storage
+      if (orphans.length > 0) {
+        const orphanIds = orphans.map(o => o.id);
+
+        // Calculate storage to free per user
+        // We need to sum up attachment sizes for each orphaned email
+        const [atts] = await db.query(
+          "SELECT email_id, size_bytes FROM email_attachments WHERE email_id IN (?)",
+          [orphanIds]
+        );
+
+        const emailSizeMap = {};
+        atts.forEach(a => {
+          emailSizeMap[a.email_id] = (emailSizeMap[a.email_id] || 0) + Number(a.size_bytes || 0);
+        });
+
+        // Group by user_id to update storage
+        const userFreedSpace = {};
+        orphans.forEach(o => {
+          const size = emailSizeMap[o.id] || 0;
+          if (size > 0) {
+            userFreedSpace[o.user_id] = (userFreedSpace[o.user_id] || 0) + size;
+          }
+        });
+
+        // Update storage for each affected user
+        for (const [uid, bytes] of Object.entries(userFreedSpace)) {
+          await storageService.updateUsage(uid, -bytes);
+        }
+
+        // 4. Finally delete from emails table
+        await db.query(
+          "DELETE FROM emails WHERE id IN (?)",
+          [orphanIds]
+        );
+      }
+    } else if (action === 'move') {
+      if (!value) return res.status(400).json({ error: "Target folder_id required for move" });
+
+      // Verify target folder belongs to user
+      const [[folder]] = await db.query(
+        "SELECT id FROM mailboxes WHERE id = ? AND user_id = ? LIMIT 1",
+        [value, user_id]
+      );
+
+      if (!folder) return res.status(403).json({ error: "Invalid target folder" });
+
+      await db.query(
+        "UPDATE email_mailbox SET mailbox_id = ? WHERE user_id = ? AND email_id IN (?)",
+        [value, user_id, email_ids]
+      );
+    } else if (action === 'star') {
+      await db.query(
+        "UPDATE email_mailbox SET is_starred = ? WHERE user_id = ? AND email_id IN (?)",
+        [value ? 1 : 0, user_id, email_ids]
+      );
+    } else if (action === 'read') {
+      await db.query(
+        "UPDATE email_mailbox SET is_read = ? WHERE user_id = ? AND email_id IN (?)",
+        [value ? 1 : 0, user_id, email_ids]
+      );
+    }
+
+    res.json({ success: true, count: email_ids.length });
+  } catch (err) {
+    console.error("BULK ACTION ERROR:", err);
+    res.status(500).json({ error: "Bulk action failed" });
+  }
+});
+
 router.post("/email/delete-permanent", async (req, res) => {
   const { email_id, user_id } = req.body || {};
 
@@ -1876,6 +1990,22 @@ router.post("/email/delete-permanent", async (req, res) => {
     "DELETE FROM email_mailbox WHERE email_id = ? AND user_id = ?",
     [email_id, user_id]
   );
+
+  // Rule 4.1: Permanent deletion frees space
+  // Check if no more mailboxes Reference this email (fully deleted)
+  const [[refs]] = await db.query("SELECT COUNT(*) as count FROM email_mailbox WHERE email_id = ?", [email_id]);
+  if (refs.count === 0) {
+    const [atts] = await db.query("SELECT size_bytes FROM email_attachments WHERE email_id = ?", [email_id]);
+    let totalFreed = 0;
+    atts.forEach(a => totalFreed += Number(a.size_bytes || 0));
+
+    // We assume the original sender is the one who was charged
+    // Find the original sender
+    const [[email]] = await db.query("SELECT user_id FROM emails WHERE id = ?", [email_id]);
+    if (email) {
+      await storageService.updateUsage(email.user_id, -totalFreed);
+    }
+  }
 
   await db.query(
     "DELETE FROM emails WHERE id = ? AND id NOT IN (SELECT email_id FROM email_mailbox)",

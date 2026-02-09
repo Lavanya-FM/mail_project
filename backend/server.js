@@ -29,8 +29,17 @@ app.use((req, res, next) => {
 // -------------------------
 const authJwt = require('./authJwt');
 app.use((req, res, next) => {
+  console.log(`>>> SERVER REQ: ${req.method} ${req.path}`);
   if (req.path === '/api/p2p') return next();
   authJwt(req, res, next);
+});
+
+// -------------------------
+// LOGGING
+// -------------------------
+app.use((req, res, next) => {
+  console.log(`[REQ] ${req.method} ${req.url}`);
+  next();
 });
 
 // -------------------------
@@ -52,11 +61,12 @@ app.get('/p2p-sw.js', (req, res) => {
 app.use('/uploads', (req, res) => {
   res.status(404).json({ error: 'File not found' });
 });
+app.use('/api/drive', require('./drive'));
+app.use('/api/storage', require('./storageController')); // Storage Analytics
+app.use('/api/permissions', require('./permissionRoutes')); // Permission Management
 app.use('/api', require('./mail'));
 app.use('/api', require('./draftController')); // Gmail-style draft management
-app.use('/api/drive', require('./drive'));
 app.use('/api/scan', require('./scanController')); // File Security Scanning
-app.use('/api/storage', require('./storageController')); // Storage Analytics
 app.use('/api/carbon', require('./carbonService'));
 
 // Chat Routes
@@ -83,6 +93,16 @@ app.use(express.static(clientBuildPath, {
     res.setHeader('Expires', '0');
   }
 }));
+
+// --- API 404 Handler (Prevent HTML Fallback for API routes) ---
+app.use('/api', (req, res) => {
+  console.warn(`[404] Missing API route: ${req.method} ${req.url}`);
+  res.status(404).json({
+    error: "API endpoint not found",
+    method: req.method,
+    path: req.url
+  });
+});
 
 // Handle SPA fallback - send index.html for any other requests
 // Disable cache for index.html to ensure new builds are seen

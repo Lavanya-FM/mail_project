@@ -13,6 +13,9 @@ const openRoutes = [
 ];
 
 module.exports = function (req, res, next) {
+  if (req.path.startsWith('/api/drive')) {
+    console.log(`[Auth] Checking drive request: ${req.method} ${req.path}`);
+  }
   // Skip JWT for open routes
   if (openRoutes.some((r) => req.path.startsWith(r))) {
     return next();
@@ -21,9 +24,9 @@ module.exports = function (req, res, next) {
   const authHeader = req.headers.authorization || "";
 
   // Skip if no token at all
-if (!authHeader || !authHeader.startsWith("Bearer ")) {
-  return next(); // or return 401
-}
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return next(); // or return 401
+  }
 
   const token = authHeader.replace("Bearer ", "").trim();
   if (!token) {

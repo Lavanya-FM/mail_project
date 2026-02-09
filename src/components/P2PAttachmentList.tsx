@@ -16,42 +16,55 @@ interface P2PAttachment {
   p2p_status?: 'pending' | 'delivered' | 'failed';
   // New Scan Fields
   id?: number; // Needed for keying
-  scan_status?: 'pending' | 'scanning' | 'clean' | 'infected';
+  scan_status?: 'pending' | 'scanning' | 'CLEAN' | 'BLOCKED' | 'TIMEOUT' | string;
   scan_message?: string;
 }
 
 function ScanStatusBadge({ status, message }: { status: string, message: string }) {
-  const s = status?.toLowerCase();
+  const s = status?.toUpperCase();
 
   // Minimalistic Indications
-  if (s === 'scanning' || s === 'pending') {
+  if (s === 'SCANNING' || s === 'PENDING') {
     return (
-      <span className="text-blue-500" title="Scanning...">
+      <span className="text-blue-500 flex items-center gap-1" title="Scanning in progress...">
         <Loader className="w-3 h-3 animate-spin" />
+        <span className="text-[10px]">Scanning</span>
       </span>
     );
   }
 
-  if (s === 'clean') {
+  if (s === 'CLEAN') {
     return (
-      <span className="text-green-500" title="Scan complete: Safe">
+      <span className="text-green-500 flex items-center gap-1" title="Scan complete: Safe">
         <CheckCircle className="w-3 h-3" />
+        <span className="text-[10px]">Safe</span>
       </span>
     );
   }
 
-  if (s === 'not_scanned') {
+  if (s === 'TIMEOUT') {
     return (
-      <span className="text-amber-500 cursor-help" title={`Scan skipped/timeout: ${message || 'Proceed with caution'}`}>
+      <span className="text-amber-500 cursor-help flex items-center gap-1" title={`Scan timeout: ${message || 'System busy'}. Access blocked for safety.`}>
         <AlertCircle className="w-3 h-3" />
+        <span className="text-[10px]">Timeout</span>
       </span>
     );
   }
 
-  if (s === 'infected' || s === 'malware' || s === 'risk' || s === 'blocked') {
+  if (s === 'BLOCKED') {
     return (
-      <span className="text-red-500" title={`Blocked: ${message}`}>
+      <span className="text-red-500 flex items-center gap-1" title={`Blocked: ${message || 'Security Risk'}`}>
         <XCircle className="w-3 h-3" />
+        <span className="text-[10px]">Blocked</span>
+      </span>
+    );
+  }
+
+  if (s === 'SKIPPED') {
+    return (
+      <span className="text-gray-500 flex items-center gap-1" title={`Scan skipped: ${message || 'File too large'}. Proceed with caution.`}>
+        <AlertCircle className="w-3 h-3" />
+        <span className="text-[10px]">Unscanned</span>
       </span>
     );
   }
@@ -240,6 +253,21 @@ export default function P2PAttachmentList({
         }
       }
 
+      // NEW: Hydrate scan status from persistent storage to avoid "Scanning" zombie state
+      const scanUpdates: Record<string, { status: string, message: string }> = {};
+      await Promise.all(attachments.map(async (attachment) => {
+        if (attachment.is_p2p && attachment.p2p_message_id) {
+          const meta = await p2pService.getTransferMeta(attachment.p2p_message_id);
+          if (meta && meta.scanStatus) {
+            scanUpdates[attachment.p2p_message_id] = {
+              status: meta.scanStatus,
+              message: meta.scanMessage || ''
+            };
+          }
+        }
+      }));
+      setScanStatuses(prev => ({ ...prev, ...scanUpdates }));
+
       setDownloadStatus(prev => ({ ...prev, ...statuses }));
       setDownloadProgress(prev => ({ ...prev, ...progress }));
       setTransferDetails(prev => {
@@ -287,6 +315,14 @@ export default function P2PAttachmentList({
   };
 
   const handleDownload = async (attachment: P2PAttachment) => {
+    // 🛡️ SECURITY CHECK
+    const currentStatus = (attachment.p2p_message_id ? (scanStatuses[attachment.p2p_message_id]?.status || (attachment as any).scan_status || 'pending') : 'pending');
+    // Normalize status to match Strict Uppercase types
+    if (!canDownload(currentStatus.toUpperCase() as ScanStatus)) {
+      toast.error('File scan pending or blocked. Cannot download.', { icon: '🛡️' });
+      return;
+    }
+
     if (attachment.content_base64) {
       downloadFileFromBase64(attachment.filename, attachment.content_base64, attachment.mime_type);
       return;
@@ -344,7 +380,7 @@ export default function P2PAttachmentList({
     if (mode === 'sender') {
       if (p2pService.hasFileInRegistry(attachment.p2p_message_id)) {
         return (
-          <div title="Hosting file for P2P">
+          <div title="Hosting file for Direct Transfer">
             <CheckCircle className="w-5 h-5 text-green-500" />
           </div>
         );
@@ -424,19 +460,20 @@ export default function P2PAttachmentList({
     if (status === 'complete') return mode === 'sender' ? 'File Received' : 'Downloaded';
     if (status === 'failed') return 'Transfer failed';
     if (status === 'waiting') return 'Waiting for sender online...';
-    return 'Available via P2P';
+    return 'Available via Direct Transfer';
   };
+
 
   if (!attachments || attachments.length === 0) return null;
 
   return (
-    <div className="mt-4 border-t pt-4">
-      <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
-        <FileIcon className="w-4 h-4" />
-        Attachments ({attachments.length})
+    <div className="mt-2">
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3 flex items-center gap-2">
+        <FileIcon className="w-3.5 h-3.5" />
+        {attachments.length} Attachment{attachments.length !== 1 ? 's' : ''}
       </h3>
 
-      <div className="space-y-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {attachments.map((attachment, idx) => {
           const isP2P = attachment.is_p2p && !attachment.content_base64;
           const status = downloadStatus[attachment.p2p_message_id] || 'idle';
@@ -446,130 +483,111 @@ export default function P2PAttachmentList({
           const isDownloading = status === 'downloading';
 
           return (
-            <div key={idx} className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700">
-              <div className="flex-shrink-0">
-                <FileIcon className="w-8 h-8 text-gray-500" />
+            <div key={idx} className="group relative flex items-start gap-3 p-3 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-700 hover:shadow-md transition-shadow">
+              <div className="flex-shrink-0 mt-1">
+                <div className="w-8 h-8 rounded bg-gray-100 dark:bg-slate-700 flex items-center justify-center">
+                  <FileIcon className="w-4 h-4 text-gray-500" />
+                </div>
               </div>
 
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{attachment.filename}</p>
-                <div className="flex items-center gap-2 mt-1">
+                <p className="text-sm font-medium truncate text-gray-900 dark:text-gray-100" title={attachment.filename}>{attachment.filename}</p>
+                <div className="flex flex-wrap items-center gap-2 mt-0.5">
                   <span className="text-xs text-gray-500">{formatFileSize(attachment.size_bytes)}</span>
-                  {isP2P && <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 rounded">P2P Transfer</span>}
-                  <span className="text-xs text-gray-500">{getStatusLabel(attachment)}</span>
+                  {!isStandardAttachment && <span className="text-[10px] font-medium text-blue-600 dark:text-blue-400">Direct Transfer</span>}
 
-                  {/* Scan Status Badge (Inline) */}
+                  {/* Status Text - Truncated */}
+                  <span className="text-xs text-gray-500 truncate max-w-[100px]" title={getStatusLabel(attachment)}>
+                    {getStatusLabel(attachment)}
+                  </span>
+                </div>
+
+                {/* Inline Controls Row */}
+                <div className="flex items-center gap-2 mt-2">
+                  {/* Scan Badge */}
                   <ScanStatusBadge
                     status={attachment.p2p_message_id ? (scanStatuses[attachment.p2p_message_id]?.status || (attachment as any).scan_status || 'pending') : 'pending'}
                     message={attachment.p2p_message_id ? (scanStatuses[attachment.p2p_message_id]?.message || (attachment as any).scan_reason || '') : ''}
                   />
 
-                  {/* Open File Link if available */}
+                  <div className="flex-1"></div>
+
+                  {/* Open File Link */}
                   {(status === 'complete' || (mode === 'receiver' && isSenderWithFile) || (mode === 'sender' && isSenderWithFile)) && (
                     <button
                       onClick={async () => {
                         let blob: Blob | null | undefined = await p2pService.getReceivedBlob(attachment.p2p_message_id);
-                        if (!blob && mode === 'sender') {
-                          // Sender might have it in TransferRegistry but not receivedFiles map? 
-                          // Actually sender has it in p2pService.senderTransferRegistry.get(id).file
-                          blob = p2pService.getSenderFileBlob(attachment.p2p_message_id);
-                        }
-
+                        if (!blob && mode === 'sender') blob = p2pService.getSenderFileBlob(attachment.p2p_message_id);
                         if (blob) {
                           const url = URL.createObjectURL(blob);
                           window.open(url, '_blank');
-                          setTimeout(() => URL.revokeObjectURL(url), 60000); // 1 min validity
+                          setTimeout(() => URL.revokeObjectURL(url), 60000);
                         } else {
                           toast.error('File not found locally');
                         }
                       }}
-                      className="text-xs text-indigo-600 hover:text-indigo-800 underline ml-2 cursor-pointer z-10"
-                      title="Open file in new tab"
+                      className="text-xs font-medium text-gray-600 hover:text-blue-600 dark:text-gray-400 dark:hover:text-blue-400 transition-colors"
                     >
-                      View File
+                      Open
                     </button>
                   )}
+
+                  {/* Download Action */}
+                  <div className="flex-shrink-0">
+                    {mode === 'receiver' && (
+                      <>
+                        {(status === 'idle' || status === 'failed' || status === 'complete' || isStandardAttachment) && !isDownloading && !isPaused && (
+                          <button
+                            onClick={() => handleDownload(attachment)}
+                            className={`p-1.5 rounded-full transition-colors ${(attachment.p2p_message_id && (scanStatuses[attachment.p2p_message_id]?.status === 'blocked' || (attachment as any).scan_status === 'blocked'))
+                              ? 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                              : 'bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50'
+                              }`}
+                            title="Download"
+                            disabled={!canDownload(((attachment.p2p_message_id && scanStatuses[attachment.p2p_message_id]?.status) || (attachment as any).scan_status || 'pending') as ScanStatus)}
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {(isDownloading || isPaused) && (
+                          <div className="flex items-center gap-1">
+                            {isDownloading ? (
+                              <button onClick={() => p2pService.pauseReceive(attachment.p2p_message_id)} className="p-1.5 hover:bg-yellow-100 rounded text-yellow-600"><Pause className="w-3.5 h-3.5" /></button>
+                            ) : (
+                              <button onClick={() => p2pService.resumeReceive(attachment.p2p_message_id, senderEmail)} className="p-1.5 hover:bg-green-100 rounded text-green-600"><Play className="w-3.5 h-3.5" /></button>
+                            )}
+                            <button onClick={() => p2pService.cancelTransfer(attachment.p2p_message_id)} className="p-1.5 hover:bg-red-100 rounded text-red-600"><XCircle className="w-3.5 h-3.5" /></button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              <div className="flex-shrink-0">
-                {getStatusIcon(attachment)}
-              </div>
-
-              <div className="flex items-center gap-2">
-                {/* Download controls for receiver */}
-                {mode === 'receiver' && (
-                  <>
-                    {(status === 'idle' || status === 'failed' || status === 'complete' || isStandardAttachment) && !isDownloading && !isPaused && (
-                      <button
-                        onClick={() => handleDownload(attachment)}
-                        className={`p-2 rounded-full transition-colors ${(attachment.p2p_message_id && (scanStatuses[attachment.p2p_message_id]?.status === 'blocked' || (attachment as any).scan_status === 'blocked'))
-                          ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                          : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
-                          }`}
-                        title={
-                          (attachment.p2p_message_id && (scanStatuses[attachment.p2p_message_id]?.status === 'blocked' || (attachment as any).scan_status === 'blocked'))
-                            ? 'Download blocked for security reasons'
-                            : 'Download file'
-                        }
-                        disabled={
-                          !canDownload(
-                            ((attachment.p2p_message_id && scanStatuses[attachment.p2p_message_id]?.status)
-                              || (attachment as any).scan_status
-                              || 'pending') as ScanStatus
-                          )
-                        }
-                      >
-                        <Download className="w-4 h-4" />
-                      </button>
-                    )}
-
-                    {isDownloading && (
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => p2pService.pauseReceive(attachment.p2p_message_id)} className="p-1.5 hover:bg-yellow-100 rounded-lg" title="Pause"><Pause className="w-4 h-4 text-yellow-600" /></button>
-                        <button onClick={() => p2pService.cancelTransfer(attachment.p2p_message_id)} className="p-1.5 hover:bg-red-100 rounded-lg" title="Cancel"><XCircle className="w-4 h-4 text-red-600" /></button>
-                      </div>
-                    )}
-
-                    {isPaused && (
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => p2pService.resumeReceive(attachment.p2p_message_id, senderEmail)} className="p-1.5 hover:bg-green-100 rounded-lg" title="Resume"><Play className="w-4 h-4 text-green-600" /></button>
-                        <button onClick={() => p2pService.cancelTransfer(attachment.p2p_message_id)} className="p-1.5 hover:bg-red-100 rounded-lg" title="Cancel"><XCircle className="w-4 h-4 text-red-600" /></button>
-                      </div>
-                    )}
-                  </>
+                {/* Progress Bar for downloading/paused */}
+                {(isDownloading || isPaused) && (
+                  <div className="mt-2 h-1 w-full bg-gray-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${isPaused ? 'bg-yellow-400' : 'bg-blue-500'}`}
+                      style={{ width: `${downloadProgress[attachment.p2p_message_id] || 0}%` }}
+                    />
+                  </div>
                 )}
 
-                {/* Request Back for sender */}
-                {mode === 'sender' && isP2P && !isSenderWithFile && (
-                  <button
-                    onClick={() => {
-                      p2pService.sendChat(senderEmail, `I lost the local copy of "${attachment.filename}". Requesting it back.`, {
-                        type: 'file-request-nudge',
-                        messageId: attachment.p2p_message_id,
-                        fileName: attachment.filename
-                      });
-                      toast.success('File requested back from recipient');
-                    }}
-                    className="text-[10px] px-2 py-1 bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 rounded-lg hover:bg-purple-200"
-                  >
-                    Request Back
-                  </button>
-                )}
               </div>
-
-
             </div>
           );
         })}
       </div>
 
       {mode === 'receiver' && attachments.some(a => a.is_p2p && !a.content_base64) && (
-        <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg flex items-start gap-2">
-          <AlertCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
-          <div className="text-xs text-blue-800 dark:text-blue-300">
-            <strong>P2P Transfer:</strong> Files will be downloaded directly from sender. Sender must be online.
-          </div>
+        <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2 bg-blue-50/50 border border-blue-100 dark:bg-blue-900/10 dark:border-blue-800 rounded-full text-[10px] text-blue-600 dark:text-blue-400 justify-center">
+          <span className="font-semibold flex items-center gap-1"><CheckCircle className="w-3 h-3" /> Direct Transfer Active</span>
+          <span className="flex items-center gap-1 text-blue-600/70 dark:text-blue-400/70"> Sender must be online to download</span>
+          <span className="hidden sm:inline w-px h-3 bg-blue-200 dark:bg-blue-800"></span>
+          <span className="flex items-center gap-1 text-gray-500 dark:text-gray-400">🔒 Encrypted</span>
+          <span className="flex items-center gap-1 text-gray-500 dark:text-gray-400">⚡ Auto-Resume</span>
+          <span className="flex items-center gap-1 text-gray-500 dark:text-gray-400">🛡️ Scanned</span>
         </div>
       )}
     </div>

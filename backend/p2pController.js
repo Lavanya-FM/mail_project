@@ -318,14 +318,33 @@ async function handleRegister(ws, connectionId, msg, wss) {
     );
     user = payload.user || payload;
   } catch (e) {
-    console.error('[P2P] Token verification failed:', e.message);
-    ws.send(JSON.stringify({
-      type: 'error',
-      message: 'Invalid auth token'
-    }));
-    // Give client time to receive the error before closing
-    setTimeout(() => ws.close(), 100);
-    return;
+    if (e.name === 'TokenExpiredError') {
+      console.warn('[P2P] Token expired, allowing connection with grace period');
+      const decoded = jwt.decode(token);
+      if (decoded && (decoded.user || decoded)) {
+        user = decoded.user || decoded;
+      } else {
+        ws.send(JSON.stringify({ type: 'error', message: 'Token expired and invalid' }));
+        setTimeout(() => ws.close(), 100);
+        return;
+      }
+    } else {
+      console.error('[P2P] Token verification failed:', e.message);
+      console.error('[P2P] Debug Info:', {
+        hasSecret: !!process.env.JWT_SECRET,
+        errorName: e.name,
+        tokenStart: token ? token.substring(0, 10) : 'null'
+      });
+
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: 'Invalid auth token',
+        details: e.message
+      }));
+      // Give client time to receive the error before closing
+      setTimeout(() => ws.close(), 100);
+      return;
+    }
   }
 
   let { id: userId, email: rawEmail } = user;
@@ -489,16 +508,41 @@ async function handleFileChunk(ws, msg) {
 
   // 3. SAVE TO SERVER DISK (Background)
   const chunkFile = path.join(P2P_CHUNKS_DIR, `${messageId}_${chunkIndex || 0}.chunk`);
-  const buffer = Buffer.from(data, 'base64');
-  fsPromises.writeFile(chunkFile, buffer).then(() => {
-    return db.query(`
-      INSERT INTO p2p_server_chunks (message_id, chunk_index, sender_email, recipient_email, data_path)
-      VALUES (?, ?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE data_path = VALUES(data_path), expires_at = (CURRENT_TIMESTAMP + INTERVAL 24 HOUR)
-    `, [messageId, chunkIndex || 0, from, to, chunkFile]);
-  }).catch(err => {
-    // Silent fail for background tasks
-  });
+
+  try {
+    let dataStr;
+    if (Buffer.isBuffer(data)) {
+      dataStr = data.toString('base64');
+    } else if (typeof data === 'string') {
+      dataStr = data;
+    } else if (data && typeof data === 'object' && data.data) {
+      dataStr = Buffer.from(data.data).toString('base64');
+    } else {
+      throw new Error(`Unsupported data type: ${typeof data}`);
+    }
+
+    // Save as JSON so handleChunkRequest can read it easily
+    const chunkData = JSON.stringify({
+      from,
+      to,
+      data: dataStr,
+      payload,
+      messageId,
+      chunkIndex
+    });
+
+    fsPromises.writeFile(chunkFile, chunkData).then(() => {
+      return db.query(`
+        INSERT INTO p2p_server_chunks (message_id, chunk_index, sender_email, recipient_email, data_path)
+        VALUES (?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE data_path = VALUES(data_path), expires_at = (CURRENT_TIMESTAMP + INTERVAL 24 HOUR)
+      `, [messageId, chunkIndex || 0, from, to, chunkFile]);
+    }).catch(err => {
+      console.error(`[P2P] DB error caching chunk ${messageId}:${chunkIndex}:`, err.message);
+    });
+  } catch (err) {
+    console.error(`[P2P] Failed to cache chunk on server: ${err.message}`);
+  }
 }
 
 async function handleChunkRequest(ws, msg) {
@@ -659,6 +703,15 @@ async function handleFileScanUpdate(msg) {
 
     if (from) broadcastToUser(from, updateMsg);
     if (to) broadcastToUser(to, updateMsg);
+
+    // 🛡️ Audit Log for Scan Result
+    if (from || to) {
+      await logDeliveryEvent(null, messageId, from, to || 'unknown', 'SCAN_RESULT', {
+        status: scan_status,
+        reason: scan_reason,
+        engine: scan_engine
+      });
+    }
 
   } catch (err) {
     console.error('[P2P] Failed to update scan status:', err);

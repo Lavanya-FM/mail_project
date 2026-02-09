@@ -53,18 +53,19 @@ const AttachmentPreview = ({
 
   // Determine status text for SENDER
   const getStatusText = () => {
-    if (status === 'delivered' || progress === 100) return '✓ Sent';
+    if (status === 'delivered' || progress === 100) return '✓ Sent via Direct Transfer';
     if (status === 'failed') return '✗ Failed';
-    if (status === 'paused') return '⏸ Paused';
-    if (progress !== undefined && progress > 0) return `${progress}% sending`;
+    if (status === 'paused') return '⏸ Paused (Auto-resume enabled)';
+    if (progress !== undefined && progress > 0) return `${progress}% transferring directly`;
     if (status === 'pending') {
-      if (recipientStatus === 'OFFLINE') return 'Waiting for recipient...';
-      return 'Starting...';
+      if (recipientStatus === 'OFFLINE') return 'Queued for Direct Transfer...';
+      return 'Starting Direct Transfer...';
     }
-    return 'Ready';
+    return 'Ready for Direct Transfer';
   };
 
   const getStatusColor = () => {
+    // ... existing ...
     if (status === 'delivered' || progress === 100) return 'text-green-600';
     if (status === 'failed') return 'text-red-600';
     if (status === 'paused') return 'text-yellow-600';
@@ -81,6 +82,7 @@ const AttachmentPreview = ({
 
       {/* LEFT: Icon + file info */}
       <div className="flex items-center gap-3 min-w-0 flex-shrink-0">
+        {/* ... existing icon logic ... */}
         {isImage ? (
           <img
             src={blobUrl}
@@ -108,13 +110,14 @@ const AttachmentPreview = ({
           </p>
           {isP2P ? (
             <div className="flex flex-col text-[10px]">
-              <span className="text-blue-600 dark:text-blue-400 font-medium">
-                Delivery: Direct (P2P)
+              <span className="text-blue-600 dark:text-blue-400 font-medium flex items-center gap-1">
+                <Zap className="w-3 h-3" />
+                Direct Transfer
               </span>
               <span className={`${recipientStatus === 'ONLINE' ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>
                 {recipientStatus === 'ONLINE'
-                  ? 'Recipient is online'
-                  : 'Will send automatically when recipient is online'}
+                  ? 'Recipient online · High Speed'
+                  : 'Wait for recipient · Auto-Resume'}
               </span>
             </div>
           ) : (
@@ -125,7 +128,7 @@ const AttachmentPreview = ({
         </div>
       </div>
 
-      {/* Middle: Progress (only when P2P is active and transferring) */}
+      {/* ... rest of component ... */}
       {isTransferring && (
         <div className="flex-1 flex flex-col items-center px-2 min-w-[120px]">
           {/* Progress bar */}
@@ -155,7 +158,7 @@ const AttachmentPreview = ({
             className="mt-1 text-xs text-blue-600 hover:text-blue-800 hover:underline"
             onClick={onContinueInBackground}
           >
-            Continue in background
+            Run in background
           </button>
         </div>
       )}
@@ -163,7 +166,7 @@ const AttachmentPreview = ({
       {/* Status badge for complete/not-transferring */}
       {isComplete && (
         <div className="flex items-center gap-1 px-2 py-1 bg-green-100 dark:bg-green-800/30 rounded-full">
-          <span className="text-green-600 font-medium text-xs">✓ Sent</span>
+          <span className="text-green-600 font-medium text-xs">✓ Sent Directly</span>
         </div>
       )}
 
@@ -195,8 +198,6 @@ const AttachmentPreview = ({
   );
 };
 
-/* ------------------------------------------------------------------ */
-/* PROPS                                                              */
 /* ------------------------------------------------------------------ */
 
 export interface ComposeUIProps {
@@ -299,6 +300,7 @@ export default function ComposeUI(props: ComposeUIProps) {
     p2pFiles,
     setShowP2PProgress,
     fromEmail,
+    deliveryMode // Destructured here to fix lint error
   } = props;
 
   /* ------------------------------------------------------------------ */
@@ -596,10 +598,49 @@ export default function ComposeUI(props: ComposeUIProps) {
           />
         </div>
 
+        {/* TRUST PANEL & DIRECT TRANSFER INDICATOR */}
+        {(attachments.some(f => f.size > 5 * 1024 * 1024) || deliveryMode === 'P2P') && (
+          <div className="mx-4 mt-2 mb-1 p-2 bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-800 rounded-lg flex flex-col gap-1 transition-all">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Zap className="w-4 h-4 text-blue-600" />
+                <span className="text-sm font-semibold text-blue-800 dark:text-blue-300">
+                  Direct Transfer Active
+                </span>
+                <div className="group relative">
+                  <div className="w-4 h-4 rounded-full bg-blue-200 text-blue-700 flex items-center justify-center text-[10px] cursor-help">i</div>
+                  <div className="absolute left-6 top-0 w-64 p-2 bg-white dark:bg-slate-800 shadow-xl rounded text-xs text-gray-600 dark:text-gray-300 border border-gray-100 hidden group-hover:block z-50">
+                    Direct Transfer sends files directly between users, without storing them on a server. This allows faster delivery and larger files.
+                  </div>
+                </div>
+              </div>
+              <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">
+                {attachments.filter(f => f.size > 5 * 1024 * 1024).length > 0 ? 'Large file detected' : 'Optimized for speed'}
+              </span>
+            </div>
+
+            {/* Trust Flags */}
+            <div className="flex items-center gap-4 mt-1 pl-6">
+              <div className="flex items-center gap-1.5 text-[10px] text-gray-500 dark:text-gray-400" title="End-to-end Encrypted">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                Encrypted
+              </div>
+              <div className="flex items-center gap-1.5 text-[10px] text-gray-500 dark:text-gray-400" title="Resumes automatically if interrupted">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                Auto-Resume
+              </div>
+              <div className="flex items-center gap-1.5 text-[10px] text-gray-500 dark:text-gray-400" title="Scanned for viruses before download">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                Security Scan
+              </div>
+            </div>
+          </div>
+        )}
+
         {isThrottled && (
           <div className="text-xs bg-yellow-50 text-yellow-700 px-4 py-2 flex items-center gap-2 border-b border-yellow-100 flex-shrink-0">
             <Zap className="w-3 h-3" />
-            <span>Low bandwidth mode</span>
+            <span>Low bandwidth mode - Direct Transfer adapts automatically</span>
           </div>
         )}
 

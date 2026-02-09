@@ -18,6 +18,11 @@ export interface Email {
   sent_at?: string;
   labels?: any[];
   status?: 'sent' | 'delivered' | 'read';
+  scan_result?: {
+    status: 'clean' | 'suspicious' | 'danger';
+    flags: string[];
+    timestamp: number;
+  };
   [k: string]: any;
 }
 

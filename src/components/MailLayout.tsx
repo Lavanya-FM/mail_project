@@ -3,13 +3,16 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Inbox, Send, FileEdit, Trash2, Plus, Star, Archive,
   Circle, ChevronDown,
-  Clock, AlertTriangle, Tag, Mail, Menu, Wifi, Share2, CheckCircle2, Layers
+  Clock, AlertTriangle, Tag, Mail, Menu, Wifi, Share2, CheckCircle2, Layers,
+  ShieldCheck as Shield2
 } from 'lucide-react';
 import { emailService, getFolderIdByName } from '../lib/emailService';
 import { authService } from '../lib/authService';
+import { inboxScanner } from '../lib/inboxScanner';
 import EmailList from './EmailList';
 import EmailView from './EmailView';
 import ThreadView from './ThreadView';
+import TransfersView from './TransfersView';
 import ComposeEmail from './compose/ComposeEmail';
 import GamificationBadges from './GamificationBadges';
 import ActivityLogModal from './ActivityLogModal';
@@ -50,6 +53,7 @@ const iconMap: Record<string, typeof Inbox> = {
   spam: AlertTriangle,
   trash: Trash2,
   snoozed: Clock,
+  transfers: Shield2
 };
 
 // Color mapping for each folder type
@@ -187,7 +191,10 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
         console.error('Error loading emails:', resp.error);
         setEmailsRaw([]);
       } else {
-        setEmailsRaw(resp.data ?? []);
+        const raw = resp.data ?? [];
+        // SCAN EMAILS
+        const scanned = inboxScanner.scanEmails(raw);
+        setEmailsRaw(scanned);
       }
     } catch (err) {
       console.error('Error loading emails:', err);
@@ -206,7 +213,9 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
       } else {
         const allEmails = resp.data ?? [];
         const starredEmails = allEmails.filter((email: any) => email.is_starred);
-        setEmailsRaw(starredEmails);
+        // SCAN STARRED EMAILS TOO
+        const scanned = inboxScanner.scanEmails(starredEmails);
+        setEmailsRaw(scanned);
       }
     } catch (err) {
       console.error('Error loading starred emails:', err);
@@ -361,11 +370,11 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
     if (selectedFolder) {
       if (selectedFolder.id === 'starred') {
         loadStarredEmails();
-      } else if (selectedFolder.id === 'archive') {
-        const archiveFolderId = getFolderIdByName('archive');
-        if (archiveFolderId) {
-          loadEmails(archiveFolderId);
-        }
+      } else if (selectedFolder.id === 'transfers') {
+        // For transfers, we want to see emails from both inbox and sent to match contexts
+        // Passing null/undefined usually loads inbox, but we can load all or just keep previous
+        // Let's load the last few emails without specific folder focus
+        loadEmails();
       } else {
         loadEmails(Number(selectedFolder.id));
       }
@@ -598,6 +607,18 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
             );
           })}
 
+          {/* Transfers Folder */}
+          <button
+            onClick={() => {
+              window.location.hash = 'transfers';
+              setSelectedFolder({ id: 'transfers', name: 'Transfers', system_box: 'transfers' } as any);
+              setMobileSidebarOpen(false);
+            }}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition ${animations.fadeInLeft} ${selectedFolder?.id === 'transfers' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 shadow-md' : 'text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800/50 hover:scale-105'}`}
+          >
+            <Shield2 className="w-5 h-5 flex-shrink-0 text-blue-500" />
+            <span className="flex-1 text-left font-medium text-sm">Transfers</span>
+          </button>
         </div>
 
         {/* Labels Section */}
@@ -787,57 +808,81 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
 
         {/* Email Content */}
         <div className="flex-1 flex overflow-hidden flex-col lg:flex-row">
-          {/* Email List - Mobile: Full width when no email selected, Desktop: Fixed width */}
-          <div className={`${activeTabId ? 'hidden lg:block' : 'block'} w-full lg:w-96 flex-shrink-0`}>
-            <EmailList
-              emails={filteredEmails}
-              selectedEmail={selectedEmail}
-              onSelectEmail={(email: any) => {
-                handleOpenMailInTab(email);
-              }}
-              onRefresh={refreshEmails}
-            />
-          </div>
-          <div className="flex-1 flex flex-col min-w-0 min-h-0">
-            {activeTabId ? (
-              <div className="flex-1 flex flex-col min-h-0 bg-white dark:bg-slate-900">
-                {(() => {
-                  const activeEmail = openedMailTabs.find(tab => String(tab.id) === activeTabId);
-                  if (!activeEmail) return null;
-
-                  if (activeEmail.thread_id) {
-                    return (
-                      <ThreadView
-                        threadId={String(activeEmail.thread_id)}
-                        userId={String(profile?.id || '')}
-                        onClose={() => handleCloseTab(String(activeEmail.id))}
-                        onCompose={handleComposeFromEmail}
-                      />
-                    );
-                  } else {
-                    return (
-                      <EmailView
-                        email={activeEmail}
-                        onClose={() => handleCloseTab(String(activeEmail.id))}
-                        onRefresh={refreshEmails}
-                        onCompose={handleComposeFromEmail}
-                      />
-                    );
+          {selectedFolder?.id === 'transfers' ? (
+            <div className="flex-1 overflow-hidden">
+              <TransfersView
+                onOpenEmail={async (id) => {
+                  let email = emails.find(e => String(e.id) === id);
+                  if (!email) {
+                    const res = await emailService.getEmailById(id);
+                    if (res.data) email = res.data;
                   }
-                })()}
+                  if (email) handleOpenMailInTab(email);
+                }}
+                emails={emails}
+              />
+            </div>
+          ) : (
+            <>
+              {/* Email List - Mobile: Full width when no email selected, Desktop: Fixed width */}
+              <div className={`${activeTabId ? 'hidden lg:block' : 'block'} w-full lg:w-96 flex-shrink-0`}>
+                <EmailList
+                  emails={filteredEmails}
+                  selectedEmail={selectedEmail}
+                  onSelectEmail={(email: any) => {
+                    handleOpenMailInTab(email);
+                  }}
+                  onRefresh={refreshEmails}
+                  isTrash={selectedFolder?.id === 'trash' || selectedFolder?.system_box === 'trash'}
+                  folderType={selectedFolder?.system_box || selectedFolder?.name?.toLowerCase()}
+                />
               </div>
-            ) : (
-              <div className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-slate-950">
-                <div className="text-center">
-                  <div className="w-24 h-24 bg-gray-200 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <Mail className="w-12 h-12 text-gray-400 dark:text-slate-600" />
+
+              {/* Email Detail View */}
+              <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-white dark:bg-slate-900">
+                {activeTabId ? (
+                  <div className="flex-1 flex flex-col min-h-0">
+                    {(() => {
+                      const activeEmail = openedMailTabs.find(tab => String(tab.id) === activeTabId);
+                      if (!activeEmail) return null;
+
+                      if (activeEmail.thread_id) {
+                        return (
+                          <ThreadView
+                            threadId={String(activeEmail.thread_id)}
+                            userId={String(profile?.id || '')}
+                            onClose={() => handleCloseTab(String(activeEmail.id))}
+                            onCompose={handleComposeFromEmail}
+                          />
+                        );
+                      } else {
+                        return (
+                          <EmailView
+                            email={activeEmail}
+                            onClose={() => handleCloseTab(String(activeEmail.id))}
+                            onRefresh={refreshEmails}
+                            onCompose={handleComposeFromEmail}
+                          />
+                        );
+                      }
+                    })()}
                   </div>
-                  <p className="text-gray-500 dark:text-slate-400 text-lg">Select an email to read</p>
-                  <p className="text-gray-400 dark:text-slate-500 text-sm mt-2">Emails will open in tabs above</p>
-                </div>
+                ) : (
+                  <div className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-slate-950">
+                    <div className="text-center">
+                      <div className="w-24 h-24 bg-gray-200 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 text-gray-400">
+                        <Mail className="w-12 h-12" />
+                      </div>
+                      <h3 className="text-xl font-bold text-gray-900 dark:text-white">Select a message to view</h3>
+                      <p className="text-gray-500 max-w-sm mt-2">
+                        Choose an email from the list on the left to read its content.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -851,9 +896,6 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
           prefilledData={undefined}
         />
       ))}
-
-      {/* Add Account Modal */}
-
 
       {/* Activity Log Modal */}
       <ActivityLogModal

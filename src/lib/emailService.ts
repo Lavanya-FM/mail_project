@@ -257,6 +257,17 @@ export const emailService = {
     return handleResp<any>(resp);
   },
 
+  async performBulkAction(userId: number, email_ids: number[], action: 'delete' | 'star' | 'read', value?: boolean): ApiResult<any> {
+    const url = apiUrl("/api/email/bulk-actions");
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      credentials: "include",
+      body: JSON.stringify({ user_id: userId, email_ids, action, value }),
+    });
+    return handleResp<any>(resp);
+  },
+
   async star(email_id: number, user_id: number, status: boolean): ApiResult<any> {
     const url = apiUrl("/api/email/star");
     const resp = await fetch(url, {
@@ -292,6 +303,15 @@ export const emailService = {
 
   async checkEmailExists(email: string): ApiResult<any> {
     const url = apiUrl(`/api/users/email/${encodeURIComponent(email)}`);
+    const resp = await fetch(url, {
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      credentials: "include",
+    });
+    return handleResp<any>(resp);
+  },
+
+  async getEmailById(emailId: number | string): ApiResult<any> {
+    const url = apiUrl(`/api/email/${emailId}`);
     const resp = await fetch(url, {
       headers: { "Content-Type": "application/json", ...authHeaders() },
       credentials: "include",

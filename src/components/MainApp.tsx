@@ -9,7 +9,7 @@ import AccountSwitcher from './AccountSwitcher';
 import ThemeToggle from './ThemeToggle';
 import UserProfile from './UserProfile';
 import InboxRulesModal from './InboxRulesModal';
-import SupportModal from './SupportModal';
+
 
 type View = 'mail' | 'drive' | 'calls';
 
@@ -24,7 +24,7 @@ export default function MainApp() {
     const [userProfileTab, setUserProfileTab] = useState<'overview' | 'carbon' | 'settings'>('carbon');
     const [showAppsMenu, setShowAppsMenu] = useState(false);
     const [showNotifications, setShowNotifications] = useState(false);
-    const [showSupportModal, setShowSupportModal] = useState(false);
+
 
     const user = authService.getCurrentUser() || {
         email: 'user@example.com',
@@ -144,11 +144,13 @@ export default function MainApp() {
 
                 {/* Right: Actions */}
                 <div className="flex items-center justify-end gap-1 w-80 pr-4 relative">
-                    <button
-                        onClick={() => setShowSupportModal(true)}
-                        className="p-2 text-gray-500 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full transition-colors" title="Support">
+                    <a
+                        href="/support"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-2 text-gray-500 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full transition-colors flex items-center justify-center" title="Open Support in New Tab">
                         <HelpCircle className="w-5 h-5" />
-                    </button>
+                    </a>
 
                     <button
                         onClick={() => {
@@ -295,9 +297,7 @@ export default function MainApp() {
                 <InboxRulesModal isOpen={showRulesModal} onClose={() => setShowRulesModal(false)} />
             )}
 
-            {showSupportModal && (
-                <SupportModal isOpen={showSupportModal} onClose={() => setShowSupportModal(false)} />
-            )}
+
         </div>
     );
 }

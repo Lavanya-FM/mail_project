@@ -41,9 +41,9 @@ const P2P_LIMITS = {
   BASE_KBPS: 999999,    // Unlimited - no throttling
   MIN_KBPS: 999999,     // Unlimited - no throttling  
   MAX_KBPS: 999999,     // Unlimited - no throttling
-  CHUNK_SIZE: 4 * 1024 * 1024, // 🚀 4MB CHUNKS
-  CONCURRENCY: 50, // 🚀 50 chunks in flight (Optimized for 300MB+ files)
-  BATCH_SIZE: 15,  // 🚀 15 chunks per batch request
+  CHUNK_SIZE: 1 * 1024 * 1024, // 🚀 1MB CHUNKS (Optimized for frequent UI updates)
+  CONCURRENCY: 80, // 🚀 80 chunks in flight (Highest throughput)
+  BATCH_SIZE: 20,  // 🚀 20 chunks per batch request
 };
 
 const chunkRetries = new Map<string, number>();
@@ -171,7 +171,9 @@ interface ReceiverTransferState {
   etaSeconds?: number | null;
   chunkSize?: number; // Store the chunk size used for this transfer
   scanStatus?: string;
+
   scanMessage?: string;
+  checksum?: string;
 }
 
 interface TransferState {
@@ -250,6 +252,7 @@ class StrictP2PService {
     completedAt?: number;
     scanStatus?: string;
     scanMessage?: string;
+    checksum?: string;
   }>();
 
   private activeTransfers = new Map<string, TransferState>();
@@ -1243,7 +1246,8 @@ class StrictP2PService {
         mimeType: t.file.type,
         totalChunks,
         scanStatus: t.scanStatus || 'pending',
-        scanMessage: t.scanMessage || 'Scanning...'
+        scanMessage: t.scanMessage || 'Scanning...',
+        checksum: t.checksum // 🛡️ Pass checksum to receiver
       }
     });
 
@@ -1439,11 +1443,15 @@ class StrictP2PService {
         if (messageId) {
           const rt = this.receiverTransfers.get(messageId);
           if (rt) {
-            rt.status = 'KEY_READY';
-            console.log(`[P2P] Receiver state -> KEY_READY for ${messageId}`);
-            // 🚀 ERASE BUFFER to prevent stale-decryption errors. Watchdog will re-fetch.
-            this.receiverChunkBuffer.get(messageId)?.clear();
-            this.pullMissingChunks(messageId, from);
+            if (rt.status !== 'COMPLETED') {
+              rt.status = 'KEY_READY';
+              console.log(`[P2P] Receiver state -> KEY_READY for ${messageId}`);
+              // 🚀 ERASE BUFFER to prevent stale-decryption errors. Watchdog will re-fetch.
+              this.receiverChunkBuffer.get(messageId)?.clear();
+              this.pullMissingChunks(messageId, from);
+            } else {
+              console.log(`[P2P] Transfer ${messageId} already COMPLETED. Ignoring key exchange reset.`);
+            }
           }
           this.tryStartSender(messageId);
         }
@@ -1480,10 +1488,14 @@ class StrictP2PService {
         if (messageId) {
           const rt = this.receiverTransfers.get(messageId);
           if (rt) {
-            rt.status = 'KEY_READY';
-            // 🚀 ERASE BUFFER to prevent stale-decryption errors. Watchdog will re-fetch.
-            this.receiverChunkBuffer.get(messageId)?.clear();
-            this.pullMissingChunks(messageId, from);
+            if (rt.status !== 'COMPLETED') {
+              rt.status = 'KEY_READY';
+              // 🚀 ERASE BUFFER to prevent stale-decryption errors. Watchdog will re-fetch.
+              this.receiverChunkBuffer.get(messageId)?.clear();
+              this.pullMissingChunks(messageId, from);
+            } else {
+              console.log(`[P2P] Transfer ${messageId} already COMPLETED. Ignoring key exchange ack reset.`);
+            }
           }
           this.tryStartSender(messageId);
         }
@@ -1662,7 +1674,10 @@ class StrictP2PService {
             lastUpdated: Date.now(),
             actualSize: data.size,
             startTime: Date.now(),
-            chunkSize: data.chunkSize || P2P_LIMITS.CHUNK_SIZE // 🚀 Store chunk size from sender
+            chunkSize: data.chunkSize || P2P_LIMITS.CHUNK_SIZE, // 🚀 Store chunk size from sender
+            checksum: data.checksum, // 🛡️ Capture checksum
+            scanStatus: data.scanStatus,
+            scanMessage: data.scanMessage,
           };
 
           this.receiverTransfers.set(messageId, rt);
@@ -1676,7 +1691,10 @@ class StrictP2PService {
             actualSize: data.size,
             chunkSize: rt.chunkSize, // Ensure persistent
             is_p2p: true,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            scanStatus: data.scanStatus,
+            scanMessage: data.scanMessage,
+            checksum: data.checksum
           }).catch(err => console.error('[P2P] Failed to persist meta:', err));
 
           // Sync progress from DB in case we refreshed
@@ -1710,7 +1728,10 @@ class StrictP2PService {
                 actualSize: data.size,
                 chunkSize: rt.chunkSize, // Update to new size
                 is_p2p: true,
-                lastUpdated: Date.now()
+                lastUpdated: Date.now(),
+                scanStatus: data.scanStatus,
+                scanMessage: data.scanMessage,
+                checksum: data.checksum
               });
               this.completedTransfers.add(messageId);
               rt.status = 'COMPLETED';
@@ -1736,6 +1757,7 @@ class StrictP2PService {
               actualSize: data.size,
               startTime: Date.now(),
               chunkSize: data.chunkSize || P2P_LIMITS.CHUNK_SIZE,
+              checksum: data.checksum, // 🛡️ Capture checksum
               scanStatus: data.scanStatus,
               scanMessage: data.scanMessage
             });
@@ -2181,6 +2203,30 @@ class StrictP2PService {
     }
 
     const fileBlob = new Blob(chunks, { type: mimeType });
+
+    // 🛡️ A7: Verify Checksum
+    const rt = this.receiverTransfers.get(messageId);
+    if (rt && rt.checksum) {
+      console.log(`[P2P] Verifying checksum for ${fileName}...`);
+      const calculatedHash = await this.calculateFileHash(fileBlob);
+      if (calculatedHash !== rt.checksum) {
+        console.error(`[P2P] ❌ CHECKSUM MISMATCH for ${fileName}! Expected: ${rt.checksum}, Got: ${calculatedHash}`);
+
+        window.dispatchEvent(new CustomEvent('p2p-error', {
+          detail: { messageId, error: 'File integrity check failed (Checksum Mismatch)', code: 'INTEGRITY_FAIL' }
+        }));
+
+        window.dispatchEvent(new CustomEvent('file-scan-status', {
+          detail: { messageId, status: 'BLOCKED', message: 'Integrity check failed' }
+        }));
+
+        rt.status = 'FAILED';
+        rt.reason = 'Checksum mismatch';
+        return; // Stop processing
+      }
+      console.log(`[P2P] ✅ Checksum verified for ${fileName}`);
+    }
+
     this.receivedFiles.set(messageId, fileBlob);
     this.completedTransfers.add(messageId);
 
@@ -2212,21 +2258,21 @@ class StrictP2PService {
     // 🛡️ AUTHORITATIVE RECEIVER SCAN
     console.log(`[P2P] Transfer complete. Running authoritative scan on ${fileName}...`);
     window.dispatchEvent(new CustomEvent('file-scan-status', {
-      detail: { messageId, status: 'scanning', message: 'Final security validation...' }
+      detail: { messageId, status: 'SCANNING', message: 'Final security validation...' }
     }));
 
     try {
       // 🚀 TIMEOUT PROTECTION: Don't hang UI if scan engine stalls
       const scanPromise = startFileScan(fileBlob, fileName, 'P2P');
       const timeoutPromise = new Promise<ScanResult>((_, reject) =>
-        setTimeout(() => reject(new Error('SCAN_TIMEOUT')), 30000)
+        setTimeout(() => reject(new Error('SCAN_TIMEOUT')), 30000) // 30s max
       );
 
       const scanResult: ScanResult = await Promise.race([scanPromise, timeoutPromise]).catch(() => ({
-        safe: true,
-        status: 'not_scanned' as const,
+        safe: false,
+        status: 'TIMEOUT' as const,
         message: 'Scan timeout',
-        engine: 'quick' as const,
+        engine: 'none' as const,
         timestamp: Date.now()
       }));
 
@@ -2251,18 +2297,21 @@ class StrictP2PService {
         to: this.email // We are the receiver
       });
 
-      // Fire ready event only if safe
-      if (scanResult.status !== 'blocked') {
+      // Strict Usage Gating: Only CLEAN files are 'ready'
+      if (scanResult.status === 'CLEAN') {
         window.dispatchEvent(new CustomEvent('p2p-file-ready', {
           detail: { messageId, fileName, blob: fileBlob, scanStatus: scanResult.status }
         }));
+      } else {
+        console.warn(`[P2P] File ${messageId} is ${scanResult.status}. Access denied.`);
+        // Ensure UI knows it's blocked/timeout logic
       }
 
     } catch (e) {
       console.error('[P2P] Receiver scan failed', e);
-      // Fallback to "not_scanned" on error to avoid blocking
+      // Fallback to "TIMEOUT" on error -> Enforce conservative rule
       window.dispatchEvent(new CustomEvent('file-scan-status', {
-        detail: { messageId, status: 'not_scanned', message: 'Security scan temporarily unavailable' }
+        detail: { messageId, status: 'TIMEOUT', message: 'Security scan unavailable' }
       }));
     }
   }
@@ -2295,7 +2344,7 @@ class StrictP2PService {
     // 🛡️ SENDER SCAN (Before Advertising)
     console.log(`[P2P SENDER] Scanning ${file.name} before offer...`);
     window.dispatchEvent(new CustomEvent('file-scan-status', {
-      detail: { messageId, status: 'scanning', message: 'Running security checks...' }
+      detail: { messageId, status: 'SCANNING', message: 'Running security checks...' }
     }));
 
     let scanStatus = 'pending';
@@ -2309,22 +2358,23 @@ class StrictP2PService {
       );
 
       const scanResult: ScanResult = await Promise.race([scanPromise, timeoutPromise]).catch(() => ({
-        safe: true,
-        status: 'not_scanned' as const,
+        safe: false,
+        status: 'TIMEOUT' as const,
         message: 'Scan timeout',
-        engine: 'quick' as const,
+        engine: 'none' as const,
         timestamp: Date.now()
       }));
 
+      // Uppercase statuses compatibility
       scanStatus = scanResult.status;
       scanMessage = scanResult.message;
 
-      if (scanResult.status === 'blocked') {
+      if (scanResult.status === 'BLOCKED') {
         toast.error(`Transfer blocked: ${scanResult.message}`);
         window.dispatchEvent(new CustomEvent('file-scan-status', {
-          detail: { messageId, status: 'blocked', message: scanResult.message }
+          detail: { messageId, status: 'BLOCKED', message: scanResult.message }
         }));
-        // Since we haven't registered in registry yet, we just return
+        // Block transfer if local scanner says it's bad
         return;
       }
 
@@ -2332,8 +2382,8 @@ class StrictP2PService {
         detail: { messageId, status: scanResult.status, message: scanResult.message }
       }));
 
-      if (scanResult.status === 'risk') {
-        toast(`Note: File flagged as risk: ${scanResult.message}`, { icon: '⚠️' });
+      if (scanResult.status === 'TIMEOUT') {
+        toast(`Note: Scan timed out: ${scanResult.message}. Sending anyway (Reviewer will scan again).`, { icon: '⚠️' });
       }
 
       // 🚀 NOTIFY SERVER/RECEIVER of scan result immediately
@@ -2372,7 +2422,15 @@ class StrictP2PService {
       startTime: Date.now(),
       speedBps: 0,
       etaSeconds: null,
-      chunkSize: chunkSize // 🚀 Bind chunk size to this session
+      chunkSize: chunkSize, // 🚀 Bind chunk size to this session
+      checksum: await this.calculateFileHash(file) // 🛡️ A7: Calculate integrity checksum
+    });
+
+    // 🛡️ A9: Server Audit Log (Start)
+    this.sendAuditLog(messageId, 'STARTED', {
+      fileName: file.name,
+      size: file.size,
+      checksum: this.senderTransferRegistry.get(messageId)?.checksum
     });
 
     // 🚀 Persist for reliability across refreshes (INCLUDING BLOB)
@@ -2394,7 +2452,11 @@ class StrictP2PService {
         actualSize: file.size,
         chunkSize: chunkSize,
         is_p2p: true,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        // 🛡️ A8: Persist Scan & Checksum for reliability
+        scanStatus: scanStatus,
+        scanMessage: scanMessage,
+        checksum: this.senderTransferRegistry.get(messageId)?.checksum
       });
 
       // Register in pending transfers (for UI/status tracking)
@@ -2739,6 +2801,14 @@ class StrictP2PService {
       } else {
         // Only IF not finished, try to recover 'PAUSED'/'RECEIVING' state
         await this.syncReceiverStateFromDB(messageId);
+
+        // 🛡️ Checklist B10: SCANNING on reload -> TIMEOUT
+        if (rt.scanStatus && (rt.scanStatus.toUpperCase() === 'SCANNING' || rt.scanStatus.toUpperCase() === 'PENDING')) {
+          console.warn(`[P2P] Found interrupted scan for ${fileName}. Marking as TIMEOUT.`);
+          rt.scanStatus = 'TIMEOUT';
+          rt.scanMessage = 'Scan interrupted by reload';
+        }
+
         console.log(`[P2P] Rehydrated ACTIVE transfer: ${fileName} (${rt.status})`);
       }
     }
@@ -2803,6 +2873,29 @@ class StrictP2PService {
   }
   public getSenderFileBlob(messageId: string): Blob | undefined {
     return this.senderTransferRegistry.get(messageId)?.file;
+  }
+
+  // 🛡️ A7: Implementation of File Integrity Check
+  private async calculateFileHash(file: Blob): Promise<string> {
+    const buffer = await file.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  // 🛡️ A9: Server Audit Logging Helper
+  private sendAuditLog(messageId: string, eventType: string, metadata: any = {}) {
+    this.send({
+      type: 'log-event',
+      messageId,
+      eventType,
+      metadata,
+      from: this.email,
+      timestamp: Date.now()
+    }, true);
+  }
+
+  public async getTransferMeta(messageId: string) {
+    return import('./p2pStorage').then(m => m.getMeta(messageId));
   }
 }
 

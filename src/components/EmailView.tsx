@@ -11,7 +11,7 @@ import { callService } from '../lib/callService';
 import toast from 'react-hot-toast';
 import P2PAttachmentList from './P2PAttachmentList';
 
-
+import { summaryService } from '../lib/summaryService';
 type EmailViewProps = {
   email: Email | null;
   onClose: () => void;
@@ -102,6 +102,10 @@ export default function EmailView({ email, onClose, onRefresh, onCompose: _onCom
   const replyFileInputRef = useRef<HTMLInputElement>(null);
   const [replyAttachments, setReplyAttachments] = useState<File[]>([]);
   const [showReplyEmojiPicker, setShowReplyEmojiPicker] = useState(false);
+
+  // Email Summary State
+  const [summary, setSummary] = useState<string | null>(null);
+  const [isSummarizing, setIsSummarizing] = useState(false);
 
   const emojis = ['😀', '😂', '😊', '❤️', '👍', '👎', '🎉', '🔥', '✨', '💯', '🙏', '👏'];
 
@@ -207,6 +211,8 @@ export default function EmailView({ email, onClose, onRefresh, onCompose: _onCom
   };
   useEffect(() => {
     setShowQuoted(false);
+    setSummary(null);
+    setIsSummarizing(false);
   }, [email?.id]);
 
   // Clean up video blob URLs when component unmounts or email changes
@@ -970,56 +976,57 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
               {email.subject || "(No subject)"}
             </h1>
 
-            {/* AI Summary Button */}
-            <div className="mb-4">
-              <button
-                onClick={() => toast.success("AI Summary generated!")}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-xl text-sm font-medium transition-colors w-full sm:w-auto"
-              >
-                <Sparkles className="w-4 h-4" />
-                <span>Summarize this email</span>
-              </button>
+            {/* AI Summary Section */}
+            <div className="mb-6">
+              {!summary ? (
+                <button
+                  onClick={async () => {
+                    if (!email) return;
+                    setIsSummarizing(true);
+                    try {
+                      const text = email.body || email.text_preview || "(No content)";
+                      const result = await summaryService.generateSummary(text);
+                      setSummary(result);
+                    } catch (err) {
+                      toast.error("Failed to generate summary");
+                    } finally {
+                      setIsSummarizing(false);
+                    }
+                  }}
+                  disabled={isSummarizing}
+                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 hover:from-blue-100 hover:to-indigo-100 dark:hover:from-blue-900/30 dark:hover:to-indigo-900/30 text-blue-700 dark:text-blue-300 rounded-xl text-sm font-medium transition-all w-full sm:w-auto border border-blue-100 dark:border-blue-800 disabled:opacity-70 disabled:cursor-wait"
+                >
+                  {isSummarizing ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                      <span>Generating AI Summary...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 text-indigo-500" />
+                      <span>Summarize this email</span>
+                    </>
+                  )}
+                </button>
+              ) : (
+                <div className="bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-900/10 dark:to-purple-900/10 rounded-xl p-4 border border-indigo-100 dark:border-indigo-800 animate-fadeIn">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                      <span className="text-sm font-semibold text-indigo-800 dark:text-indigo-300">AI Summary</span>
+                    </div>
+                    <button onClick={() => setSummary(null)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
+                    {summary}
+                  </p>
+                </div>
+              )}
             </div>
 
-            {/* ATTACHMENTS - Professional Style with P2P Differentiation */}
-            {attachments.length > 0 && (() => {
-              // Determine if this is a P2P email
-              const isP2PEmail = !!(email.p2p_enabled || (email as any).p2p_delivered ||
-                attachments.some((a: any) => a.delivery_mode === 'P2P' || a.is_p2p || a.p2p_message_id));
 
-              // Check if current user is the sender (case-insensitive comparison)
-              const senderEmail = (email.from_email || '').toLowerCase().trim();
-              const myEmail = (currentUser?.email || '').toLowerCase().trim();
-              const isSender = senderEmail === myEmail;
-
-              // Helper moved to outer scope
-
-              return (
-                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-slate-700">
-                  <P2PAttachmentList
-                    emailId={String(email.id)}
-                    senderEmail={senderEmail}
-                    attachments={attachments.map((a: any) => ({
-                      filename: a.filename,
-                      mime_type: a.mime_type,
-                      size_bytes: a.size || a.size_bytes,
-                      p2p_message_id: a.p2p_message_id,
-                      content_base64: a.content_base64 || null,
-                      is_p2p: !!(a.delivery_mode === 'P2P' || a.is_p2p || a.p2p_message_id || isP2PEmail),
-                      p2p_status: a.p2p_status
-                    }))}
-                    mode={isSender ? 'sender' : 'receiver'}
-                  />
-
-                  {isP2PEmail && (
-                    <p className="mt-3 text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
-                      <Lock className="w-3 h-3" />
-                      Sent securely via P2P encryption
-                    </p>
-                  )}
-                </div>
-              );
-            })()}
           </div>
 
           {/* Email Card - Gmail Style */}
@@ -1150,9 +1157,49 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
               </div>
             </div>
 
+            {/* ATTACHMENTS - Moved inside card */}
+            {attachments.length > 0 && (() => {
+              // Determine if this is a P2P email
+              const isP2PEmail = !!(email.p2p_enabled || (email as any).p2p_delivered ||
+                attachments.some((a: any) => a.delivery_mode === 'P2P' || a.is_p2p || a.p2p_message_id));
+
+              // Check if current user is the sender (case-insensitive comparison)
+              const senderEmail = (email.from_email || '').toLowerCase().trim();
+              const myEmail = (currentUser?.email || '').toLowerCase().trim();
+              const isSender = senderEmail === myEmail;
+
+              return (
+                <div className="px-4 lg:px-6 pb-6 pt-2 border-t border-gray-100 dark:border-slate-800 bg-gray-50/50 dark:bg-slate-900/50">
+                  <P2PAttachmentList
+                    emailId={String(email.id)}
+                    senderEmail={senderEmail}
+                    attachments={attachments.map((a: any) => ({
+                      filename: a.filename,
+                      mime_type: a.mime_type,
+                      size_bytes: a.size || a.size_bytes,
+                      p2p_message_id: a.p2p_message_id,
+                      content_base64: a.content_base64 || null,
+                      is_p2p: !!(a.delivery_mode === 'P2P' || a.is_p2p || a.p2p_message_id || isP2PEmail),
+                      p2p_status: a.p2p_status
+                    }))}
+                    mode={isSender ? 'sender' : 'receiver'}
+                  />
+
+                  {isP2PEmail && (
+                    <div className="mt-3 flex items-center justify-center">
+                      <p className="text-[10px] text-gray-400 dark:text-gray-500 flex items-center gap-1.5 px-3 py-1 rounded-full bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 shadow-sm">
+                        <Lock className="w-2.5 h-2.5" />
+                        Sent securely via Direct Transfer encryption
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             {/* Action Buttons - Gmail Style */}
             {!email.is_draft && !inlineReplyMode && (
-              <div className="px-4 lg:px-6 pb-6">
+              <div className="px-4 lg:px-6 pb-6 pt-2">
                 <div className="flex items-center gap-3">
                   {/* Reply Button - Gmail Style */}
                   <button
