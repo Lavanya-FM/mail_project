@@ -7,11 +7,13 @@ import {
 import AttachFromDriveModal from '../AttachFromDriveModal';
 // import P2PTransferProgress from '../P2PTransferProgress';
 import { p2pToast } from '../../utils/p2pToasts';
+import { emailService } from '../../lib/emailService';
 
 const AttachmentPreview = ({
   file,
   progress,
   etaSeconds,
+  speedBps,
   status,
   onRemove,
   formatSize,
@@ -22,6 +24,7 @@ const AttachmentPreview = ({
   file: File;
   progress?: number;
   etaSeconds?: number | null;
+  speedBps?: number;
   status?: string;
   onRemove: () => void;
   formatSize: (n: number) => string;
@@ -65,11 +68,17 @@ const AttachmentPreview = ({
   };
 
   const getStatusColor = () => {
-    // ... existing ...
     if (status === 'delivered' || progress === 100) return 'text-green-600';
     if (status === 'failed') return 'text-red-600';
     if (status === 'paused') return 'text-yellow-600';
     return 'text-blue-600';
+  };
+
+  const formatSpeed = (bps?: number) => {
+    if (!bps) return '';
+    const kb = bps / 1024;
+    if (kb < 1024) return `${kb.toFixed(1)} KB/s`;
+    return `${(kb / 1024).toFixed(1)} MB/s`;
   };
 
   return (
@@ -128,7 +137,6 @@ const AttachmentPreview = ({
         </div>
       </div>
 
-      {/* ... rest of component ... */}
       {isTransferring && (
         <div className="flex-1 flex flex-col items-center px-2 min-w-[120px]">
           {/* Progress bar */}
@@ -140,17 +148,27 @@ const AttachmentPreview = ({
           </div>
 
           <div className="flex items-center justify-between w-full mt-1">
-            <span className={`text-xs font-semibold ${getStatusColor()}`}>
-              {getStatusText()}
-            </span>
-            {etaSeconds != null && etaSeconds > 0 && (
-              <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
-                ETA: {etaSeconds < 60
-                  ? `${etaSeconds}s`
-                  : etaSeconds < 3600
-                    ? `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s`
-                    : `${Math.floor(etaSeconds / 3600)}h ${Math.floor((etaSeconds % 3600) / 60)}m`}
+            <div className="flex flex-col">
+              <span className={`text-xs font-semibold ${getStatusColor()}`}>
+                {getStatusText()}
               </span>
+              {/* Show transferred amount and total */}
+              <span className="text-[10px] text-gray-500">
+                {progress !== undefined && formatSize((progress / 100) * file.size)} / {formatSize(file.size)}
+                {speedBps ? ` · ${formatSpeed(speedBps)}` : ''}
+              </span>
+            </div>
+
+            {etaSeconds != null && etaSeconds > 0 && (
+              <div className="flex flex-col items-end">
+                <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
+                  ETA: {etaSeconds < 60
+                    ? `${etaSeconds}s`
+                    : etaSeconds < 3600
+                      ? `${Math.floor(etaSeconds / 60)}m ${etaSeconds % 60}s`
+                      : `${Math.floor(etaSeconds / 3600)}h ${Math.floor((etaSeconds % 3600) / 60)}m`}
+                </span>
+              </div>
             )}
           </div>
 
@@ -205,7 +223,6 @@ export interface ComposeUIProps {
   cc: string;
   bcc: string;
   subject: string;
-
   bodyRef: React.RefObject<HTMLDivElement>;
 
   setTo: (v: string) => void;
@@ -254,6 +271,7 @@ export interface ComposeUIProps {
     size: number;
     progress: number;
     etaSeconds?: number | null;
+    speedBps?: number;
     status: 'pending' | 'receiving' | 'paused' | 'delivered' | 'failed' | 'sending';
   }[];
 
@@ -263,6 +281,7 @@ export interface ComposeUIProps {
   deliveryMode?: 'P2P' | 'EMAIL';
   fromEmail?: string;
   p2pConnected?: boolean;
+  classifications?: { mode: 'P2P' | 'EMAIL'; reason: string }[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -317,6 +336,12 @@ export default function ComposeUI(props: ComposeUIProps) {
     name: string;
     size: number;
   } | null>(null);
+
+  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [activeSearchField, setActiveSearchField] = useState<'to' | 'cc' | 'bcc' | null>(null);
+  const [suggestionPosition, setSuggestionPosition] = useState({ top: 0, left: 0 });
+  const [selectedIndex, setSelectedIndex] = useState(0);
 
 
   useEffect(() => {
@@ -490,6 +515,76 @@ export default function ComposeUI(props: ComposeUIProps) {
     }
   };
 
+  const handleAutocompleteSearch = async (val: string, field: 'to' | 'cc' | 'bcc') => {
+    const parts = val.split(',');
+    const currentQuery = parts[parts.length - 1].trim();
+
+    if (currentQuery.length < 1) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    try {
+      const res = await emailService.searchUsers(currentQuery);
+      if (res.data && res.data.length > 0) {
+        setSuggestions(res.data);
+        setShowSuggestions(true);
+        setActiveSearchField(field);
+        setSelectedIndex(0);
+
+        // Position logic (approximate)
+        const element = document.activeElement as HTMLElement;
+        if (element) {
+          const rect = element.getBoundingClientRect();
+          setSuggestionPosition({ top: rect.bottom + window.scrollY, left: rect.left + window.scrollX });
+        }
+      } else {
+        setShowSuggestions(false);
+      }
+    } catch (err) {
+      console.error("Autocomplete fetch error", err);
+    }
+  };
+
+  const selectSuggestion = (user: any) => {
+    const field = activeSearchField;
+    if (!field) return;
+
+    let currentVal = '';
+    if (field === 'to') currentVal = to;
+    else if (field === 'cc') currentVal = cc;
+    else if (field === 'bcc') currentVal = bcc;
+
+    const parts = currentVal.split(',');
+    parts[parts.length - 1] = ` ${user.email}`;
+    const newVal = parts.join(',').trim();
+
+    if (field === 'to') setTo(newVal);
+    else if (field === 'cc') setCc(newVal);
+    else if (field === 'bcc') setBcc(newVal);
+
+    setShowSuggestions(false);
+    setSuggestions([]);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!showSuggestions || suggestions.length === 0) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedIndex(prev => (prev + 1) % suggestions.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      selectSuggestion(suggestions[selectedIndex]);
+    } else if (e.key === 'Escape') {
+      setShowSuggestions(false);
+    }
+  };
+
 
   // Emit a single signal when all P2P transfers finish
   useEffect(() => {
@@ -547,7 +642,12 @@ export default function ComposeUI(props: ComposeUIProps) {
               type="text"
               className="flex-1 min-w-[120px] bg-transparent outline-none text-gray-900 dark:text-gray-100 text-sm py-1"
               value={to}
-              onChange={(e) => setTo(e.target.value)}
+              onChange={(e) => {
+                setTo(e.target.value);
+                handleAutocompleteSearch(e.target.value, 'to');
+              }}
+              onKeyDown={handleKeyDown}
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
             />
             {/* Recipient Status Badge */}
             {to.trim() && liveRecipientStatus !== 'UNKNOWN' && (
@@ -576,14 +676,32 @@ export default function ComposeUI(props: ComposeUIProps) {
         {showCc && (
           <div className="flex items-center px-4 py-1 border-b border-gray-100 dark:border-slate-800 min-h-[40px] flex-shrink-0">
             <label className="text-sm text-gray-500 w-12">Cc</label>
-            <input className="flex-1 bg-transparent outline-none text-gray-900 dark:text-gray-100 text-sm py-1" value={cc} onChange={e => setCc(e.target.value)} />
+            <input
+              className="flex-1 bg-transparent outline-none text-gray-900 dark:text-gray-100 text-sm py-1"
+              value={cc}
+              onChange={e => {
+                setCc(e.target.value);
+                handleAutocompleteSearch(e.target.value, 'cc');
+              }}
+              onKeyDown={handleKeyDown}
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+            />
           </div>
         )}
 
         {showBcc && (
           <div className="flex items-center px-4 py-1 border-b border-gray-100 dark:border-slate-800 min-h-[40px] flex-shrink-0">
             <label className="text-sm text-gray-500 w-12">Bcc</label>
-            <input className="flex-1 bg-transparent outline-none text-gray-900 dark:text-gray-100 text-sm py-1" value={bcc} onChange={e => setBcc(e.target.value)} />
+            <input
+              className="flex-1 bg-transparent outline-none text-gray-900 dark:text-gray-100 text-sm py-1"
+              value={bcc}
+              onChange={e => {
+                setBcc(e.target.value);
+                handleAutocompleteSearch(e.target.value, 'bcc');
+              }}
+              onKeyDown={handleKeyDown}
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+            />
           </div>
         )}
 
@@ -701,6 +819,8 @@ export default function ComposeUI(props: ComposeUIProps) {
 
             {attachments.map((f, i) => {
               const p2p = localP2PFiles.find(p => p.name === f.name);
+              const cls = props.classifications?.[i];
+              const isP2PFile = cls ? cls.mode === 'P2P' : !!canUseP2P;
 
               return (
                 <AttachmentPreview
@@ -708,6 +828,7 @@ export default function ComposeUI(props: ComposeUIProps) {
                   file={f}
                   progress={p2p?.progress}
                   etaSeconds={p2p?.etaSeconds}
+                  speedBps={p2p?.speedBps}
                   status={p2p?.status}
                   formatSize={formatFileSize}
                   onRemove={() => removeAttachment(i)}
@@ -716,7 +837,7 @@ export default function ComposeUI(props: ComposeUIProps) {
                     onClose();
                   }}
                   recipientStatus={liveRecipientStatus}
-                  isP2P={!!canUseP2P}
+                  isP2P={isP2PFile}
                 />
               );
             })}
@@ -882,6 +1003,28 @@ export default function ComposeUI(props: ComposeUIProps) {
         hidden
         onChange={onLocalAttach}
       />
+      {/* Autocomplete Suggestions */}
+      {showSuggestions && suggestions.length > 0 && (
+        <div
+          className="fixed z-[9999] w-64 bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-gray-100 dark:border-slate-700 py-1 overflow-hidden"
+          style={{ top: suggestionPosition.top, left: suggestionPosition.left }}
+        >
+          {suggestions.map((u, i) => (
+            <button
+              key={u.id || i}
+              onClick={() => selectSuggestion(u)}
+              className={`w-full text-left px-4 py-2 flex flex-col transition-colors group ${selectedIndex === i ? 'bg-blue-100 dark:bg-blue-900/40' : 'hover:bg-blue-50 dark:hover:bg-blue-900/20'}`}
+            >
+              <span className="text-sm font-semibold text-gray-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400">
+                {u.name}
+              </span>
+              <span className="text-xs text-gray-500 dark:text-slate-400">
+                {u.email}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

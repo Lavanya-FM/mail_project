@@ -452,6 +452,18 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
     }
   };
 
+  useEffect(() => {
+    const handleNewEmail = () => {
+      console.log('[PUSH] New email notification received! Refreshing...');
+      refreshEmails();
+    };
+
+    window.addEventListener('new-email', handleNewEmail as EventListener);
+    return () => {
+      window.removeEventListener('new-email', handleNewEmail as EventListener);
+    };
+  }, [refreshEmails]);
+
   const handleComposeFromEmail = () => {
     handleOpenComposeWindow();
   };
@@ -607,18 +619,7 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
             );
           })}
 
-          {/* Transfers Folder */}
-          <button
-            onClick={() => {
-              window.location.hash = 'transfers';
-              setSelectedFolder({ id: 'transfers', name: 'Transfers', system_box: 'transfers' } as any);
-              setMobileSidebarOpen(false);
-            }}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition ${animations.fadeInLeft} ${selectedFolder?.id === 'transfers' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 shadow-md' : 'text-gray-600 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-800/50 hover:scale-105'}`}
-          >
-            <Shield2 className="w-5 h-5 flex-shrink-0 text-blue-500" />
-            <span className="flex-1 text-left font-medium text-sm">Transfers</span>
-          </button>
+
         </div>
 
         {/* Labels Section */}

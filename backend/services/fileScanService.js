@@ -8,7 +8,7 @@ try {
 }
 
 const MAX_SCAN_SIZE = 25 * 1024 * 1024; // 25MB
-const MAX_SCAN_TIME_MS = 8000; // 8 seconds
+const MAX_SCAN_TIME_MS = 60000; // 60 seconds
 const BLOCKED_EXTENSIONS = ['.exe', '.bat', '.sh', '.js', '.vbs', '.scr', '.jar', '.msi'];
 
 // Magic bytes for common file types

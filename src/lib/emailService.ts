@@ -213,6 +213,17 @@ export const emailService = {
     return handleResp<any>(resp);
   },
 
+  async updateDraft(emailId: number | string, data: any): ApiResult<any> {
+    const url = apiUrl("/api/email/draft/update");
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      credentials: "include",
+      body: JSON.stringify({ id: Number(emailId), ...data }),
+    });
+    return handleResp<any>(resp);
+  },
+
   async updateEmailAttachment(data: any): ApiResult<any> {
     const url = apiUrl("/api/email/attachment/update");
     const resp = await fetch(url, {
@@ -318,4 +329,14 @@ export const emailService = {
     });
     return handleResp<any>(resp);
   },
+
+  async searchUsers(query: string): ApiResult<any[]> {
+    const url = apiUrl(`/api/users/search?q=${encodeURIComponent(query)}`);
+    const resp = await fetch(url, {
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      credentials: "include",
+    });
+    return handleResp<any[]>(resp);
+  },
 };
+

@@ -5,15 +5,21 @@ export interface TransferTask {
     type: 'upload' | 'download' | 'handshake';
     name: string;
     progress: number;
-    status: 'pending' | 'active' | 'complete' | 'failed' | 'handshaking' | 'queued';
+    status: 'pending' | 'active' | 'complete' | 'failed' | 'handshaking' | 'queued' | 'seeding' | 'delivered';
     peer: string;
     fileName?: string;
+    speedBps?: number;
+    etaSeconds?: number | null;
+    received?: number;
+    total?: number;
 }
 
 export function useP2PTransfers() {
     const [tasks, setTasks] = useState<Map<string, TransferTask>>(new Map());
 
     useEffect(() => {
+        // ... (handshake handlers unchanged)
+
         const handleHandshakeStart = (e: any) => {
             const { peer } = e.detail;
             const id = `hs-${peer}`;
@@ -53,7 +59,7 @@ export function useP2PTransfers() {
         };
 
         const handleIncoming = (e: any) => {
-            const { messageId, from, fileName } = e.detail;
+            const { messageId, from, fileName, total } = e.detail;
             setTasks(prev => {
                 const next = new Map(prev);
                 const existing = Array.from(next.values()).find(t =>
@@ -73,19 +79,25 @@ export function useP2PTransfers() {
                     name: fileName || 'Incoming File',
                     progress: 0,
                     status: 'active',
-                    peer: from
+                    peer: from,
+                    received: 0,
+                    total: total || 0
                 });
                 return next;
             });
         };
 
         const handleReceiverProgress = (e: any) => {
-            const { messageId, percentage, status, from, fileName } = e.detail;
+            const { messageId, percentage, status, from, fileName, speedBps, etaSeconds, received, total } = e.detail;
             setTasks(prev => {
                 const next = new Map(prev);
                 const task = next.get(messageId);
                 if (task) {
                     task.progress = percentage;
+                    task.speedBps = speedBps;
+                    task.etaSeconds = etaSeconds;
+                    task.received = received;
+                    task.total = total;
                     if (status === 'complete' || status === 'COMPLETED') task.status = 'complete';
                 } else if (percentage > 0 && percentage < 100) {
                     next.set(messageId, {
@@ -94,7 +106,11 @@ export function useP2PTransfers() {
                         name: fileName || 'Incoming File',
                         progress: percentage,
                         status: 'active',
-                        peer: from || 'Sender'
+                        peer: from || 'Sender',
+                        speedBps,
+                        etaSeconds,
+                        received,
+                        total
                     });
                 }
                 return next;
@@ -102,13 +118,18 @@ export function useP2PTransfers() {
         };
 
         const handleSenderProgress = (e: any) => {
-            const { messageId, percentage, fileName, status } = e.detail;
+            const { messageId, percentage, fileName, status, speedBps, etaSeconds, received, total } = e.detail;
             setTasks(prev => {
                 const next = new Map(prev);
                 const task = next.get(messageId);
                 if (task) {
                     task.progress = percentage;
-                    if (status) task.status = status;
+                    task.speedBps = speedBps;
+                    task.etaSeconds = etaSeconds;
+                    task.received = received;
+                    task.total = total;
+                    if (status === 'delivered') task.status = 'seeding';
+                    else if (status) task.status = status;
                 } else {
                     next.set(messageId, {
                         id: messageId,
@@ -116,7 +137,11 @@ export function useP2PTransfers() {
                         name: fileName || 'Sending File...',
                         progress: percentage,
                         status: status || 'active',
-                        peer: 'Recipient'
+                        peer: 'Recipient',
+                        speedBps,
+                        etaSeconds,
+                        received,
+                        total
                     });
                 }
                 return next;
@@ -131,13 +156,9 @@ export function useP2PTransfers() {
                 if (task) {
                     task.status = 'complete';
                     task.progress = 100;
-                    setTimeout(() => {
-                        setTasks(p => {
-                            const n = new Map(p);
-                            n.delete(messageId);
-                            return n;
-                        });
-                    }, 3000);
+                    task.etaSeconds = 0;
+                    task.speedBps = 0;
+                    // Persist - do not auto-delete
                 }
                 return next;
             });

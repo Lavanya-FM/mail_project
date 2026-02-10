@@ -121,3 +121,22 @@ export async function decrypt(key: CryptoKey, payload: any) {
 
   return JSON.parse(new TextDecoder().decode(decrypted));
 }
+
+/**
+ * Compresses data using GZIP
+ */
+export async function compressData(data: ArrayBuffer): Promise<ArrayBuffer> {
+  const stream = new Response(data).body?.pipeThrough(new CompressionStream('gzip'));
+  if (!stream) throw new Error('Compression failed');
+  return new Response(stream).arrayBuffer();
+}
+
+/**
+ * Decompresses data using GZIP
+ */
+export async function decompressData(data: ArrayBuffer): Promise<ArrayBuffer> {
+  const stream = new Response(data).body?.pipeThrough(new DecompressionStream('gzip'));
+  if (!stream) throw new Error('Decompression failed');
+  return new Response(stream).arrayBuffer();
+}
+

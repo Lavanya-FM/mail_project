@@ -8,9 +8,9 @@ import {
   importStoredKeyPair,
   importPublicKey,
   deriveSharedKey,
-  encryptChunkAES,
-  decryptChunkAES
+  encryptChunkAES
 } from './p2pCrypto';
+import { WorkerPool } from './WorkerPool';
 
 import { startFileScan, ScanResult } from '../utils/fileScanner';
 import {
@@ -38,12 +38,20 @@ import { authService } from './authService';
 /* ---------------------------------------------------- */
 
 const P2P_LIMITS = {
-  BASE_KBPS: 999999,    // Unlimited - no throttling
-  MIN_KBPS: 999999,     // Unlimited - no throttling  
-  MAX_KBPS: 999999,     // Unlimited - no throttling
-  CHUNK_SIZE: 1 * 1024 * 1024, // 🚀 1MB CHUNKS (Optimized for frequent UI updates)
-  CONCURRENCY: 80, // 🚀 80 chunks in flight (Highest throughput)
-  BATCH_SIZE: 20,  // 🚀 20 chunks per batch request
+  // 🚀 Streaming Config
+  SEGMENT_SIZE: 1024 * 1024, // 1MB strictly
+  MACRO_CHUNK_SIZE: 64 * 1024 * 1024, // 64MB logical grouping
+  WINDOW_SIZE: 16, // Max 16 segments in flight
+  MAX_BUFFERED_AMOUNT: 32 * 1024 * 1024, // 32MB socket buffer cap
+  WORKER_COUNT: navigator.hardwareConcurrency || 8,
+
+  // Legacy/Fallback (for adaptive logic if needed)
+  BASE_KBPS: 999999,
+  MIN_KBPS: 999999,
+  MAX_KBPS: 999999,
+  CHUNK_SIZE: 1024 * 1024,
+  CONCURRENCY: 16,
+  BATCH_SIZE: 8,
 };
 
 const chunkRetries = new Map<string, number>();
@@ -147,6 +155,7 @@ interface StrictMessage {
   scan_engine?: string;
   scan_timestamp?: number;
   fileId?: string;
+  receiverStats?: any;
 }
 
 type StopReason = string | null;
@@ -225,6 +234,8 @@ class StrictP2PService {
     ready: boolean;
     handshaking: boolean;
   }>();
+
+  private workerPool: WorkerPool;
 
   // A. Peer Connection State (Foundational Truth)
   private peerConnectionState = new Map<string, PeerConnectionState>();
@@ -405,7 +416,11 @@ class StrictP2PService {
   */
 
   constructor() {
-    console.log("🚀 [P2P SERVICE] V55 LOADED - TURBO MODE + ETA");
+    this.workerPool = new WorkerPool(P2P_LIMITS.WORKER_COUNT);
+    // this.initialize(); // Already called by existing code effectively, or I need to check where initialize is defined. 
+    // Wait, StrictP2PService usually has an initialize() method or similar logic. 
+    // Looking at the code, it seems the constructor is doing initialization.
+    console.log("🚀 [P2P SERVICE] V56 LOADED - STREAMING MODE");
     // suppress unused warnings for some members if they were to be used later
     // console.log(this.currentProcessingMessageId); 
 
@@ -1214,6 +1229,118 @@ class StrictP2PService {
     this.startActualChunkTransfer(t);
   }
 
+  /* ---------------------------------------------------- */
+  /* -------------------- STREAMING (v56) --------------- */
+  /* ---------------------------------------------------- */
+
+  private async startStreamingTransfer(t: any, resumeIndex = 0) {
+    console.log(`[P2P STREAM] 🚀 Starting Stream: ${t.file.name} (Resume: ${resumeIndex})`);
+
+    // 1️⃣ Initialize State
+    const segmentSize = P2P_LIMITS.SEGMENT_SIZE;
+    const totalSegments = Math.ceil(t.file.size / segmentSize);
+
+    t.totalChunks = totalSegments;
+    t.chunkSize = segmentSize;
+    if (resumeIndex === 0) {
+      t.startTime = Date.now();
+      t.speedBps = 0;
+      t.lastBytes = 0;
+      t.lastTime = Date.now();
+    }
+    t.isStreaming = true; // Mark as streaming mode
+
+    if (!t.acknowledgedChunks) t.acknowledgedChunks = new Set();
+
+    if (resumeIndex > 0) {
+      for (let i = 0; i < resumeIndex; i++) t.acknowledgedChunks.add(i);
+    }
+
+    let segmentIndex = resumeIndex;
+
+    // 2️⃣ Streaming Loop
+    while (segmentIndex < totalSegments) {
+      // Check State
+      if (t.status !== 'TRANSFERRING' && t.status !== StrictTransferState.TRANSFERRING) {
+        console.warn(`[P2P STREAM] Transfer interrupted. Status: ${t.status}`);
+        break;
+      }
+
+      // 3️⃣ Backpressure (Socket Buffer)
+      // If buffer > 32MB, PAUSE and drain
+      if (this.ws && this.ws.bufferedAmount > P2P_LIMITS.MAX_BUFFERED_AMOUNT) {
+        // console.debug(`[P2P STREAM] 🛑 Socket Buffer Full (${(this.ws.bufferedAmount/1024/1024).toFixed(1)}MB). Pausing...`);
+        await new Promise(r => setTimeout(r, 50));
+        continue; // Retry check
+      }
+
+      // 4️⃣ Sending Window (Application Flow Control)
+      // Max 16 segments in flight
+      const acked = t.acknowledgedChunks.size;
+      const inFlight = segmentIndex - acked;
+
+      if (inFlight >= P2P_LIMITS.WINDOW_SIZE) {
+        // Wait for ACKs to slide window
+        // console.debug(`[P2P STREAM] ⏳ Window Full (${inFlight}/${P2P_LIMITS.WINDOW_SIZE}). Waiting for ACK...`);
+        await new Promise(r => setTimeout(r, 20));
+        continue;
+      }
+
+      // 5️⃣ Prepare Segment
+      const currentIdx = segmentIndex;
+      const start = currentIdx * segmentSize;
+      const end = Math.min(start + segmentSize, t.file.size);
+      const blob = t.file.slice(start, end);
+      const buffer = await blob.arrayBuffer();
+
+      // 6️⃣ Encrypt in Worker
+      // 🚀 RACE CONDITION FIX: Wait for Key Exchange
+      let session = this.peerSessions.get(`${t.peerEmail}:${t.messageId}`) || this.peerSessions.get(t.peerEmail);
+      let attempts = 0;
+      while ((!session || !session.sessionKey) && attempts < 50) { // Wait up to 5s
+        if (attempts === 0) console.log(`[P2P STREAM] Waiting for session key with ${t.peerEmail}...`);
+        await new Promise(r => setTimeout(r, 100));
+        session = this.peerSessions.get(`${t.peerEmail}:${t.messageId}`) || this.peerSessions.get(t.peerEmail);
+        attempts++;
+      }
+
+      // Handle session/key errors gracefully
+      if (!session || !session.sessionKey) {
+        console.error('[P2P STREAM] ❌ Session key missing via Worker dispatch. Aborting.');
+        t.status = 'FAILED';
+        break;
+      }
+
+      this.workerPool.execute('encrypt', {
+        key: session.sessionKey,
+        data: buffer
+      }).then(encrypted => {
+        // 7️⃣ Send to Peer
+        const b64Data = arrayBufferToBase64(encrypted.data);
+
+        this.send({
+          type: 'file-chunk',
+          to: t.peerEmail,
+          from: this.email,
+          messageId: t.messageId,
+          chunkIndex: currentIdx,
+          totalChunks: totalSegments,
+          data: b64Data,
+          payload: { iv: Array.from(encrypted.iv) } as any,
+          fileName: t.file.name,
+          mimeType: t.file.type,
+          chunkSize: segmentSize,
+          isStream: true
+        }, true); // Silent send
+      }).catch(err => {
+        console.error(`[P2P STREAM] 💥 Encrypt Worker Failed for Chunk ${currentIdx}:`, err);
+      });
+
+      segmentIndex++; // 🚀 Move window forward immediately
+    }
+
+    console.log(`[P2P STREAM] ✅ All segments dispatched (${totalSegments}). Waiting for final ACKs...`);
+  }
 
   private async startActualChunkTransfer(t: any) {
     const totalChunks = Math.ceil(t.file.size / P2P_LIMITS.CHUNK_SIZE);
@@ -1252,7 +1379,7 @@ class StrictP2PService {
     });
 
     t.offered = true;
-    console.log(`[P2P SERVER] Offer sent for ${t.messageId}. Standing by for chunk requests...`);
+    console.log(`[P2P SERVER] Offer sent for ${t.messageId}. Standing by for Accept...`);
   }
 
 
@@ -1518,12 +1645,18 @@ class StrictP2PService {
         break;
       }
 
+      case 'new-email-notification':
+        console.log('[P2P] New email notification received:', msg.email);
+        window.dispatchEvent(new CustomEvent('new-email', { detail: msg.email }));
+        break;
+
       case 'presence-update':
         // ✅ FIX 1: STRICT SERVER AUTHORITY (MASTER CHECKLIST COMPLIANCE)
         if (Array.isArray(msg.online)) {
-          console.log(`[P2P][PRESENCE] Received update with ${msg.online.length} peers:`, JSON.stringify(msg.online));
-          setOnlinePeers(msg.online);
-          this.notifyPresenceListeners(msg.online);
+          const uniqueOnline = Array.from(new Set(msg.online));
+          console.log(`[P2P][PRESENCE] Received update with ${uniqueOnline.length} peers:`, JSON.stringify(uniqueOnline));
+          setOnlinePeers(uniqueOnline);
+          this.notifyPresenceListeners(uniqueOnline);
         }
         break;
       case 'peer-online':
@@ -1645,7 +1778,7 @@ class StrictP2PService {
         localStorage.setItem(`p2p-sender-${messageId}`, from);
 
         // 🚀 FIX: Don't overwrite if exists
-        if (this.completedTransfers.has(messageId) || await this.hasReceivedFile(messageId)) {
+        if (this.completedTransfers.has(messageId)) {
           console.log(`[P2P] Already have file for offer ${messageId}. Sending completion ack.`);
           this.completedTransfers.add(messageId);
 
@@ -1922,9 +2055,24 @@ class StrictP2PService {
           }
 
           const buffer = base64ToArrayBuffer(data);
+          const chunkIv = payload?.iv || (msg as any).iv || [];
 
-          // Decrypt the chunk
-          const decrypted = await decryptChunkAES(session.sessionKey, payload?.iv || [], buffer);
+          if (!chunkIv || chunkIv.length === 0) {
+            console.error(`[P2P] ❌ Chunk ${chunkIndex} missing IV for ${messageId}`);
+            return;
+          }
+
+          // 🚀 Offload decryption to Worker
+          const decrypted = await this.workerPool.execute('decrypt', {
+            key: session.sessionKey,
+            iv: new Uint8Array(chunkIv),
+            encrypted: buffer
+          }).catch(err => {
+            console.error(`[P2P] 💥 Decryption failed for chunk ${chunkIndex} of ${messageId}:`, err);
+            return null;
+          });
+
+          if (!decrypted) return;
 
           // 🚀 SPEED OPTIMIZATION: Don't wait for disk I/O before requesting more chunks
           // We mark it as received in memory immediately. Disk persistence happens in background.
@@ -1971,12 +2119,24 @@ class StrictP2PService {
           }
 
           // Ack the chunk (legacy compatibility)
+          // Ack the chunk + sync stats
+          const progress = rt.totalChunks > 0 ? Math.floor((rt.receivedChunks.size / rt.totalChunks) * 100) : 0;
+
           this.send({
             type: 'chunk-ack',
             to: from,
             from: this.email,
             messageId,
-            chunkIndex
+            chunkIndex,
+            receiverStats: {
+              progress,
+              receivedChunks: rt.receivedChunks.size,
+              totalChunks: rt.totalChunks,
+              receivedBytes: rt.receivedChunks.size * (rt.chunkSize || 1024 * 1024),
+              totalBytes: rt.actualSize || (rt.totalChunks * (rt.chunkSize || 1024 * 1024)),
+              speedBps: rt.speedBps || 0,
+              etaSeconds: rt.etaSeconds
+            }
           }, true); // Silent
 
           // 🚀 TRIGGER NEXT BATCH
@@ -2007,7 +2167,8 @@ class StrictP2PService {
           const t = this.senderTransferRegistry.get(messageId);
           if (t) {
             t.currentChunkIndex = startIndex;
-            this.sendSingleChunk(messageId, startIndex, from);
+            // 🚀 TRIGGER STREAMING (with Resume Index)
+            this.startStreamingTransfer(t, startIndex);
           }
         }
         break;
@@ -2091,7 +2252,7 @@ class StrictP2PService {
       }
 
       case 'chunk-ack': {
-        const { messageId, chunkIndex, from } = msg;
+        const { messageId, chunkIndex, from, receiverStats } = msg as any;
         if (!messageId || chunkIndex === undefined || !from) return;
 
         const t = this.senderTransferRegistry.get(messageId);
@@ -2100,29 +2261,48 @@ class StrictP2PService {
         if (!t.acknowledgedChunks) t.acknowledgedChunks = new Set();
         t.acknowledgedChunks.add(chunkIndex);
 
-        const acked = t.acknowledgedChunks.size;
-        const progress = Math.round((acked / t.totalChunks) * 100);
-        const bytesSent = Math.min(t.file.size, acked * (t.chunkSize || P2P_LIMITS.CHUNK_SIZE));
+        let progress = 0;
+        let bytesSent = 0;
+        let speedBps = 0;
+        let etaSeconds = 0;
 
-        this.updateSpeedInfo(t, bytesSent, t.file.size);
+        if (receiverStats) {
+          // 🚀 Use receiver's truth if available
+          progress = receiverStats.progress;
+          bytesSent = receiverStats.receivedBytes; // Actually received by peer
+          speedBps = receiverStats.speedBps;
+          etaSeconds = receiverStats.etaSeconds;
+
+          // Update local tracking
+          t.speedBps = speedBps;
+          t.etaSeconds = etaSeconds;
+        } else {
+          // Fallback to sender-side estimation
+          const acked = t.acknowledgedChunks.size;
+          progress = Math.round((acked / t.totalChunks) * 100);
+          bytesSent = Math.min(t.file.size, acked * (t.chunkSize || P2P_LIMITS.CHUNK_SIZE));
+          this.updateSpeedInfo(t, bytesSent, t.file.size);
+          speedBps = t.speedBps || 0;
+          etaSeconds = t.etaSeconds || 0;
+        }
 
         // Notify UI
         window.dispatchEvent(new CustomEvent('p2p-progress', {
           detail: {
             messageId,
             progress,
-            status: acked === t.totalChunks ? 'complete' : 'transferring',
-            speedBps: t.speedBps,
-            etaSeconds: t.etaSeconds,
-            received: bytesSent,
+            status: t.acknowledgedChunks.size === t.totalChunks ? 'complete' : 'transferring',
+            speedBps,
+            etaSeconds,
+            received: bytesSent, // This now reflects receiver's bytes if synced
             total: t.file.size,
             startTime: t.startTime,
             totalChunks: t.totalChunks,
-            receivedChunks: acked
+            receivedChunks: t.acknowledgedChunks.size
           }
         }));
 
-        if (acked === t.totalChunks) {
+        if (t.acknowledgedChunks.size === t.totalChunks) {
           console.log(`[P2P SENDER] Transfer ${messageId} complete!`);
           this.transitionTransferState(messageId, StrictTransferState.COMPLETED);
           t.started = false;

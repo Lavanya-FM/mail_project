@@ -22,6 +22,7 @@ const jwt = require("jsonwebtoken");
 const db = require("./db"); // expects exported promise-based query/getConnection interface
 const { sanitizeBody, normalizeEmail, isValidEmailFormat } = require("./utils");
 const storageService = require("./storageService");
+const { notifyNewEmail } = require("./p2pController");
 
 const router = express.Router();
 
@@ -1174,11 +1175,13 @@ router.get("/email/:emailId", async (req, res) => {
     console.log(`[REQ] Fetching single email: ${emailId}`);
 
     const [rows] = await db.query(
-      `SELECT e.*, m.is_read, m.is_starred, m.mailbox_id
+      `SELECT DISTINCT e.*, m.is_read, m.is_starred, m.mailbox_id
        FROM emails e
        LEFT JOIN email_mailbox m ON e.id = m.email_id
-       WHERE e.id = ? OR e.message_id = ?`,
-      [emailId, emailId]
+       LEFT JOIN email_attachments a ON e.id = a.email_id
+       WHERE e.id = ? OR e.message_id = ? OR a.p2p_message_id = ?
+       LIMIT 1`,
+      [emailId, emailId, emailId]
     );
 
     if (rows.length === 0) {
@@ -1588,7 +1591,7 @@ router.post("/email/create", async (req, res) => {
 
     // 🚀 IMMEDIATE LOCAL DELIVERY
     if (!is_draft) {
-      const all = [...new Set([...toList, ...ccList, ...bccList])];
+      const all = [...new Set([...toList, ...ccList, ...bccList])].filter(email => email.toLowerCase() !== sender.email.toLowerCase());
       if (all.length) {
         const placeholders = all.map(() => "?").join(",");
         const [users] = await conn.query(`SELECT id, email FROM users WHERE email IN (${placeholders})`, all);
@@ -1616,6 +1619,23 @@ router.post("/email/create", async (req, res) => {
     }
 
     await conn.commit();
+
+    const notificationPayload = {
+      id: emailId,
+      subject: subject || "(No Subject)",
+      from_email: sender.email,
+      from_name: sender.name,
+      timestamp: new Date().toISOString()
+    };
+
+    // Notify sender (for sent folder sync)
+    notifyNewEmail(sender.email, notificationPayload);
+
+    // Notify all recipients
+    [...new Set([...toList, ...ccList, ...bccList])].forEach(email => {
+      notifyNewEmail(email, notificationPayload);
+    });
+
     res.json({ success: true, email_id: emailId });
 
     // 🚀 BACKGROUND TASKS (Non-blocking for response)
@@ -1649,7 +1669,63 @@ router.post("/email/create", async (req, res) => {
   }
 });
 
-// -------------------- UPDATE EMAIL (Generic Update) --------------------
+// -------------------- UPDATE DRAFT --------------------
+router.post("/email/draft/update", async (req, res) => {
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const { id, user_id, to_emails, cc_emails, bcc_emails, subject, body } = req.body;
+
+    if (!id || !user_id) {
+      await conn.rollback();
+      return res.status(400).json({ error: "Missing id or user_id" });
+    }
+
+    // Verify it is a draft and belongs to user
+    const [[email]] = await conn.query(
+      "SELECT id FROM emails e JOIN email_mailbox m ON e.id = m.email_id WHERE e.id = ? AND m.user_id = ? AND e.is_draft = 1",
+      [id, user_id]
+    );
+
+    if (!email) {
+      await conn.rollback();
+      return res.status(404).json({ error: "Draft not found or not editable" });
+    }
+
+    // Update Email Table
+    await conn.query(
+      "UPDATE emails SET subject = ?, body = ?, updated_at = NOW() WHERE id = ?",
+      [subject || '', body || '', id]
+    );
+
+    // Update Recipients (Delete all and re-insert)
+    await conn.query("DELETE FROM email_recipients WHERE email_id = ?", [id]);
+
+    const recipients = [];
+    if (to_emails && Array.isArray(to_emails)) to_emails.forEach(e => recipients.push([id, e.email || e.address || e, 'to']));
+    if (cc_emails && Array.isArray(cc_emails)) cc_emails.forEach(e => recipients.push([id, e.email || e.address || e, 'cc']));
+    if (bcc_emails && Array.isArray(bcc_emails)) bcc_emails.forEach(e => recipients.push([id, e.email || e.address || e, 'bcc']));
+
+    if (recipients.length > 0) {
+      await conn.query(
+        "INSERT INTO email_recipients (email_id, address, type) VALUES ?",
+        [recipients]
+      );
+    }
+
+    await conn.commit();
+    res.json({ success: true });
+
+  } catch (err) {
+    await conn.rollback();
+    console.error("DRAFT UPDATE ERROR:", err);
+    res.status(500).json({ error: "Failed to update draft" });
+  } finally {
+    conn.release();
+  }
+});
+
 router.post("/email/update", async (req, res) => {
   try {
     console.log("UPDATE REQUEST BODY:", JSON.stringify(req.body, null, 2));
@@ -2216,7 +2292,7 @@ router.get("/storage/breakdown", async (req, res) => {
 router.get("/storage/large-files", async (req, res) => {
   try {
     const userId = req.query.user_id;
-    const minSize = Number(req.query.min_size) || 5000000; // Default 5MB
+    const minSize = Number(req.query.min_size) || 25000000; // Default 25MB
 
     if (!userId) {
       return res.status(400).json({ error: "user_id is required" });

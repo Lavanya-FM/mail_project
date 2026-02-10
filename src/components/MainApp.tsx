@@ -11,6 +11,8 @@ import UserProfile from './UserProfile';
 import InboxRulesModal from './InboxRulesModal';
 
 
+import P2PReceiverHandler from './P2PReceiverHandler';
+
 type View = 'mail' | 'drive' | 'calls';
 
 import { authService } from '../lib/authService';
@@ -103,6 +105,7 @@ export default function MainApp() {
         <div className="h-screen flex flex-col bg-white dark:bg-slate-900">
             <CallManager />
             <P2PTransferManager />
+            <P2PReceiverHandler />
 
             {/* Top Navigation Bar */}
             <div className="h-16 px-4 flex items-center justify-between border-b border-gray-200 dark:border-slate-800 z-50 bg-white dark:bg-slate-900">
@@ -256,6 +259,16 @@ export default function MainApp() {
                             >
                                 <Shield className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                                 Inbox Rules
+                            </button>
+                            <button
+                                onClick={() => {
+                                    handleNavigation('mail');
+                                    window.location.hash = 'transfers';
+                                }}
+                                className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg transition overflow-hidden mb-2 flex items-center gap-2 border border-blue-200 dark:border-blue-800"
+                            >
+                                <Shield className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                                Transfers
                             </button>
                         </AccountSwitcher>
                     </div>

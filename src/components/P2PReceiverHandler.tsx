@@ -17,47 +17,54 @@ export default function P2PReceiverHandler() {
       p2pToast.receiving(`file from ${from}`);
     };
 
-    // Listen for file completion
-    const handleFileReceived = (e: CustomEvent) => {
-      const { fileName } = e.detail;
-      console.log('[P2P Receiver] File received:', fileName);
-      p2pToast.delivered(fileName);
+    const downloadBlob = (blob: Blob, fileName: string) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     };
 
-    // Listen for transfer completion
-    const handleTransferComplete = () => {
-      console.log('[P2P Receiver] All files received!');
-      toast.success('✓ All files received successfully!');
+    // Listen for file completion - AUTO DOWNLOAD
+    const handleFileReady = (e: CustomEvent) => {
+      const { fileName, blob, scanStatus } = e.detail;
+      console.log('[P2P Receiver] File ready:', fileName, scanStatus);
+
+      if (scanStatus === 'CLEAN' || scanStatus === 'safe' || !scanStatus) {
+        if (blob) {
+          downloadBlob(blob, fileName);
+          p2pToast.delivered(fileName); // "File Received" toast
+          toast.success(`✓ ${fileName} downloaded automatically`);
+        }
+      } else {
+        console.warn('[P2P] Auto-download blocked due to scan status:', scanStatus);
+      }
     };
 
-    // Listen for download requests
+    // Listen for download requests (Manual)
     const handleDownloadFile = async (e: Event) => {
       const { fileName, messageId } = (e as CustomEvent).detail;
-      console.log('[P2P Receiver] Download requested for:', fileName, messageId);
+      console.log('[P2P Receiver] Manual download requested for:', fileName, messageId);
 
       try {
         let blob = p2pService.getDownloadedFile?.(messageId);
         if (!blob) {
-          const stored = await import('../lib/p2pStorage').then(m => m.getFile(messageId));
-          if (stored && stored.blob) {
-            blob = stored.blob;
+          // Lazy load from DB if not in memory
+          const fileData = await import('../lib/p2pStorage').then(m => m.getFile(messageId));
+          if (fileData && fileData.blob) {
+            blob = fileData.blob;
           }
         }
 
-        if (!blob) {
-          toast.error('File pending assembly or not found. Please wait.');
-          return;
+        if (blob) {
+          downloadBlob(blob, fileName);
+          toast.success(`✓ ${fileName} saved`);
+        } else {
+          toast.error('File not found or pending assembly.');
         }
-
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        toast.success(`✓ ${fileName} saved to device`);
       } catch (error) {
         console.error('[P2P Receiver] Download failed:', error);
         toast.error('Failed to download file');
@@ -65,17 +72,13 @@ export default function P2PReceiverHandler() {
     };
 
     window.addEventListener('p2p-incoming-file', handleIncomingTransfer as EventListener);
-    window.addEventListener('p2p-file-received', handleFileReceived as EventListener);
-    window.addEventListener('p2p-transfer-complete', handleTransferComplete as EventListener);
     window.addEventListener('p2p-download-file', handleDownloadFile as EventListener);
-    window.addEventListener('p2p-file-ready', handleFileReceived as EventListener);
+    window.addEventListener('p2p-file-ready', handleFileReady as EventListener);
 
     return () => {
       window.removeEventListener('p2p-incoming-file', handleIncomingTransfer as EventListener);
-      window.removeEventListener('p2p-file-received', handleFileReceived as EventListener);
-      window.removeEventListener('p2p-transfer-complete', handleTransferComplete as EventListener);
       window.removeEventListener('p2p-download-file', handleDownloadFile as EventListener);
-      window.removeEventListener('p2p-file-ready', handleFileReceived as EventListener);
+      window.removeEventListener('p2p-file-ready', handleFileReady as EventListener);
     };
   }, []);
 

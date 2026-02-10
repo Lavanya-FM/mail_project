@@ -418,7 +418,7 @@ export default function P2PTransferProgress({
                         {(currentState.status === 'sending' || currentState.status === 'transferring' || currentState.status === 'receiving') && (
                           <div className="flex items-center gap-1 px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-full text-xs font-medium">
                             <div className="w-3 h-3 border-2 border-blue-700 border-t-transparent rounded-full animate-spin" />
-                            {mode === 'sender' ? 'Downloading...' : `${currentState.progress}%`}
+                            {mode === 'sender' ? 'Seeding...' : `${currentState.progress}%`}
                           </div>
                         )}
                         {currentState.status === 'pending' && (

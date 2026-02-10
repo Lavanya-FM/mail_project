@@ -1,6 +1,6 @@
 // P2PAttachmentList.tsx - Display and download P2P attachments
 import { useState, useEffect } from 'react';
-import { Download, FileIcon, CheckCircle, XCircle, Loader, AlertCircle, Pause, Play } from 'lucide-react';
+import { Download, FileIcon, CheckCircle, XCircle, AlertCircle, Pause, Play, Zap } from 'lucide-react';
 import { p2pService } from '../lib/p2pService';
 import { enhancedP2PService } from '../lib/enhancedP2PService';
 import toast from 'react-hot-toast';
@@ -25,12 +25,7 @@ function ScanStatusBadge({ status, message }: { status: string, message: string 
 
   // Minimalistic Indications
   if (s === 'SCANNING' || s === 'PENDING') {
-    return (
-      <span className="text-blue-500 flex items-center gap-1" title="Scanning in progress...">
-        <Loader className="w-3 h-3 animate-spin" />
-        <span className="text-[10px]">Scanning</span>
-      </span>
-    );
+    return null; // Don't display spinning scanning indicator
   }
 
   if (s === 'CLEAN') {
@@ -88,7 +83,7 @@ export default function P2PAttachmentList({
 
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
   const [downloadStatus, setDownloadStatus] = useState<Record<string, 'idle' | 'downloading' | 'complete' | 'failed' | 'waiting' | 'paused'>>({});
-  const [transferDetails, setTransferDetails] = useState<Record<string, { speedBps?: number; etaSeconds?: number | null }>>({});
+  const [transferDetails, setTransferDetails] = useState<Record<string, { speedBps?: number; etaSeconds?: number | null; received?: number; total?: number; isTurbo?: boolean }>>({});
 
   // New Scan State
   const [scanStatuses, setScanStatuses] = useState<Record<string, { status: string, message: string }>>({});
@@ -96,9 +91,9 @@ export default function P2PAttachmentList({
   // Track P2P delivery status for each file
   useEffect(() => {
     const handleProgress = (e: CustomEvent) => {
-      const { messageId, progress, speedBps, etaSeconds, status } = e.detail;
+      const { messageId, progress, speedBps, etaSeconds, status, received, total, isTurbo } = e.detail;
       setDownloadProgress(prev => ({ ...prev, [messageId]: progress }));
-      setTransferDetails(prev => ({ ...prev, [messageId]: { speedBps, etaSeconds } }));
+      setTransferDetails(prev => ({ ...prev, [messageId]: { speedBps, etaSeconds, received, total, isTurbo } }));
 
       const s = status?.toUpperCase();
       if (s === 'PAUSED' || status === 'paused') {
@@ -131,9 +126,9 @@ export default function P2PAttachmentList({
     };
 
     const handleReceiverProgress = (e: CustomEvent) => {
-      const { messageId, percentage, status, speedBps, etaSeconds } = e.detail;
+      const { messageId, percentage, status, speedBps, etaSeconds, received, total, isTurbo } = e.detail;
       setDownloadProgress(prev => ({ ...prev, [messageId]: percentage }));
-      setTransferDetails(prev => ({ ...prev, [messageId]: { speedBps, etaSeconds } }));
+      setTransferDetails(prev => ({ ...prev, [messageId]: { speedBps, etaSeconds, received, total, isTurbo } }));
 
       const s = status?.toUpperCase();
       if (s === 'RECEIVING' || s === 'TRANSFERRING' || status === 'downloading') {
@@ -296,24 +291,6 @@ export default function P2PAttachmentList({
     return `${mb.toFixed(1)} MB`;
   };
 
-  const formatSpeed = (bps?: number) => {
-    if (!bps) return '';
-    if (bps < 1024) return `${bps.toFixed(0)} B/s`;
-    const kbps = bps / 1024;
-    if (kbps < 1024) return `${kbps.toFixed(1)} KB/s`;
-    const mbps = kbps / 1024;
-    return `${mbps.toFixed(1)} MB/s`;
-  };
-
-  const formatETA = (etaSeconds?: number | null) => {
-    if (etaSeconds === null || etaSeconds === undefined || etaSeconds <= 0) return '';
-    if (etaSeconds < 60) return `${Math.ceil(etaSeconds)}s remaining`;
-    const minutes = Math.floor(etaSeconds / 60);
-    const hours = Math.floor(minutes / 60);
-    if (hours > 0) return `${hours}h ${minutes % 60}m left`;
-    return `${minutes}m ${Math.floor(etaSeconds % 60)}s left`;
-  };
-
   const handleDownload = async (attachment: P2PAttachment) => {
     // 🛡️ SECURITY CHECK
     const currentStatus = (attachment.p2p_message_id ? (scanStatuses[attachment.p2p_message_id]?.status || (attachment as any).scan_status || 'pending') : 'pending');
@@ -373,88 +350,20 @@ export default function P2PAttachmentList({
     URL.revokeObjectURL(url);
   };
 
-  const getStatusIcon = (attachment: P2PAttachment) => {
-    const status = downloadStatus[attachment.p2p_message_id] || 'idle';
-    const progress = downloadProgress[attachment.p2p_message_id] || 0;
-
-    if (mode === 'sender') {
-      if (p2pService.hasFileInRegistry(attachment.p2p_message_id)) {
-        return (
-          <div title="Hosting file for Direct Transfer">
-            <CheckCircle className="w-5 h-5 text-green-500" />
-          </div>
-        );
-      }
-      if (attachment.p2p_status === 'delivered') return <CheckCircle className="w-5 h-5 text-green-500" />;
-      if (attachment.p2p_status === 'failed') return <XCircle className="w-5 h-5 text-red-500" />;
-      if (attachment.p2p_status === 'pending') return <Loader className="w-5 h-5 text-gray-400 animate-spin" />;
-    }
-
-    switch (status) {
-      case 'downloading':
-        const details = transferDetails[attachment.p2p_message_id];
-        const isSenderOnline = mode === 'receiver' ? p2pService.isPeerOnline(senderEmail) : true;
-
-        if (mode === 'receiver' && !isSenderOnline) {
-          return (
-            <div className="flex items-center gap-2" title="Sender is offline">
-              <Loader className="w-5 h-5 text-yellow-500 animate-pulse" />
-              <span className="text-xs text-yellow-600">Waiting for sender...</span>
-            </div>
-          );
-        }
-
-        return (
-          <div className="flex flex-col items-end gap-1">
-            <div className="flex items-center gap-2">
-              <Loader className="w-5 h-5 text-blue-500 animate-spin" />
-              <span className="text-sm font-bold text-blue-600">{progress}%</span>
-            </div>
-            {details && (details.speedBps || details.etaSeconds != null) && (
-              <div className="flex items-center gap-2 text-[10px] text-gray-500 bg-gray-100 dark:bg-slate-700 px-1.5 py-0.5 rounded leading-none">
-                {details.speedBps && <span>{formatSpeed(details.speedBps)}</span>}
-                {details.speedBps && details.etaSeconds != null && <span className="opacity-30">|</span>}
-                {details.etaSeconds != null && <span>{formatETA(details.etaSeconds)}</span>}
-              </div>
-            )}
-          </div>
-        );
-      case 'paused':
-        return (
-          <div className="flex flex-col items-end gap-1">
-            <div className="flex items-center gap-2">
-              <Pause className="w-5 h-5 text-yellow-500" />
-              <span className="text-sm font-bold text-yellow-600">{progress}% (Paused)</span>
-            </div>
-          </div>
-        );
-      case 'complete': return <CheckCircle className="w-5 h-5 text-green-500" />;
-      case 'failed': return <XCircle className="w-5 h-5 text-red-500" />;
-      case 'waiting':
-        return (
-          <div className="flex items-center gap-2" title="Waiting for sender to come online">
-            <Loader className="w-5 h-5 text-yellow-500 animate-pulse" />
-            <span className="text-xs text-yellow-600">Waiting...</span>
-          </div>
-        );
-      default: return null;
-    }
-  };
-
   const getStatusLabel = (attachment: P2PAttachment) => {
     const status = downloadStatus[attachment.p2p_message_id];
     if (mode === 'sender') {
-      if (p2pService.hasFileInRegistry(attachment.p2p_message_id)) return 'Hosting Locally';
-      if (attachment.p2p_status === 'delivered') return 'Delivered';
+      if (status === 'complete' || attachment.p2p_status === 'delivered') return 'Seeding Complete';
+      if (status === 'failed' || attachment.p2p_status === 'failed') return 'Failed to deliver';
+      if (p2pService.hasFileInRegistry(attachment.p2p_message_id)) return 'Seeding...';
       if (attachment.p2p_status === 'pending') return 'Waiting for recipient';
-      if (attachment.p2p_status === 'failed') return 'Failed to deliver';
     }
     if (attachment.content_base64) return 'Email attachment';
     const isSenderOnline = mode === 'receiver' ? p2pService.isPeerOnline(senderEmail) : true;
 
     if (status === 'downloading') {
       if (mode === 'receiver' && !isSenderOnline) return 'Waiting for sender online...';
-      return 'Downloading...';
+      return mode === 'sender' ? 'Seeding...' : 'Downloading...';
     }
     if (status === 'paused') return 'Paused';
     if (status === 'complete') return mode === 'sender' ? 'File Received' : 'Downloaded';
@@ -475,7 +384,6 @@ export default function P2PAttachmentList({
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {attachments.map((attachment, idx) => {
-          const isP2P = attachment.is_p2p && !attachment.content_base64;
           const status = downloadStatus[attachment.p2p_message_id] || 'idle';
           const isSenderWithFile = mode === 'sender' && p2pService.hasFileInRegistry(attachment.p2p_message_id);
           const isStandardAttachment = !!attachment.content_base64 || !attachment.is_p2p;
@@ -494,12 +402,29 @@ export default function P2PAttachmentList({
                 <p className="text-sm font-medium truncate text-gray-900 dark:text-gray-100" title={attachment.filename}>{attachment.filename}</p>
                 <div className="flex flex-wrap items-center gap-2 mt-0.5">
                   <span className="text-xs text-gray-500">{formatFileSize(attachment.size_bytes)}</span>
-                  {!isStandardAttachment && <span className="text-[10px] font-medium text-blue-600 dark:text-blue-400">Direct Transfer</span>}
+                  {!isStandardAttachment && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-medium text-blue-600 dark:text-blue-400">Direct Transfer</span>
+                      {transferDetails[attachment.p2p_message_id]?.isTurbo && (
+                        <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 text-[9px] font-bold animate-pulse" title="Adaptive GZIP Compression Active">
+                          <Zap className="w-2.5 h-2.5 fill-current" />
+                          TURBO
+                        </span>
+                      )}
+                    </div>
+                  )}
 
                   {/* Status Text - Truncated */}
-                  <span className="text-xs text-gray-500 truncate max-w-[100px]" title={getStatusLabel(attachment)}>
-                    {getStatusLabel(attachment)}
-                  </span>
+                  <div className="flex flex-col">
+                    <span className="text-[10px] text-gray-500 truncate max-w-[120px]" title={getStatusLabel(attachment)}>
+                      {getStatusLabel(attachment)}
+                    </span>
+                    {(isDownloading || isPaused || status === 'complete') && transferDetails[attachment.p2p_message_id]?.received != null && (
+                      <span className="text-[9px] text-gray-400 font-medium">
+                        {formatFileSize(transferDetails[attachment.p2p_message_id].received || 0)} / {formatFileSize(transferDetails[attachment.p2p_message_id].total || attachment.size_bytes)}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {/* Inline Controls Row */}

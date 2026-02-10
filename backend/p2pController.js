@@ -131,10 +131,9 @@ function setupP2PWebSocket(server) {
             await handleRegister(ws, connectionId, msg, wss);
             break;
 
-          case 'request-presence':
             ws.send(JSON.stringify({
               type: 'presence-update',
-              online: getOnlinePeers().map(p => p.email)
+              online: [...new Set(getOnlinePeers().map(p => p.email))]
             }));
             break;
 
@@ -209,6 +208,14 @@ function setupP2PWebSocket(server) {
 
           case 'ping':
             ws.send(JSON.stringify({ type: 'pong' }));
+            break;
+
+          case 'get-server-chunks':
+            await handleGetServerChunks(ws, msg);
+            break;
+
+          case 'p2p-chunk-persistence':
+            await handleChunkPersistence(ws, msg);
             break;
 
           default:
@@ -414,7 +421,7 @@ async function handleRegister(ws, connectionId, msg, wss) {
       type: 'registered',
       connectionId,
       email,
-      onlinePeers: getOnlinePeers().map(p => p.email)
+      onlinePeers: [...new Set(getOnlinePeers().map(p => p.email))]
     }));
 
     // Notify others - Send FULL list to everyone to ensure consistency
@@ -488,6 +495,54 @@ async function handleEmailInitiate(ws, msg) {
   });
 }
 
+
+async function handleGetServerChunks(ws, msg) {
+  const { messageId } = msg;
+  if (!messageId) return;
+
+  try {
+    const [rows] = await db.query('SELECT chunk_index FROM p2p_server_chunks WHERE message_id = ?', [messageId]);
+    const chunkIndices = rows.map(r => r.chunk_index);
+    ws.send(JSON.stringify({
+      type: 'server-chunks-list',
+      messageId,
+      chunkIndices
+    }));
+  } catch (err) {
+    console.error(`[P2P] Failed to get server chunks for ${messageId}:`, err.message);
+  }
+}
+
+async function handleChunkPersistence(ws, msg) {
+  const { messageId, chunkIndex, data, payload, from, to } = msg;
+
+  if (!messageId || data === undefined) return;
+
+  const chunkFile = path.join(P2P_CHUNKS_DIR, `${messageId}_${chunkIndex || 0}.chunk`);
+
+  try {
+    const chunkData = JSON.stringify({
+      from,
+      to,
+      data,
+      payload,
+      messageId,
+      chunkIndex,
+      persistedBy: ws.email
+    });
+
+    await fsPromises.writeFile(chunkFile, chunkData);
+    await db.query(`
+      INSERT INTO p2p_server_chunks (message_id, chunk_index, sender_email, recipient_email, data_path)
+      VALUES (?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE data_path = VALUES(data_path), expires_at = (CURRENT_TIMESTAMP + INTERVAL 24 HOUR)
+    `, [messageId, chunkIndex || 0, from || 'unknown', to || ws.email, chunkFile]);
+
+    // console.log(`[P2P] Persisted chunk ${messageId}:${chunkIndex} for ${ws.email}`);
+  } catch (err) {
+    console.error(`[P2P] Persistence failed for ${messageId}:${chunkIndex}:`, err.message);
+  }
+}
 
 async function handleFileChunk(ws, msg) {
   const { to, from, data, payload, messageId, chunkIndex } = msg;
@@ -980,8 +1035,29 @@ function getOnlinePeers() {
     email: p.email,
     userId: p.userId,
     p2pCapable: p.p2pCapable,
-    publicKey: p.publicKey // Store raw public key bytes if needed, or already JSON string
+    publicKey: p.publicKey
   }));
+}
+
+function notifyNewEmail(recipientEmail, emailMetadata) {
+  const targetEmail = recipientEmail.toLowerCase();
+  const targets = [...peerConnections.values()].filter(p => p.email === targetEmail);
+
+  if (targets.length > 0) {
+    console.log(`[P2P] Sending push notification to ${targetEmail} (${targets.length} sessions)`);
+    const payload = JSON.stringify({
+      type: 'new-email-notification',
+      email: emailMetadata
+    });
+
+    targets.forEach(t => {
+      if (t.ws && t.ws.readyState === WebSocket.OPEN) {
+        t.ws.send(payload);
+      }
+    });
+    return true;
+  }
+  return false;
 }
 
 
@@ -1013,4 +1089,4 @@ setInterval(cleanupExpiredChunks, 3600000);
 
 /* ---------------- EXPORT ---------------- */
 
-module.exports = { setupP2PWebSocket };
+module.exports = { setupP2PWebSocket, notifyNewEmail };

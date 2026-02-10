@@ -49,9 +49,14 @@ export default function ComposeEmail(props: ComposeEmailProps) {
   const [draftStatus, setDraftStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const uuid = () => window.crypto.randomUUID();
 
+  const [draftId, setDraftId] = useState<number | null>(() => {
+    if (prefilledData?.is_draft && prefilledData.id) return Number(prefilledData.id);
+    return null;
+  });
+
   // Attachments
   const [attachments, setAttachments] = useState<File[]>([]);
-  const LARGE_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+  const LARGE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
   // P2P State
   const [profile, setProfile] = useState<any>(null);
@@ -86,25 +91,44 @@ export default function ComposeEmail(props: ComposeEmailProps) {
     setDraftStatus('saving');
 
     try {
-      await emailService.createEmail({
-        user_id: profile.id,
-        from_email: profile.email,
-        from_name: profile.full_name,
-        to_emails: [],
-        cc_emails: [],
-        bcc_emails: [],
-        subject,
-        body,
-        attachments: attachments.map(f => ({
-          filename: f.name,
-          mime_type: f.type,
-          size_bytes: f.size,
-          content_base64: null
-        })),
-        is_draft: true,
-        folder_id: getFolderIdByName('draft'),
-      });
-      setDraftStatus('saved');
+      if (draftId) {
+        // UPDATE existing draft
+        await emailService.updateDraft(draftId, {
+          user_id: profile.id,
+          to_emails: to.split(',').map(e => ({ email: e.trim() })).filter(e => e.email),
+          cc_emails: cc ? cc.split(',').map(e => ({ email: e.trim() })).filter(e => e.email) : [],
+          bcc_emails: bcc ? bcc.split(',').map(e => ({ email: e.trim() })).filter(e => e.email) : [],
+          subject,
+          body
+        });
+        setDraftStatus('saved');
+      } else {
+        // CREATE new draft
+        const res = await emailService.createEmail({
+          user_id: profile.id,
+          from_email: profile.email,
+          from_name: profile.full_name,
+          to_emails: to.split(',').map(e => ({ email: e.trim() })).filter(e => e.email),
+          cc_emails: cc ? cc.split(',').map(e => ({ email: e.trim() })).filter(e => e.email) : [],
+          bcc_emails: bcc ? bcc.split(',').map(e => ({ email: e.trim() })).filter(e => e.email) : [],
+          subject,
+          body,
+          attachments: attachments.map(f => ({
+            filename: f.name,
+            mime_type: f.type,
+            size_bytes: f.size,
+            content_base64: null
+          })),
+          is_draft: true,
+          folder_id: getFolderIdByName('draft'),
+          thread_id: threadId, // if replying
+        });
+
+        if (res.data && res.data.email_id) {
+          setDraftId(res.data.email_id);
+        }
+        setDraftStatus('saved');
+      }
       onDraftSaved?.();
       setTimeout(() => setDraftStatus('idle'), 2000);
     } catch (err) {
@@ -116,7 +140,7 @@ export default function ComposeEmail(props: ComposeEmailProps) {
   // P2P Progress tracking
   useEffect(() => {
     const progressHandler = (e: any) => {
-      const { messageId, fileName, progress } = e.detail;
+      const { messageId, fileName, progress, speedBps, etaSeconds, status, reason } = e.detail;
 
       setP2pFiles(prev => {
         const existing = prev.find(f => f.name === fileName || f.messageId === messageId);
@@ -128,23 +152,29 @@ export default function ComposeEmail(props: ComposeEmailProps) {
                 ...f,
                 messageId,
                 progress,
-                status: progress >= 100 ? 'delivered' : 'transferring'
+                speedBps,
+                etaSeconds,
+                reason,
+                status: progress >= 100 ? 'delivered' : (status || 'transferring')
               }
               : f
           );
-        } else {
-          const attachment = attachments.find(a => a.name === fileName);
-
+        } else if (fileName) { // Ensure we don't add empty entries
           return [...prev, {
             name: fileName,
-            size: attachment?.size || 0,
-            progress,
-            status: progress > 0 ? 'transferring' : 'pending',
-            messageId
+            size: 0, // Gets updated later or we might miss it here
+            progress: progress,
+            messageId,
+            status: 'transferring',
+            speedBps,
+            etaSeconds,
+            reason
           }];
         }
+        return prev;
       });
     };
+
 
     const deliveredHandler = (e: any) => {
       const { messageId, fileName } = e.detail;
@@ -206,13 +236,14 @@ export default function ComposeEmail(props: ComposeEmailProps) {
     if (sending) return;
 
     const timer = setTimeout(() => {
+      // Only save if there is content
       if (to || subject || body) {
         saveDraft();
       }
     }, 3000);
 
     return () => clearTimeout(timer);
-  }, [to, subject, body, attachments, sending]);
+  }, [to, subject, body, attachments, sending, draftId]); // Depends on draftId now
 
   // Load user
   useEffect(() => {
@@ -244,6 +275,7 @@ export default function ComposeEmail(props: ComposeEmailProps) {
     if (prefilledData.cc) setShowCc(true);
     if (textareaRef.current) textareaRef.current.innerHTML = normalizedBody;
     if (prefilledData.threadId) setThreadId(prefilledData.threadId);
+    // Note: draftId is set in useState initializer
   }, [prefilledData]);
 
   // Reactive Presence Detection
@@ -400,6 +432,11 @@ export default function ComposeEmail(props: ComposeEmailProps) {
         attachments: processedAttachments
       });
 
+      // CLEANUP DRAFT IF EXISTS
+      if (draftId) {
+        await emailService.deletePermanently(draftId, profile.id).catch(e => console.error("Draft cleanup error", e));
+      }
+
       const p2pList = p2pAttachmentsMeta.filter(a => a.is_p2p);
       const p2pFilesToStart = attachments.filter((_, idx) => classifications[idx].mode === 'P2P');
 
@@ -482,6 +519,7 @@ export default function ComposeEmail(props: ComposeEmailProps) {
       setShowP2PProgress={setShowP2PProgress}
       recipientEmail={recipientEmail}
       canUseP2P={canUseP2P}
+      classifications={classifications}
       hasLargeAttachments={hasLargeAttachments}
       hasSessionKey={(email) => p2pService.hasSessionKey?.(email) || false}
       normalizeEmailField={normalizeEmailField}

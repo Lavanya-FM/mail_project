@@ -9,6 +9,8 @@ export interface AttachmentClassification {
     reason: string;
 }
 
+const P2P_THRESHOLD_BYTES = 25 * 1024 * 1024; // 25MB
+
 /**
  * Classifies attachments based on size and recipient capability
  */
@@ -17,22 +19,32 @@ export function classifyAttachments(
     recipientP2PCapable: boolean
 ): AttachmentClassification[] {
     return files.map(file => {
-        // If recipient is not P2P capable, we MUST use EMAIL or fail if too large
-        if (!recipientP2PCapable) {
+        // 1. Force Regular EMAIL for files < 25 MB
+        if (file.size < P2P_THRESHOLD_BYTES) {
             return {
                 filename: file.name,
                 size: file.size,
                 mode: 'EMAIL',
-                reason: 'Recipient not P2P capable'
+                reason: 'Small file (< 25MB) - Regular delivery'
             };
         }
 
-        // Default to P2P if capable, regardless of size (User preference/Green Mail policy)
+        // 2. Use P2P for files >= 25 MB if recipient is capable
+        if (recipientP2PCapable) {
+            return {
+                filename: file.name,
+                size: file.size,
+                mode: 'P2P',
+                reason: 'Large file (>= 25MB) - P2P optimized'
+            };
+        }
+
+        // 3. Fallback to EMAIL if not P2P capable (though usually recipientP2PCapable is true)
         return {
             filename: file.name,
             size: file.size,
-            mode: 'P2P',
-            reason: 'P2P Preferred'
+            mode: 'EMAIL',
+            reason: 'Recipient not P2P capable'
         };
     });
 }

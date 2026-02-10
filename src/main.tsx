@@ -2,10 +2,9 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
-import { initP2PDownloadListener } from "./lib/p2pDownloadListener";
 
-initP2PDownloadListener();
-console.log('Build Version: 2026-02-09.v265-OPT-FAST-SEND');
+// initP2PDownloadListener removed in favor of P2PReceiverHandler
+console.log('Build Version: 2026-02-09.v265-OPT-FAST-SEND-FIXED');
 
 // TEMPORARILY DISABLED: Unregister ALL service workers to force fresh load
 if ('serviceWorker' in navigator) {

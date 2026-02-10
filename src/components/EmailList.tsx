@@ -152,6 +152,11 @@ export default function EmailList({
             promotions: []
         };
 
+        if (folderType !== 'inbox') {
+            categories.primary = [...emails];
+            return categories;
+        }
+
         emails.forEach(email => {
             const textToCheck = (
                 (email.from_name || '') + ' ' +
@@ -168,7 +173,7 @@ export default function EmailList({
             }
         });
         return categories;
-    }, [emails]);
+    }, [emails, folderType]);
 
     const filteredEmails = categorizedEmails[activeTab];
     const socialUnread = categorizedEmails.social.filter(e => !e.is_read).length;
@@ -300,46 +305,48 @@ export default function EmailList({
                 </div>
             </div>
 
-            <div className="flex items-center border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900">
-                <button
-                    onClick={() => { setActiveTab("primary"); setSelectedIds(new Set()); }}
-                    className={`flex-1 flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-[3px] transition-colors ${activeTab === "primary"
-                        ? "border-emerald-600 text-emerald-700 dark:text-emerald-400 bg-emerald-50/10"
-                        : "border-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
-                        }`}
-                >
-                    <Inbox className={`w-4 h-4 ${activeTab === 'primary' ? 'fill-current' : ''}`} />
-                    <span>Primary</span>
-                </button>
+            {folderType === 'inbox' && (
+                <div className="flex items-center border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900">
+                    <button
+                        onClick={() => { setActiveTab("primary"); setSelectedIds(new Set()); }}
+                        className={`flex-1 flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-[3px] transition-colors ${activeTab === "primary"
+                            ? "border-emerald-600 text-emerald-700 dark:text-emerald-400 bg-emerald-50/10"
+                            : "border-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                            }`}
+                    >
+                        <Inbox className={`w-4 h-4 ${activeTab === 'primary' ? 'fill-current' : ''}`} />
+                        <span>Primary</span>
+                    </button>
 
-                <button
-                    onClick={() => { setActiveTab("social"); setSelectedIds(new Set()); }}
-                    className={`flex-1 flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-[3px] transition-colors ${activeTab === "social"
-                        ? "border-blue-600 text-blue-700 dark:text-blue-400 bg-blue-50/10"
-                        : "border-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
-                        }`}
-                >
-                    <Users className={`w-4 h-4 ${activeTab === 'social' ? 'fill-current' : ''}`} />
-                    <span>Social</span>
-                    {socialUnread > 0 && (
-                        <span className="ml-auto bg-blue-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">{socialUnread} new</span>
-                    )}
-                </button>
+                    <button
+                        onClick={() => { setActiveTab("social"); setSelectedIds(new Set()); }}
+                        className={`flex-1 flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-[3px] transition-colors ${activeTab === "social"
+                            ? "border-blue-600 text-blue-700 dark:text-blue-400 bg-blue-50/10"
+                            : "border-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                            }`}
+                    >
+                        <Users className={`w-4 h-4 ${activeTab === 'social' ? 'fill-current' : ''}`} />
+                        <span>Social</span>
+                        {socialUnread > 0 && (
+                            <span className="ml-auto bg-blue-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">{socialUnread} new</span>
+                        )}
+                    </button>
 
-                <button
-                    onClick={() => { setActiveTab("promotions"); setSelectedIds(new Set()); }}
-                    className={`flex-1 flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-[3px] transition-colors ${activeTab === "promotions"
-                        ? "border-gray-600 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800"
-                        : "border-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
-                        }`}
-                >
-                    <Tag className={`w-4 h-4 ${activeTab === 'promotions' ? 'fill-current' : ''}`} />
-                    <span className="hidden sm:inline">Promotions</span>
-                    {promotionsUnread > 0 && (
-                        <span className="ml-2 bg-gray-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">{promotionsUnread} new</span>
-                    )}
-                </button>
-            </div>
+                    <button
+                        onClick={() => { setActiveTab("promotions"); setSelectedIds(new Set()); }}
+                        className={`flex-1 flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-[3px] transition-colors ${activeTab === "promotions"
+                            ? "border-gray-600 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800"
+                            : "border-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                            }`}
+                    >
+                        <Tag className={`w-4 h-4 ${activeTab === 'promotions' ? 'fill-current' : ''}`} />
+                        <span className="hidden sm:inline">Promotions</span>
+                        {promotionsUnread > 0 && (
+                            <span className="ml-2 bg-gray-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">{promotionsUnread} new</span>
+                        )}
+                    </button>
+                </div>
+            )}
 
             <div className="flex-1 overflow-y-auto">
                 {threadList.map(({ latestEmail: email, allEmails, unreadCount }) => {
@@ -402,7 +409,7 @@ export default function EmailList({
 
                 {threadList.length === 0 && (
                     <div className="p-8 text-center text-gray-500">
-                        No emails in {activeTab}.
+                        {folderType === 'inbox' ? `No emails in ${activeTab}.` : `No emails in ${folderType || 'this folder'}.`}
                     </div>
                 )}
             </div>

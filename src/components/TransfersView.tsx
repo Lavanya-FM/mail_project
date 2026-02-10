@@ -1,7 +1,9 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { ArrowUpRight, ArrowDownLeft, CheckCircle2, AlertCircle, Loader2, ShieldCheck, Mail, ExternalLink, Search, Zap } from 'lucide-react';
 import { useP2PTransfers } from '../hooks/useP2PTransfers';
 import { Email } from '../types/email';
+
+import { emailService } from '../lib/emailService';
 
 interface TransfersViewProps {
     onOpenEmail: (emailId: string) => void;
@@ -12,11 +14,51 @@ export default function TransfersView({ onOpenEmail, emails }: TransfersViewProp
     const { tasks } = useP2PTransfers();
     const [searchQuery, setSearchQuery] = useState('');
     const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'complete'>('all');
+    const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(new Set());
+    const [verifiedTaskIds, setVerifiedTaskIds] = useState<Set<string>>(new Set());
 
     const totalActive = Array.from(tasks.values()).filter(t => t.status === 'active' || t.status === 'handshaking' || t.status === 'queued').length;
 
+    // Verify orphaned tasks
+    useEffect(() => {
+        const verifyOrphans = async () => {
+            const orphans = Array.from(tasks.values()).filter(task => {
+                // If known deleted or verified, skip
+                if (deletedTaskIds.has(task.id) || verifiedTaskIds.has(task.id)) return false;
+
+                // If active/handshaking, always show (don't hide active transfers even if email not ready)
+                if (task.status === 'active' || task.status === 'handshaking' || task.status === 'queued') return false;
+
+                // Check if we have it locally
+                const hasLocal = emails.some(e =>
+                    String(e.id) === task.id ||
+                    (e.attachments || []).some((a: any) => a.p2p_message_id === task.id)
+                );
+                return !hasLocal;
+            });
+
+            // Process orphans
+            for (const task of orphans) {
+                try {
+                    const res = await emailService.getEmailById(task.id);
+                    if (res.error || !res.data) {
+                        setDeletedTaskIds(prev => new Set(prev).add(task.id));
+                    } else {
+                        setVerifiedTaskIds(prev => new Set(prev).add(task.id));
+                    }
+                } catch (e) {
+                    setDeletedTaskIds(prev => new Set(prev).add(task.id));
+                }
+            }
+        };
+
+        const timeout = setTimeout(verifyOrphans, 1000);
+        return () => clearTimeout(timeout);
+    }, [tasks, emails, deletedTaskIds, verifiedTaskIds]);
+
     const filteredTasks = useMemo(() => {
         return Array.from(tasks.values())
+            .filter(task => !deletedTaskIds.has(task.id)) // Hide deleted
             .filter(task => {
                 const matchesSearch = task.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                     task.peer.toLowerCase().includes(searchQuery.toLowerCase());
@@ -27,7 +69,19 @@ export default function TransfersView({ onOpenEmail, emails }: TransfersViewProp
                 return matchesSearch;
             })
             .reverse();
-    }, [tasks, searchQuery, filterStatus]);
+    }, [tasks, searchQuery, filterStatus, deletedTaskIds]);
+
+    const formatSize = (bytes: number) => {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    };
+
+    const formatSpeed = (bps: number) => {
+        return formatSize(bps) + '/s';
+    };
 
     return (
         <div className="flex-1 flex flex-col min-h-0 bg-[#f8fafc] dark:bg-slate-950 overflow-hidden h-full">
@@ -109,14 +163,17 @@ export default function TransfersView({ onOpenEmail, emails }: TransfersViewProp
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
                         {filteredTasks.map(task => {
-                            const associatedEmail = emails.find(e => String(e.id) === task.id);
+                            const associatedEmail = emails.find(e =>
+                                String(e.id) === task.id ||
+                                (e.attachments || []).some((a: any) => a.p2p_message_id === task.id)
+                            );
                             const progress = isNaN(task.progress) ? 0 : task.progress;
                             const isTransferring = task.status === 'active' || task.status === 'handshaking' || task.status === 'queued';
 
                             return (
                                 <button
                                     key={task.id}
-                                    onClick={() => onOpenEmail(task.id)}
+                                    onClick={() => onOpenEmail(associatedEmail ? String(associatedEmail.id) : task.id)}
                                     className={`flex flex-col text-left bg-white dark:bg-slate-900 rounded-2xl border transition-all duration-300 group relative overflow-hidden h-fit ${isTransferring
                                         ? 'border-blue-500 shadow-lg shadow-blue-500/5 ring-1 ring-blue-500/20'
                                         : 'border-gray-200 dark:border-slate-800 hover:border-gray-300 dark:hover:border-slate-700 shadow-sm hover:shadow-md'
@@ -178,19 +235,53 @@ export default function TransfersView({ onOpenEmail, emails }: TransfersViewProp
                                                         <span className="text-[10px] font-black text-gray-400">%</span>
                                                     </div>
                                                 </div>
-                                                <div className="text-right">
+                                                <div className="text-right flex flex-col items-end">
                                                     <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest leading-none mb-1.5 block">State</span>
-                                                    <div className={`text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-lg inline-flex items-center gap-1.5 shadow-sm ${task.status === 'complete' ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30' :
+                                                    <div className={`text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-lg inline-flex items-center gap-1.5 shadow-sm ${task.status === 'complete' || task.status === 'seeding' ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30' :
                                                         task.status === 'failed' ? 'bg-red-50 text-red-600 dark:bg-red-900/30' :
                                                             'bg-blue-50 text-blue-600 dark:bg-blue-900/30'
                                                         }`}>
                                                         {task.status === 'active' && <Loader2 className="w-3 h-3 animate-spin" />}
-                                                        {task.status === 'complete' && <CheckCircle2 className="w-3 h-3" />}
+                                                        {(task.status === 'complete' || task.status === 'seeding') && <CheckCircle2 className="w-3 h-3" />}
                                                         {task.status === 'failed' && <AlertCircle className="w-3 h-3" />}
-                                                        {task.status}
+                                                        {task.status === 'seeding' ? 'SEEDING' : task.status}
                                                     </div>
                                                 </div>
                                             </div>
+
+                                            {/* Detailed Stats (Speed, Size, ETA) */}
+                                            {(isTransferring || task.status === 'complete' || task.status === 'seeding') && (
+                                                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-50 dark:border-slate-800/50">
+                                                    {isTransferring && (
+                                                        <>
+                                                            <div className="flex flex-col">
+                                                                <span className="text-[8px] font-bold text-gray-400 uppercase">Speed</span>
+                                                                <span className="text-[10px] font-bold text-gray-700 dark:text-gray-300">
+                                                                    {task.speedBps ? formatSpeed(task.speedBps) : '-'}
+                                                                </span>
+                                                            </div>
+                                                            <div className="flex flex-col text-right">
+                                                                <span className="text-[8px] font-bold text-gray-400 uppercase">ETA</span>
+                                                                <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400">
+                                                                    {task.etaSeconds ? `${Math.ceil(task.etaSeconds)}s` : 'Calculating...'}
+                                                                </span>
+                                                            </div>
+                                                        </>
+                                                    )}
+                                                    <div className="col-span-2 flex flex-col mt-1">
+                                                        <div className="flex justify-between text-[8px] font-bold text-gray-400 uppercase mb-0.5">
+                                                            <span>Transferred</span>
+                                                            <span>{task.total ? formatSize(task.total) : 'Unknown'}</span>
+                                                        </div>
+                                                        <div className="w-full bg-gray-100 dark:bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                                                            <div className="bg-blue-500 h-full rounded-full transition-all duration-300" style={{ width: `${progress}%` }} />
+                                                        </div>
+                                                        <div className="text-right text-[9px] font-bold text-gray-600 dark:text-gray-400 mt-0.5">
+                                                            {task.received ? formatSize(task.received) : '0 B'} / {task.total ? formatSize(task.total) : '?'}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
 
                                             {/* Thread Context */}
                                             <div className="pt-4 border-t border-gray-100 dark:border-slate-800 flex items-center justify-between">
