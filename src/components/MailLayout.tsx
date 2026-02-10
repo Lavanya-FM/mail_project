@@ -90,7 +90,7 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
   const [editLabelName, setEditLabelName] = useState('');
   const [openedMailTabs, setOpenedMailTabs] = useState<Email[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
-  const [composeWindows, setComposeWindows] = useState<string[]>([]);
+  const [composeWindows, setComposeWindows] = useState<{ id: string; data?: any }[]>([]);
   const [nextComposeId, setNextComposeId] = useState(1);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
@@ -223,11 +223,17 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
     }
   }, [profile?.id]);
 
-  const handleOpenComposeWindow = useCallback(() => {
+  const handleOpenComposeWindow = useCallback((data?: any) => {
+    // If opening an existing draft, check if it's already open
+    if (data?.id) {
+      const existing = composeWindows.find(w => w.data?.id === data.id);
+      if (existing) return;
+    }
+
     const newComposeId = `compose-${nextComposeId}`;
-    setComposeWindows(prev => [...prev, newComposeId]);
+    setComposeWindows(prev => [...prev, { id: newComposeId, data }]);
     setNextComposeId(prev => prev + 1);
-  }, [nextComposeId]);
+  }, [nextComposeId, composeWindows]);
 
   const handleOpenMailInTab = useCallback((email: Email) => {
     if (!openedMailTabs.some(tab => String(tab.id) === String(email.id))) {
@@ -469,7 +475,7 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
   };
 
   const handleCloseComposeWindow = (composeId: string) => {
-    setComposeWindows(composeWindows.filter(id => id !== composeId));
+    setComposeWindows(prev => prev.filter(w => w.id !== composeId));
   };
 
   const handleFolderClick = (folderType: string, folder: Folder) => {
@@ -831,7 +837,12 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
                   emails={filteredEmails}
                   selectedEmail={selectedEmail}
                   onSelectEmail={(email: any) => {
-                    handleOpenMailInTab(email);
+                    const draftsFolderId = getFolderIdByName('drafts') || getFolderIdByName('draft');
+                    if (email.is_draft || String(email.folder_id) === String(draftsFolderId)) {
+                      handleOpenComposeWindow(email);
+                    } else {
+                      handleOpenMailInTab(email);
+                    }
                   }}
                   onRefresh={refreshEmails}
                   isTrash={selectedFolder?.id === 'trash' || selectedFolder?.system_box === 'trash'}
@@ -888,13 +899,13 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
       </div>
 
       {/* Compose Windows */}
-      {composeWindows.map((composeId) => (
+      {composeWindows.map((win) => (
         <ComposeEmail
-          key={composeId}
-          onClose={() => handleCloseComposeWindow(composeId)}
-          onSent={() => { handleCloseComposeWindow(composeId); refreshEmails(); }}
+          key={win.id}
+          onClose={() => handleCloseComposeWindow(win.id)}
+          onSent={() => { handleCloseComposeWindow(win.id); refreshEmails(); }}
           onDraftSaved={refreshEmails}
-          prefilledData={undefined}
+          prefilledData={win.data}
         />
       ))}
 

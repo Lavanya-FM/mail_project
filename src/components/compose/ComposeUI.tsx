@@ -249,6 +249,7 @@ export interface ComposeUIProps {
   onRegularSend?: () => void;
 
   onClose: () => void;
+  onDiscard?: () => void;
   onLocalAttach: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onDriveAttach: (files: any[]) => void;
 
@@ -308,6 +309,7 @@ export default function ComposeUI(props: ComposeUIProps) {
     formatFileSize,
     onP2PSend,
     onClose,
+    onDiscard,
     onLocalAttach,
     onDriveAttach,
     onInsertEmoji,
@@ -943,8 +945,9 @@ export default function ComposeUI(props: ComposeUIProps) {
         {/* ACTIONS */}
         <div className="flex items-center gap-3">
           <button
-            onClick={onClose}
+            onClick={onDiscard}
             className="p-2 text-gray-500 hover:text-gray-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-800 rounded transition-colors"
+            title="Discard draft"
           >
             <Trash2 className="w-5 h-5" />
           </button>

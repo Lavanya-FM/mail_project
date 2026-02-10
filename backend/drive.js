@@ -508,4 +508,126 @@ router.get('/files/:id/download', async (req, res) => {
     }
 });
 
+// Rename file or folder
+router.post('/rename', async (req, res) => {
+    const { type, id, newName, user_id } = req.body;
+    if (!type || !id || !newName || !user_id) return res.status(400).json({ error: 'Missing data' });
+
+    try {
+        if (!(await checkPermission(type, id, user_id, 'EDIT'))) return res.status(403).json({ error: 'Forbidden' });
+
+        if (type === 'file') {
+            await db.query('UPDATE files SET name = ? WHERE id = ?', [newName, id]);
+        } else {
+            await db.query('UPDATE folders SET name = ? WHERE id = ?', [newName, id]);
+        }
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: 'Rename failed' });
+    }
+});
+
+// Make a copy of a file
+router.post('/copy', async (req, res) => {
+    const { file_id, user_id } = req.body;
+    if (!file_id || !user_id) return res.status(400).json({ error: 'Missing data' });
+
+    try {
+        if (!(await checkPermission('FILE', file_id, user_id, 'VIEW'))) return res.status(403).json({ error: 'Forbidden' });
+
+        const [[file]] = await db.query('SELECT * FROM files WHERE id = ?', [file_id]);
+        if (!file) return res.status(404).json({ error: 'File not found' });
+
+        // Check storage quota
+        const canUpload = await storageService.hasSpace(user_id, file.size);
+        if (!canUpload) return res.status(403).json({ error: 'Storage quota exceeded' });
+
+        const newName = `Copy of ${file.name}`;
+        const newPath = path.join(uploadDir, `${Date.now()}-copy-${file.name}`);
+
+        // Copy file on disk
+        if (fs.existsSync(file.storage_path)) {
+            fs.copyFileSync(file.storage_path, newPath);
+        } else {
+            return res.status(404).json({ error: 'Source file missing on disk' });
+        }
+
+        // Insert into DB
+        const [result] = await db.query(
+            `INSERT INTO files (name, folder_id, owner_id, size, mime_type, storage_path) 
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [newName, file.folder_id, user_id, file.size, file.mime_type, newPath]
+        );
+
+        await storageService.updateUsage(user_id, file.size);
+
+        res.json({ success: true, file_id: result.insertId });
+    } catch (err) {
+        console.error('Copy file error:', err);
+        res.status(500).json({ error: 'Copy failed' });
+    }
+});
+
+// GET Version History
+router.get('/files/:id/versions', async (req, res) => {
+    const { id } = req.params;
+    const userId = req.query.user_id;
+    if (!userId) return res.status(401).json({ error: 'Auth required' });
+
+    try {
+        if (!(await checkPermission('FILE', id, userId, 'VIEW'))) return res.status(403).json({ error: 'Forbidden' });
+
+        const [versions] = await db.query(
+            'SELECT * FROM file_versions WHERE file_id = ? ORDER BY version_number DESC',
+            [id]
+        );
+        res.json({ success: true, versions });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch versions' });
+    }
+});
+
+// RESTORE a Version
+router.post('/files/:id/versions/:versionId/restore', async (req, res) => {
+    const { id, versionId } = req.params;
+    const { user_id } = req.body;
+    if (!user_id) return res.status(401).json({ error: 'Auth required' });
+
+    try {
+        if (!(await checkPermission('FILE', id, user_id, 'EDIT'))) return res.status(403).json({ error: 'Forbidden' });
+
+        const [[file]] = await db.query('SELECT * FROM files WHERE id = ?', [id]);
+        const [[version]] = await db.query('SELECT * FROM file_versions WHERE id = ? AND file_id = ?', [versionId, id]);
+
+        if (!file || !version) return res.status(404).json({ error: 'File or version not found' });
+
+        // 1. Save current as a "new" version before restoring (optional, but safer)
+        // For simplicity, we'll just swap.
+
+        const oldPath = file.storage_path;
+        const oldSize = file.size;
+        const oldVersionNum = file.version_current;
+
+        // 2. Update current file with version data
+        await db.query(
+            'UPDATE files SET storage_path = ?, size = ?, version_current = version_current + 1, updated_at = NOW() WHERE id = ?',
+            [version.storage_path, version.size, id]
+        );
+
+        // 3. Keep the "old" current as a version entry
+        await db.query(
+            'INSERT INTO file_versions (file_id, version_number, storage_path, size) VALUES (?, ?, ?, ?)',
+            [id, oldVersionNum, oldPath, oldSize]
+        );
+
+        // 4. Optionally delete the restored version entry from file_versions to prevent duplicates?
+        // Actually, better to just keep it. 
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Restore version error:', err);
+        res.status(500).json({ error: 'Restore failed' });
+    }
+});
+
 module.exports = router;

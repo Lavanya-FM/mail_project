@@ -32,6 +32,7 @@ export interface DriveFile {
     tags?: string[];
     previewUrl?: string;
     is_missing?: boolean;
+    version_current?: number;
 }
 
 // Helper to add auth headers without messing up FormData content-type
@@ -262,6 +263,41 @@ export async function getRecentFiles(userId: number, limit = 20) {
     const res = await authService.fetchWithAuth(`${API}/recent?user_id=${userId}&limit=${limit}`);
     const data = await res.json();
     return data.files || [];
+}
+
+/* ===============================
+   RENAME & COPY
+================================ */
+export async function rename(type: 'file' | 'folder', id: number, newName: string, userId: number) {
+    const res = await authService.fetchWithAuth(`${API}/rename`, {
+        method: "POST",
+        body: JSON.stringify({ type, id, newName, user_id: userId })
+    });
+    return res.json();
+}
+
+export async function copyFile(fileId: number, userId: number) {
+    const res = await authService.fetchWithAuth(`${API}/copy`, {
+        method: "POST",
+        body: JSON.stringify({ file_id: fileId, user_id: userId })
+    });
+    return res.json();
+}
+
+/* ===============================
+   VERSION HISTORY
+================================ */
+export async function getFileVersionHistory(fileId: number, userId: number) {
+    const res = await authService.fetchWithAuth(`${API}/files/${fileId}/versions?user_id=${userId}`);
+    return res.json();
+}
+
+export async function restoreFileVersion(fileId: number, versionId: number, userId: number) {
+    const res = await authService.fetchWithAuth(`${API}/files/${fileId}/versions/${versionId}/restore`, {
+        method: "POST",
+        body: JSON.stringify({ user_id: userId })
+    });
+    return res.json();
 }
 
 /* ===============================

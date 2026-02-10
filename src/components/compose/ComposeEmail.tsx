@@ -60,6 +60,8 @@ export default function ComposeEmail(props: ComposeEmailProps) {
   const [p2pFiles, setP2pFiles] = useState<any[]>([]);
   const [presenceReady, setPresenceReady] = useState(false);
   const [showP2PProgress, setShowP2PProgress] = useState(false);
+  const [activeDraftId, setActiveDraftId] = useState<number | null>(prefilledData?.id && prefilledData?.is_draft ? Number(prefilledData.id) : null);
+  const [lastSavedContent, setLastSavedContent] = useState<string>('');
   const [threadId, setThreadId] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLDivElement>(null);
@@ -153,29 +155,56 @@ export default function ComposeEmail(props: ComposeEmailProps) {
   // Fix in handleSend at line 270 (need to target this via context or split edits)
 
   // Draft autosave
-  const saveDraft = async () => {
+  const saveDraft = async (manual = false) => {
     if (!profile || sending) return;
+
+    // Don't save if nothing changed
+    const currentContent = `${to}|${subject}|${body}|${attachments.length}`;
+    if (!manual && currentContent === lastSavedContent) return;
+
+    // Don't save empty drafts automatically
+    if (!manual && !to && !subject && !body && attachments.length === 0) return;
+
     setDraftStatus('saving');
     try {
-      await emailService.createEmail({
-        user_id: profile.id,
-        from_email: profile.email,
-        from_name: profile.full_name,
-        to_emails: [],
-        cc_emails: [],
-        bcc_emails: [],
-        subject,
-        body,
-        attachments: attachments.map(f => ({
-          filename: f.name,
-          mime_type: f.type,
-          size_bytes: f.size,
-          content_base64: null
-        })),
-        is_draft: true,
-        folder_id: getFolderIdByName('draft'),
-      });
-      setDraftStatus('saved');
+      if (activeDraftId) {
+        // Update existing draft
+        await emailService.updateDraft(activeDraftId, {
+          user_id: profile.id,
+          to_emails: to.split(',').map(e => e.trim()).filter(Boolean),
+          cc_emails: cc.split(',').map(e => e.trim()).filter(Boolean),
+          bcc_emails: bcc.split(',').map(e => e.trim()).filter(Boolean),
+          subject: subject || '(no subject)',
+          body: textareaRef.current?.innerHTML || body,
+        });
+        setDraftStatus('saved');
+      } else {
+        // Create new draft
+        const resp = await emailService.createEmail({
+          user_id: profile.id,
+          from_email: profile.email,
+          from_name: profile.full_name,
+          to_emails: to.split(',').map(e => e.trim()).filter(Boolean).map(e => ({ email: e })),
+          cc_emails: cc.split(',').map(e => e.trim()).filter(Boolean).map(e => ({ email: e })),
+          bcc_emails: bcc.split(',').map(e => e.trim()).filter(Boolean).map(e => ({ email: e })),
+          subject: subject || '(no subject)',
+          body: textareaRef.current?.innerHTML || body,
+          attachments: attachments.map(f => ({
+            filename: f.name,
+            mime_type: f.type,
+            size_bytes: f.size,
+            content_base64: null
+          })),
+          is_draft: true,
+          folder_id: getFolderIdByName('drafts') || getFolderIdByName('draft'),
+        });
+
+        if (resp.data && resp.data.email_id) {
+          setActiveDraftId(resp.data.email_id);
+        }
+        setDraftStatus('saved');
+      }
+      setLastSavedContent(currentContent);
       setTimeout(() => setDraftStatus('idle'), 2000);
     } catch (err) {
       console.error('Draft save failed:', err);
@@ -183,11 +212,31 @@ export default function ComposeEmail(props: ComposeEmailProps) {
     }
   };
 
+  const discardDraft = async () => {
+    if (activeDraftId && profile) {
+      try {
+        await emailService.deleteEmail(activeDraftId, profile.id);
+        toast.success('Draft discarded');
+      } catch (err) {
+        console.error('Failed to discard draft:', err);
+      }
+    }
+    onClose();
+  };
+
+  const handleClose = async () => {
+    // If there is content and not sending, save as draft before closing
+    if (!sending && (to || subject || (textareaRef.current?.innerHTML || body).trim())) {
+      await saveDraft(true);
+    }
+    onClose();
+  };
+
   useEffect(() => {
     if (sending) return;
     const timer = setTimeout(() => {
-      if (to || subject || body) saveDraft();
-    }, 5000);
+      saveDraft();
+    }, 5000); // Autosave every 5 seconds
     return () => clearTimeout(timer);
   }, [to, subject, body, attachments, sending]);
 
@@ -312,6 +361,11 @@ export default function ComposeEmail(props: ComposeEmailProps) {
         attachments: processedAttachments
       });
 
+      // If we were editing a draft, delete the draft source now that it's sent
+      if (activeDraftId) {
+        await emailService.deleteEmail(activeDraftId, profile.id).catch(e => console.warn('Draft cleanup failed', e));
+      }
+
       toast.success('✓ Email sent successfully');
       // onSent/onClose called optimistically at start
 
@@ -330,7 +384,8 @@ export default function ComposeEmail(props: ComposeEmailProps) {
       showCc={showCc} showBcc={showBcc} setShowCc={setShowCc} setShowBcc={setShowBcc}
       sending={sending} liveRecipientStatus={recipientStatus} draftStatus={draftStatus}
       attachments={attachments} isImageFile={isImageFile} removeAttachment={removeAttachment} formatFileSize={formatFileSize}
-      onRegularSend={handleSend} onP2PSend={handleSend} onClose={onClose}
+      onRegularSend={handleSend} onP2PSend={handleSend} onClose={handleClose}
+      onDiscard={discardDraft}
       onLocalAttach={handleFileSelect} onDriveAttach={(files) => setAttachments(prev => [...prev, ...files])}
       onInsertEmoji={(emoji) => { textareaRef.current?.focus(); document.execCommand('insertText', false, emoji); }}
       onInsertLink={(url) => { if (!url) return; textareaRef.current?.focus(); document.execCommand('createLink', false, url); }}
