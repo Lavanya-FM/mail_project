@@ -1,12 +1,13 @@
 // src/components/EmailView.tsx
-import { Star, Reply, ReplyAll, Forward, Trash2, Archive, MoreVertical, Paperclip, X, Flag, Tag, Check, FileText, Lock, Smile, HardDrive, Image as ImageIcon, Phone, ShieldAlert, AlertTriangle, Printer, ExternalLink, Sparkles } from 'lucide-react';
-import React, { useState, useEffect, useRef } from 'react';
+import { Star, Reply, ReplyAll, Forward, Trash2, Archive, MoreVertical, Paperclip, X, Flag, Tag, Check, Smile, Phone, ShieldAlert, Printer, ExternalLink, Sparkles, MoreHorizontal } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
 import { emailService } from '../lib/emailService';
 import { authService } from '../lib/authService';
 import { Email } from '../types/email';
 import { normalizeEmailBody } from '../utils/email';
-import { collapseForwarded } from '../lib/collapseForwarded';
 import { p2pService } from '../lib/p2pService';
+import { createManifest, manifestToBase64 } from '../lib/p2pManifest';
+import { normalizeSubject, getRecipients, buildReferences, buildQuoteHeader, formatBody } from '../utils/replyLogic';
 import { callService } from '../lib/callService';
 import toast from 'react-hot-toast';
 import P2PAttachmentList from './P2PAttachmentList';
@@ -57,7 +58,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose: _onCom
   const [starred, setStarred] = useState(false);
   const [showActions, setShowActions] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const [showQuoted, setShowQuoted] = useState(false);
+
   const currentUser = authService.getCurrentUser();
   const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -100,35 +101,212 @@ export default function EmailView({ email, onClose, onRefresh, onCompose: _onCom
 
   // Reply editor state
   const replyFileInputRef = useRef<HTMLInputElement>(null);
-  const [replyAttachments, setReplyAttachments] = useState<File[]>([]);
   const [showReplyEmojiPicker, setShowReplyEmojiPicker] = useState(false);
 
   // Email Summary State
   const [summary, setSummary] = useState<string | null>(null);
   const [isSummarizing, setIsSummarizing] = useState(false);
 
-  const emojis = ['😀', '😂', '😊', '❤️', '👍', '👎', '🎉', '🔥', '✨', '💯', '🙏', '👏'];
+  // Threading State
+  const [threadMessages, setThreadMessages] = useState<Email[]>([]);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
 
-  const handleReplyAttach = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      setReplyAttachments(prev => [...prev, ...Array.from(e.target.files!)]);
+  const loadThread = async () => {
+    if (!email?.thread_id) return;
+    try {
+      const { data } = await emailService.getThread(email.thread_id, currentUser.id);
+      if (data && data.length > 0) {
+        setThreadMessages(data);
+
+        // Expand the last message (newest) by default if it's the first load or if explicitly requested?
+        // For now, let's keep expanding the last one as it's confusing otherwise
+        const lastMsg = data[data.length - 1];
+        setExpandedIds(prev => {
+          const next = new Set(prev);
+          next.add(Number(lastMsg.id));
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error("Failed to fetch thread", err);
     }
-    e.target.value = '';
   };
 
-  const insertReplyEmoji = (emoji: string) => {
-    setReplyBody(prev => prev + emoji);
+  useEffect(() => {
+    if (email) {
+      // Optimistic initial state
+      setThreadMessages([email]);
+
+      const initialExpanded = new Set<number>();
+      // Always expand the selected email initially
+      initialExpanded.add(Number(email.id));
+      setExpandedIds(initialExpanded);
+
+      // Fetch full thread if thread_id exists
+      if (email.thread_id) {
+        loadThread();
+      }
+    }
+  }, [email?.id]);
+
+  // ... (toggleMessageExpand, toggleQuoted logic remains same)
+
+  // ... (handleReplyAttach, insertReplyEmoji, insertReplyLink logic remains same)
+
+  // ... (sanitizeBody, htmlToNewlines, etc.)
+
+  // Updated sendInlineReply to refresh thread
+  const sendInlineReply = async () => {
+    const targetEmail = replyTarget || email;
+    if (!targetEmail) return;
+
+    const me = currentUser.email;
+    let toEmails: string[] = [];
+    let ccEmails: string[] = [];
+    let emailSubject = '';
+    let emailBody = '';
+    let attachments: any[] = [];
+    let p2pEnabled = false;
+
+    // 1. Get Recipients & Subject using helper utils
+    if (inlineReplyMode === 'forward') {
+      if (!forwardTo.trim()) {
+        toast.error('Please enter a recipient email address');
+        return;
+      }
+      toEmails = [forwardTo.trim()];
+      emailSubject = normalizeSubject(targetEmail.subject || '', 'Fwd:');
+      emailBody = replyBody; // Forward body is already set in openInlineReply
+    } else {
+      // Reply or Reply All
+      if (!replyBody.trim()) {
+        toast.error('Please enter a message');
+        return;
+      }
+
+      const recipients = getRecipients(inlineReplyMode as any, targetEmail, me);
+      toEmails = recipients.to;
+      ccEmails = recipients.cc;
+
+      emailSubject = normalizeSubject(targetEmail.subject || '', 'Re:');
+
+      // Construct Body with Quoted Text (Gmail Style)
+      // Current replyBody + Quote Header + Quoted Text
+      const quoteHeader = buildQuoteHeader(targetEmail, inlineReplyMode as any);
+      const quotedBody = formatBody(sanitizeBody(targetEmail.body) || "", inlineReplyMode as any);
+
+      emailBody = replyBody + "\n" + quoteHeader + quotedBody;
+    }
+
+    // 2. Validate recipients
+    if (toEmails.length === 0) {
+      toast.error("No valid recipient");
+      return;
+    }
+
+    // 3. Handle P2P Forwarding Logic
+    if (inlineReplyMode === 'forward' && targetEmail.attachments && targetEmail.attachments.length > 0) {
+      const p2pAttachments = targetEmail.attachments.filter((a: any) => a.p2p_message_id);
+
+      for (const att of p2pAttachments) {
+        // Only forward if we have the file locally (downloaded)
+        if (await p2pService.hasReceivedFile(att.p2p_message_id)) {
+          try {
+            const file = await p2pService.getFile(att.p2p_message_id);
+            if (file) {
+              // Create NEW Manifest (New Transfer Session)
+              // Ensure we have a File object with name from metadata
+              const p2pFile = new File([file], att.filename, { type: att.mime_type || file.type });
+
+              const newManifest = await createManifest(p2pFile, me);
+              const manifestBase64Str = manifestToBase64(newManifest);
+
+              attachments.push({
+                filename: `${att.filename}.p2p`, // Use att.filename
+                mime_type: 'application/x-jeemail-manifest+json',
+                size: manifestBase64Str.length,
+                content_base64: manifestBase64Str,
+                p2p_message_id: newManifest.attachmentId,
+                scan_status: 'clean', // Currently trusting local file re-send
+                safe: true
+              });
+
+              // Start seeding in background
+              p2pService.startTransfer(toEmails, [p2pFile], [newManifest.attachmentId])
+                .catch(err => console.error("Failed to start forwarded P2P seeding", err));
+
+              p2pEnabled = true;
+              toast.success(`Forwarding P2P file: ${att.filename}`);
+            }
+          } catch (e) {
+            console.warn("Failed to prepare forwarded P2P file", e);
+          }
+        }
+      }
+    }
+
+    // 4. Headers (Threading)
+    const headers = buildReferences(targetEmail, inlineReplyMode as any);
+
+    await emailService.createEmail({
+      user_id: currentUser.id,
+
+      from_email: currentUser.email,
+      from_name: currentUser.name || currentUser.email,
+
+      to_emails: toEmails,
+      cc_emails: ccEmails,
+
+      subject: emailSubject,
+      body: emailBody,
+
+      in_reply_to: headers.inReplyTo,
+      references: headers.references,
+      thread_id: inlineReplyMode === 'forward' ? undefined : (targetEmail.thread_id ?? targetEmail.id),
+
+      attachments: attachments, // Include processed P2P attachments
+      p2p_enabled: p2pEnabled,
+      is_draft: false,
+    });
+
+    // Show success message
+    if (inlineReplyMode === 'forward') {
+      toast.success(`Email forwarded to ${forwardTo}`);
+    } else {
+      toast.success('Reply sent');
+    }
+
+    // Reset all states
+    setInlineReplyMode(null);
+    setReplyBody("");
+    setForwardTo("");
     setShowReplyEmojiPicker(false);
-    replyTextareaRef.current?.focus();
+
+    // Refresh parent AND current thread view
+    onRefresh?.();
+    loadThread(); // <--- Refresh messages in view immediately
   };
 
-  const insertReplyLink = () => {
-    const url = prompt('Enter URL:');
-    if (url) {
-      setReplyBody(prev => prev + ` ${url} `);
-      replyTextareaRef.current?.focus();
-    }
+  const toggleMessageExpand = (id: number) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
+
+  const [quotedExpandedIds, setQuotedExpandedIds] = useState<Set<number>>(new Set());
+  const toggleQuoted = (id: number) => {
+    setQuotedExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+
 
   // -----------------------
   // Sanitizer: remove lines that are empty or only zeros
@@ -209,8 +387,24 @@ export default function EmailView({ email, onClose, onRefresh, onCompose: _onCom
 
     return escaped.replace(/\n/g, '<br>');
   };
+
+  const splitQuotedHtml = (html: string) => {
+    const match = html.match(
+      /(.*?)(<blockquote[\s\S]*$|<div class="gmail_quote"[\s\S]*$|On .* wrote:[\s\S]*$)/i
+    );
+
+    if (!match) {
+      return { main: html, quoted: '' };
+    }
+
+    return {
+      main: match[1],
+      quoted: match[2],
+    };
+  };
+
   useEffect(() => {
-    setShowQuoted(false);
+
     setSummary(null);
     setIsSummarizing(false);
   }, [email?.id]);
@@ -401,21 +595,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose: _onCom
     }
   };
 
-  const buildReferencesHeader = (email: any) => {
-    const refs: string[] = [];
 
-    if (email.references_header) {
-      refs.push(
-        ...email.references_header.split(/\s+/).filter(Boolean)
-      );
-    }
-
-    if (email.message_id && !refs.includes(email.message_id)) {
-      refs.push(email.message_id);
-    }
-
-    return refs.join(" ");
-  };
 
 
   const markAsRead = async (emailId: string) => {
@@ -454,24 +634,22 @@ export default function EmailView({ email, onClose, onRefresh, onCompose: _onCom
 
 
 
-  const openInlineReply = (mode: "reply" | "replyAll" | "forward") => {
-    if (!email) return;
+  const [replyTarget, setReplyTarget] = useState<Email | null>(null);
+
+  const openInlineReply = (mode: "reply" | "replyAll" | "forward", targetMsg?: Email) => {
+    const msg = targetMsg || email;
+    if (!msg) return;
+
+    setReplyTarget(msg); // Track which message we are replying to
     setInlineReplyMode(mode);
-    setReplyAttachments([]);
-    setShowReplyEmojiPicker(false);
+
 
     if (mode === 'forward') {
       // For forward, include original message content
-      const originalContent = `
+      const quoteHeader = buildQuoteHeader(msg, mode);
+      const quotedBody = formatBody(sanitizeBody(msg.body) || "", mode);
+      const originalContent = quoteHeader + quotedBody;
 
----------- Forwarded message ---------
-From: ${email.from_name || email.from_email} <${email.from_email}>
-Date: ${email.created_at ? new Date(email.created_at).toLocaleString() : ''}
-Subject: ${email.subject || '(No subject)'}
-To: ${email.to_emails?.join(', ') || ''}
-
-${sanitizeBody(email.body) || ''}
-`;
       setReplyBody(originalContent);
       setForwardTo(''); // Reset forward recipient
     } else {
@@ -482,15 +660,7 @@ ${sanitizeBody(email.body) || ''}
   // State for forward recipient
   const [forwardTo, setForwardTo] = useState('');
 
-  // Check if there are multiple recipients (for Reply All)
-  const hasMultipleRecipients = (() => {
-    if (!email) return false;
-    const allRecipients = [
-      ...(Array.isArray(email.to_emails) ? email.to_emails : []),
-      ...(Array.isArray(email.cc_emails) ? email.cc_emails : [])
-    ].filter(e => e && e !== currentUser?.email);
-    return allRecipients.length > 0;
-  })();
+
 
   const handleArchive = async () => {
     if (!email || !currentUser) return;
@@ -576,111 +746,7 @@ ${sanitizeBody(email.body) || ''}
     });
   };
 
-  const buildQuotedHtml = (email: any) => `
-<br><br>
-<div style="border-left:2px solid #dadce0;padding-left:8px;color:#5f6368">
-On ${formatFullDate(email.sent_at || email.created_at)},
-<b>${email.from_name || email.from_email}</b> wrote:<br>
-${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
-</div>
-`.trim();
 
-  const sendInlineReply = async () => {
-    if (!email) return;
-
-    const me = currentUser.email;
-    let toEmails: any[] = [];
-    let emailSubject = '';
-    let emailBody = '';
-
-    // Handle different modes
-    if (inlineReplyMode === 'forward') {
-      // Forward mode - use forwardTo email
-      if (!forwardTo.trim()) {
-        toast.error('Please enter a recipient email address');
-        return;
-      }
-      toEmails = [forwardTo.trim()];
-      emailSubject = email.subject?.startsWith("Fwd:")
-        ? email.subject
-        : `Fwd: ${email.subject || ""}`;
-      emailBody = replyBody;
-    } else if (inlineReplyMode === "replyAll") {
-      // Reply All - include all recipients
-      toEmails = Array.from(
-        new Set([
-          email.from_email,
-          ...(Array.isArray(email.to_emails) ? email.to_emails : []),
-          ...(Array.isArray(email.cc_emails) ? email.cc_emails : [])
-        ])
-      ).filter(e => e && e !== me);
-      emailSubject = email.subject?.startsWith("Re:")
-        ? email.subject
-        : `Re: ${email.subject || ""}`;
-      emailBody = replyBody + buildQuotedHtml(email);
-    } else {
-      // Regular reply
-      if (!replyBody.trim()) {
-        toast.error('Please enter a message');
-        return;
-      }
-      if (email.from_email !== me) {
-        toEmails = [email.from_email || ''];
-      } else {
-        toEmails = (Array.isArray(email.to_emails) ? email.to_emails : []).filter(e => e !== me);
-      }
-      emailSubject = email.subject?.startsWith("Re:")
-        ? email.subject
-        : `Re: ${email.subject || ""}`;
-      emailBody = replyBody + buildQuotedHtml(email);
-    }
-
-    // Validate recipients
-    if (toEmails.length === 0) {
-      toast.error("No valid recipient");
-      return;
-    }
-
-
-
-    await emailService.createEmail({
-      user_id: currentUser.id,
-
-      from_email: currentUser.email,
-      from_name: currentUser.name || currentUser.email,
-
-      to_emails: toEmails
-        .map(e => typeof e === "string" ? e : e?.email)
-        .filter(Boolean),
-
-      cc_emails: [],
-
-      subject: emailSubject,
-
-      body: emailBody,
-
-      in_reply_to: inlineReplyMode === 'forward' ? undefined : (email.message_id || email.id),
-      references: inlineReplyMode === 'forward' ? undefined : buildReferencesHeader(email),
-      thread_id: inlineReplyMode === 'forward' ? undefined : (email.thread_id ?? email.id),
-
-      is_draft: false,
-    });
-
-    // Show success message
-    if (inlineReplyMode === 'forward') {
-      toast.success(`Email forwarded to ${forwardTo}`);
-    } else {
-      toast.success('Reply sent');
-    }
-
-    // Reset all states
-    setInlineReplyMode(null);
-    setReplyBody("");
-    setForwardTo("");
-    setReplyAttachments([]);
-    setShowReplyEmojiPicker(false);
-    onRefresh?.();
-  };
 
 
 
@@ -759,33 +825,7 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
 
 
 
-  // prepare HTML safely
-  const normalizedBody = normalizeEmailBody(email.body ?? email.text_preview ?? "");
 
-  // REMOVE lines that contain only "0"
-  const cleanedBody = normalizedBody
-    .split("\n")
-    .filter(line => line.trim() !== "0")   // <- this removes the 0
-    .join("\n");
-
-  const normalizedHtml = bodyToHtml(cleanedBody);
-  const collapsedHtml = collapseForwarded(normalizedHtml);
-  const splitQuotedHtml = (html: string) => {
-    const match = html.match(
-      /(.*?)(<blockquote[\s\S]*$|<div class="gmail_quote"[\s\S]*$|On .* wrote:[\s\S]*$)/i
-    );
-
-    if (!match) {
-      return { main: html, quoted: '' };
-    }
-
-    return {
-      main: match[1],
-      quoted: match[2],
-    };
-  };
-
-  const { main: mainHtml, quoted: quotedHtml } = splitQuotedHtml(collapsedHtml);
 
 
 
@@ -970,14 +1010,21 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
       <div className="flex-1 overflow-y-auto" style={{ minHeight: 0 }}>
         <div className="max-w-none mx-auto p-4 lg:p-6">
 
-          {/* Subject Line - Gmail Style */}
-          <div className="mb-6">
-            <h1 className="text-xl lg:text-2xl font-normal text-gray-900 dark:text-white mb-3 lg:mb-4 leading-tight">
-              {email.subject || "(No subject)"}
-            </h1>
+          {/* Subject Line - Clean Thread Title */}
+          <div className="mb-6 ml-2">
+            <div className="flex items-center gap-3 mb-4">
+              <h1 className="text-xl lg:text-2xl font-normal text-gray-900 dark:text-white leading-tight">
+                {(email.subject || "(No subject)").replace(/^(Re|Fwd|re|fwd)(\[\d+\])?:?\s*/i, '')}
+              </h1>
+              {email.labels?.map(label => (
+                <span key={label.id} className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-300 border border-gray-200 dark:border-slate-700">
+                  {label.name}
+                </span>
+              ))}
+            </div>
 
             {/* AI Summary Section */}
-            <div className="mb-6">
+            <div className="mb-4">
               {!summary ? (
                 <button
                   onClick={async () => {
@@ -994,26 +1041,26 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
                     }
                   }}
                   disabled={isSummarizing}
-                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 hover:from-blue-100 hover:to-indigo-100 dark:hover:from-blue-900/30 dark:hover:to-indigo-900/30 text-blue-700 dark:text-blue-300 rounded-xl text-sm font-medium transition-all w-full sm:w-auto border border-blue-100 dark:border-blue-800 disabled:opacity-70 disabled:cursor-wait"
+                  className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-lg text-sm font-medium transition-colors border border-blue-100 dark:border-blue-800 disabled:opacity-70 disabled:cursor-wait"
                 >
                   {isSummarizing ? (
                     <>
-                      <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                      <span>Generating AI Summary...</span>
+                      <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                      <span>Summarizing...</span>
                     </>
                   ) : (
                     <>
-                      <Sparkles className="w-4 h-4 text-indigo-500" />
+                      <Sparkles className="w-4 h-4 text-blue-600" />
                       <span>Summarize this email</span>
                     </>
                   )}
                 </button>
               ) : (
-                <div className="bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-900/10 dark:to-purple-900/10 rounded-xl p-4 border border-indigo-100 dark:border-indigo-800 animate-fadeIn">
+                <div className="bg-blue-50/50 dark:bg-slate-800/50 rounded-xl p-4 border border-blue-100 dark:border-slate-700 animate-fadeIn">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
-                      <Sparkles className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                      <span className="text-sm font-semibold text-indigo-800 dark:text-indigo-300">AI Summary</span>
+                      <Sparkles className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                      <span className="text-sm font-semibold text-blue-800 dark:text-blue-300">Summary</span>
                     </div>
                     <button onClick={() => setSummary(null)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
                       <X className="w-4 h-4" />
@@ -1025,405 +1072,234 @@ ${normalizeEmailBody(email.body ?? email.text_preview ?? '')}
                 </div>
               )}
             </div>
-
-
           </div>
 
-          {/* Email Card - Gmail Style */}
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-gray-200 dark:border-slate-800 overflow-hidden mb-6">
+          {/* MESSAGE LIST */}
+          <div className="space-y-4">
+            {threadMessages.map((msg) => {
+              const isExpanded = expandedIds.has(Number(msg.id));
 
-            {/* SECURITY BANNER */}
-            {((email as any).phishing || (email as any).malware || (email as any).spam_score > 50) && (
-              <div className={`px-4 py-3 border-b flex items-start gap-3 ${(email as any).phishing || (email as any).malware
-                ? "bg-red-50 border-red-100 dark:bg-red-900/20 dark:border-red-900/50"
-                : "bg-yellow-50 border-yellow-100 dark:bg-yellow-900/20 dark:border-yellow-900/50"
-                }`}>
-                {(email as any).phishing || (email as any).malware ? (
-                  <ShieldAlert className="w-5 h-5 text-red-600 dark:text-red-400 mt-0.5 shrink-0" />
-                ) : (
-                  <AlertTriangle className="w-5 h-5 text-yellow-600 dark:text-yellow-400 mt-0.5 shrink-0" />
-                )}
-                <div>
-                  <h4 className={`text-sm font-semibold ${(email as any).phishing || (email as any).malware ? "text-red-800 dark:text-red-200" : "text-yellow-800 dark:text-yellow-200"
-                    }`}>
-                    {(email as any).phishing ? "Phishing Warning" : (email as any).malware ? "Malware Detected" : "Spam Warning"}
-                  </h4>
-                  <p className={`text-xs mt-0.5 ${(email as any).phishing || (email as any).malware ? "text-red-700 dark:text-red-300" : "text-yellow-700 dark:text-yellow-300"
-                    }`}>
-                    {/* Safety check for warnings */}
-                    {(email as any).scan_warnings
-                      ? (Array.isArray((email as any).scan_warnings)
-                        ? (email as any).scan_warnings.join('. ')
-                        : String((email as any).scan_warnings))
-                      : "This message was flagged by the security scanner."}
-                  </p>
-                </div>
-              </div>
-            )}
 
-            {/* Sender Info Section */}
-            <div className="p-4 lg:p-6">
-              <div className="flex items-start gap-4">
-                <div className="flex-shrink-0 w-8 h-8 lg:w-10 lg:h-10 rounded-full bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-500 flex items-center justify-center text-white font-semibold text-xs lg:text-sm shadow-md">
-                  {getInitials(email.from_name || email.from_email || '')}
-                </div>
+              // Computed Logic per message
+              const normalizedBody = normalizeEmailBody(msg.body ?? msg.text_preview ?? "");
+              const cleanedBody = normalizedBody.split("\n").filter(line => line.trim() !== "0").join("\n");
+              const normalizedHtml = bodyToHtml(cleanedBody);
+              const { main: mainHtml, quoted: quotedHtml } = splitQuotedHtml(normalizedHtml);
+              const showQuoted = quotedExpandedIds.has(Number(msg.id));
 
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-start gap-2 lg:gap-4 mb-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-xs lg:text-sm font-medium text-gray-900 dark:text-white">
-                          {getSenderName(email.from_name, email.from_email)}
-                        </h3>
-                        <span className="text-xs lg:text-sm text-gray-500 dark:text-slate-400">
-                          &lt;{email.from_email}&gt;
-                        </span>
+              const msgAttachments = Array.isArray(msg.attachments) ? msg.attachments : [];
+
+              // COLLAPSED VIEW
+              if (!isExpanded) {
+                return (
+                  <div
+                    key={msg.id}
+                    onClick={() => toggleMessageExpand(Number(msg.id))}
+                    className="group bg-gray-50 dark:bg-slate-900 border border-transparent border-b-gray-200 dark:border-b-slate-800 hover:border-gray-200 dark:hover:border-slate-700 rounded-lg flex items-center px-4 py-3 cursor-pointer transition-all"
+                  >
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-200 dark:bg-slate-700 flex items-center justify-center text-gray-600 dark:text-gray-300 font-bold text-xs mr-4">
+                      {getInitials(msg.from_name || msg.from_email || '')}
+                    </div>
+                    <div className="flex-1 min-w-0 flex items-center gap-4">
+                      <span className="font-semibold text-sm text-gray-900 dark:text-white w-48 truncate">
+                        {getSenderName(msg.from_name, msg.from_email)}
+                      </span>
+                      <span className="text-sm text-gray-500 dark:text-slate-400 truncate flex-1 group-hover:text-gray-700 dark:group-hover:text-slate-300 transition-colors">
+                        {sanitizeBody(msg.body ?? msg.text_preview ?? "").substring(0, 80)}...
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {msg.has_attachments && <Paperclip className="w-4 h-4 text-gray-400" />}
+                      <div className="text-xs text-gray-500 font-medium whitespace-nowrap">
+                        {formatShortDate(msg.sent_at || msg.created_at || '')}
                       </div>
-                      <div className="text-xs lg:text-sm text-gray-600 dark:text-slate-400 mt-1">
-                        to {email.to_emails?.length
-                          ? email.to_emails.map(t => (typeof t === 'string' ? t : (t?.email || ""))).join(', ')
-                          : currentUser.email
-                        }
-                        {email.cc_emails && email.cc_emails.length > 0 && (
-                          <span>, cc {email.cc_emails.map((cc: any) => (typeof cc === 'string' ? cc : cc?.email)).join(', ')}</span>
+                    </div>
+                  </div>
+                );
+              }
+
+              // EXPANDED VIEW
+              return (
+                <div key={msg.id} className="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 shadow-sm overflow-hidden transition-shadow hover:shadow-md">
+
+                  {/* Header: Sender Info & Date */}
+                  <div
+                    className="px-5 py-4 cursor-pointer"
+                    onClick={() => toggleMessageExpand(Number(msg.id))}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="flex-shrink-0 w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-semibold text-sm shadow-sm">
+                          {getInitials(msg.from_name || msg.from_email || '')}
+                        </div>
+
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-sm text-gray-900 dark:text-white">
+                              {getSenderName(msg.from_name, msg.from_email)}
+                            </span>
+                            <span className="text-xs text-gray-500 dark:text-slate-400 font-normal">
+                              &lt;{msg.from_email}&gt;
+                            </span>
+                          </div>
+                          <div className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">
+                            to {msg.to_emails?.length ? 'me, ' + (msg.to_emails.length > 1 ? 'others' : '') : 'me'}
+                            <span className="ml-1 cursor-pointer hover:text-gray-700 dark:hover:text-slate-200">
+                              ▼
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-4">
+                        <div className="text-xs text-gray-500 dark:text-slate-400">
+                          {formatShortDate(msg.sent_at || msg.created_at || '')}
+                        </div>
+                        <button onClick={(e) => { e.stopPropagation(); openInlineReply("reply", msg); }} className="p-2 text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full">
+                          <Reply className="w-4 h-4" />
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); setShowActions(!showActions); }} className="p-2 text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-full">
+                          <MoreVertical className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Security Banner */}
+                  {((msg as any).phishing || (msg as any).malware || (msg as any).spam_score > 50) && (
+                    <div className="px-5 pb-4">
+                      <div className={`p-3 rounded-lg flex items-start gap-3 ${(msg as any).phishing || (msg as any).malware
+                        ? "bg-red-50 text-red-800 dark:bg-red-900/30 dark:text-red-200"
+                        : "bg-yellow-50 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-200"
+                        }`}>
+                        <ShieldAlert className="w-5 h-5 shrink-0" />
+                        <div>
+                          <h4 className="text-sm font-bold">Suspicious Message</h4>
+                          <p className="text-xs mt-1 opacity-90">
+                            {(msg as any).scan_warnings || "This message was flagged by security filters."}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Email Body */}
+                  <div className="px-5 pb-6 text-sm text-gray-800 dark:text-slate-200 leading-relaxed font-sans">
+                    <div
+                      className="prose dark:prose-invert max-w-none break-words"
+                      dangerouslySetInnerHTML={{ __html: mainHtml }}
+                    />
+
+                    {quotedHtml && (
+                      <div className="mt-4">
+                        {!showQuoted ? (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); toggleQuoted(Number(msg.id)); }}
+                            className="w-8 h-6 flex items-center justify-center bg-gray-100 hover:bg-gray-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded text-gray-500 dark:text-slate-400 transition-colors"
+                            title="Show quoted text"
+                          >
+                            <MoreHorizontal className="w-4 h-4" />
+                          </button>
+                        ) : (
+                          <div className="mt-2 text-gray-500 dark:text-slate-400 pl-2 border-l-2 border-gray-200 dark:border-slate-700">
+                            <div
+                              className="opacity-80 text-xs"
+                              dangerouslySetInnerHTML={{ __html: quotedHtml }}
+                            />
+                          </div>
                         )}
                       </div>
-                    </div>
-                    <span className="text-xs lg:text-sm text-gray-500 dark:text-slate-400 whitespace-nowrap">
-                      {formatShortDate(email.sent_at || email.created_at || '')}
-                    </span>
-                    {/* Collapsible toggle for Thread View */}
-                    {onToggleCollapse && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onToggleCollapse();
-                        }}
-                        className="ml-2 p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-800 rounded"
-                      >
-                        <MoreVertical className="w-4 h-4 rotate-90" />
-                      </button>
-                    )}
-                    {!isSender && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const targetEmail = email.from_email || '';
-                          if (!targetEmail) {
-                            toast.error("Cannot call: No email address");
-                            return;
-                          }
-                          callService.initiateCall(targetEmail, 'audio');
-                          toast.success(`Calling ${email.from_name || targetEmail}...`);
-                        }}
-                        className="ml-2 p-1.5 text-gray-500 hover:text-green-600 hover:bg-green-50 dark:text-slate-400 dark:hover:text-green-400 dark:hover:bg-green-900/20 rounded-lg transition-colors"
-                        title="Voice Call"
-                      >
-                        <Phone className="w-5 h-5" />
-                      </button>
                     )}
                   </div>
-                </div>
-              </div>
-            </div>
 
-            {/* Email Body */}
-            <div className="px-4 lg:px-6 pb-4 lg:pb-6 pt-3 lg:pt-4 border-t border-gray-100 dark:border-slate-800">
-              <div className="prose dark:prose-invert max-w-none" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                <div className="text-xs lg:text-sm text-gray-800 dark:text-slate-200 leading-relaxed">
-                  <div dangerouslySetInnerHTML={{ __html: mainHtml }} />
-
-                  {quotedHtml && !showQuoted && (
-                    <button
-                      onClick={() => setShowQuoted(true)}
-                      className="mt-2 text-xs text-blue-600 hover:underline"
-                    >
-                      ⋯ Show quoted text
-                    </button>
+                  {/* Attachments */}
+                  {msgAttachments.length > 0 && (
+                    <div className="px-5 pb-6 border-t border-gray-100 dark:border-slate-800 pt-4">
+                      <P2PAttachmentList
+                        emailId={String(msg.id)}
+                        senderEmail={(msg.from_email || '').toLowerCase().trim()}
+                        attachments={msgAttachments.map((a: any) => ({
+                          ...a,
+                          is_p2p: !!(a.delivery_mode === 'P2P' || a.p2p_message_id)
+                        }))}
+                        mode={(msg.from_email || '').toLowerCase() === currentUser.email.toLowerCase() ? 'sender' : 'receiver'}
+                      />
+                    </div>
                   )}
 
-                  {quotedHtml && showQuoted && (
-                    <div className="mt-3 border-l-2 border-gray-300 dark:border-slate-600 pl-3">
-                      <div dangerouslySetInnerHTML={{ __html: quotedHtml }} />
+                  {/* Footer Buttons (Pill Shaped) */}
+                  {!inlineReplyMode && (
+                    <div className="px-5 pb-4 flex gap-3">
                       <button
-                        onClick={() => setShowQuoted(false)}
-                        className="mt-2 text-xs text-blue-600 hover:underline"
+                        onClick={() => openInlineReply("reply", msg)}
+                        className="flex items-center gap-2 px-6 py-2 rounded-full border border-gray-300 dark:border-slate-600 text-sm font-medium text-gray-600 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
                       >
-                        Hide quoted text
+                        <Reply className="w-4 h-4 text-gray-500" />
+                        Reply
+                      </button>
+                      <button
+                        onClick={() => openInlineReply("replyAll", msg)}
+                        className="flex items-center gap-2 px-6 py-2 rounded-full border border-gray-300 dark:border-slate-600 text-sm font-medium text-gray-600 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
+                      >
+                        <ReplyAll className="w-4 h-4 text-gray-500" />
+                        Reply all
+                      </button>
+                      <button
+                        onClick={() => openInlineReply("forward", msg)}
+                        className="flex items-center gap-2 px-6 py-2 rounded-full border border-gray-300 dark:border-slate-600 text-sm font-medium text-gray-600 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
+                      >
+                        <Forward className="w-4 h-4 text-gray-500" />
+                        Forward
                       </button>
                     </div>
                   )}
-                </div>
-              </div>
-            </div>
 
-            {/* ATTACHMENTS - Moved inside card */}
-            {attachments.length > 0 && (() => {
-              // Determine if this is a P2P email
-              const isP2PEmail = !!(email.p2p_enabled || (email as any).p2p_delivered ||
-                attachments.some((a: any) => a.delivery_mode === 'P2P' || a.is_p2p || a.p2p_message_id));
+                  {/* Inline Reply Editor */}
+                  {inlineReplyMode && replyTarget?.id === msg.id && (
+                    <div className="mx-4 mb-4 border border-gray-200 dark:border-slate-700 rounded-lg shadow-sm bg-white dark:bg-slate-900 overflow-hidden">
+                      {/* ... Reuse the Reply Editor Logic (simplified for viewing) ... */}
+                      <div className="flex items-center px-4 py-2 border-b border-gray-100 dark:border-slate-800 bg-gray-50/50 dark:bg-slate-800/50">
+                        <Reply className="w-4 h-4 text-gray-400 mr-2" />
+                        <span className="text-sm font-medium text-gray-600 dark:text-slate-300">
+                          {inlineReplyMode === 'forward' ? `Forward to:` : `Reply to ${msg.from_name || msg.from_email}`}
+                        </span>
+                        {inlineReplyMode === 'forward' && (
+                          <input
+                            className="ml-2 flex-1 bg-transparent focus:outline-none text-sm"
+                            placeholder="Recipient email"
+                            value={forwardTo}
+                            onChange={e => setForwardTo(e.target.value)}
+                            autoFocus
+                          />
+                        )}
+                      </div>
 
-              // Check if current user is the sender (case-insensitive comparison)
-              const senderEmail = (email.from_email || '').toLowerCase().trim();
-              const myEmail = (currentUser?.email || '').toLowerCase().trim();
-              const isSender = senderEmail === myEmail;
+                      <textarea
+                        ref={replyTextareaRef}
+                        className="w-full p-4 text-sm focus:outline-none bg-transparent min-h-[150px]"
+                        placeholder="Type your message..."
+                        value={replyBody}
+                        onChange={e => {
+                          setReplyBody(e.target.value);
+                          autoResizeReply();
+                        }}
+                      />
 
-              return (
-                <div className="px-4 lg:px-6 pb-6 pt-2 border-t border-gray-100 dark:border-slate-800 bg-gray-50/50 dark:bg-slate-900/50">
-                  <P2PAttachmentList
-                    emailId={String(email.id)}
-                    senderEmail={senderEmail}
-                    attachments={attachments.map((a: any) => ({
-                      filename: a.filename,
-                      mime_type: a.mime_type,
-                      size_bytes: a.size || a.size_bytes,
-                      p2p_message_id: a.p2p_message_id,
-                      content_base64: a.content_base64 || null,
-                      is_p2p: !!(a.delivery_mode === 'P2P' || a.is_p2p || a.p2p_message_id || isP2PEmail),
-                      p2p_status: a.p2p_status
-                    }))}
-                    mode={isSender ? 'sender' : 'receiver'}
-                  />
-
-                  {isP2PEmail && (
-                    <div className="mt-3 flex items-center justify-center">
-                      <p className="text-[10px] text-gray-400 dark:text-gray-500 flex items-center gap-1.5 px-3 py-1 rounded-full bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 shadow-sm">
-                        <Lock className="w-2.5 h-2.5" />
-                        Sent securely via Direct Transfer encryption
-                      </p>
+                      <div className="flex justify-between items-center px-4 py-3 border-t border-gray-100 dark:border-slate-800">
+                        <div className="flex gap-2">
+                          <button onClick={() => replyFileInputRef.current?.click()} className="p-2 hover:bg-gray-100 rounded text-gray-500"><Paperclip className="w-4 h-4" /></button>
+                          <button onClick={() => setShowReplyEmojiPicker(!showReplyEmojiPicker)} className="p-2 hover:bg-gray-100 rounded text-gray-500"><Smile className="w-4 h-4" /></button>
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={() => setInlineReplyMode(null)} className="p-2 hover:bg-red-50 text-gray-500 hover:text-red-600 rounded"><Trash2 className="w-4 h-4" /></button>
+                          <button onClick={sendInlineReply} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-full">Send</button>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
               );
-            })()}
-
-            {/* Action Buttons - Gmail Style */}
-            {!email.is_draft && !inlineReplyMode && (
-              <div className="px-4 lg:px-6 pb-6 pt-2">
-                <div className="flex items-center gap-3">
-                  {/* Reply Button - Gmail Style */}
-                  <button
-                    onClick={() => openInlineReply("reply")}
-                    className="group inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-2xl hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:border-blue-200 dark:hover:border-blue-700 hover:text-blue-700 dark:hover:text-blue-400 shadow-sm hover:shadow transition-all duration-200"
-                  >
-                    <Reply className="w-4 h-4 group-hover:text-blue-600 dark:group-hover:text-blue-400" />
-                    <span>Reply</span>
-                  </button>
-
-                  {/* Reply All Button - Only show when multiple recipients */}
-                  {hasMultipleRecipients && (
-                    <button
-                      onClick={() => openInlineReply("replyAll")}
-                      className="group inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-2xl hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:border-blue-200 dark:hover:border-blue-700 hover:text-blue-700 dark:hover:text-blue-400 shadow-sm hover:shadow transition-all duration-200"
-                    >
-                      <ReplyAll className="w-4 h-4 group-hover:text-blue-600 dark:group-hover:text-blue-400" />
-                      <span>Reply all</span>
-                    </button>
-                  )}
-
-                  {/* Forward Button - Gmail Style */}
-                  <button
-                    onClick={() => openInlineReply("forward")}
-                    className="group inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-2xl hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:border-blue-200 dark:hover:border-blue-700 hover:text-blue-700 dark:hover:text-blue-400 shadow-sm hover:shadow transition-all duration-200"
-                  >
-                    <Forward className="w-4 h-4 group-hover:text-blue-600 dark:group-hover:text-blue-400" />
-                    <span>Forward</span>
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* INLINE REPLY EDITOR — Matches Compose Box Style */}
-            {inlineReplyMode && (
-              <div className="mx-4 mb-4 border border-gray-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900 shadow-lg overflow-hidden">
-                {/* Header - To field for forward, recipient for reply */}
-                <div className="flex items-center px-4 py-2 border-b border-gray-100 dark:border-slate-800">
-                  {inlineReplyMode === 'forward' ? (
-                    <>
-                      <Forward className="w-4 h-4 text-gray-400 mr-2" />
-                      <span className="text-sm text-gray-500 mr-2">To:</span>
-                      <input
-                        type="email"
-                        value={forwardTo}
-                        onChange={(e) => setForwardTo(e.target.value)}
-                        placeholder="Enter recipient email"
-                        className="flex-1 bg-transparent text-sm text-gray-800 dark:text-gray-200 focus:outline-none placeholder-gray-400"
-                      />
-                    </>
-                  ) : (
-                    <>
-                      <Reply className="w-4 h-4 text-gray-400 mr-2" />
-                      <span className="text-sm text-gray-500 mr-2">To:</span>
-                      <span className="text-sm font-medium text-gray-700 dark:text-slate-300">
-                        {email?.from_name || email?.from_email}
-                      </span>
-                    </>
-                  )}
-                </div>
-
-                {/* Text area - matches compose body */}
-                <div className="min-h-[120px] max-h-[300px] overflow-y-auto">
-                  <textarea
-                    ref={replyTextareaRef}
-                    className="w-full h-full resize-none bg-transparent text-sm text-gray-800 dark:text-gray-200 focus:outline-none placeholder-gray-400 dark:placeholder-slate-500 p-4"
-                    rows={4}
-                    value={replyBody}
-                    onChange={(e) => {
-                      setReplyBody(e.target.value);
-                      autoResizeReply();
-                    }}
-                    placeholder={inlineReplyMode === 'forward' ? 'Add a message above the forwarded content...' : 'Write your reply...'}
-                  />
-                </div>
-
-                {/* Reply attachments preview - more visible */}
-                {replyAttachments.length > 0 && (
-                  <div className="px-4 py-3 bg-gray-50 dark:bg-slate-800/50 border-t border-gray-100 dark:border-slate-800">
-                    <div className="text-xs text-gray-500 mb-2 flex items-center gap-1">
-                      <Paperclip className="w-3 h-3" />
-                      {replyAttachments.length} attachment{replyAttachments.length > 1 ? 's' : ''}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {replyAttachments.map((file, idx) => (
-                        <div key={idx} className="flex items-center gap-2 bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 px-3 py-2 rounded-lg text-sm shadow-sm">
-                          <div className="w-8 h-8 bg-blue-100 dark:bg-blue-900/30 rounded flex items-center justify-center">
-                            <FileText className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                          </div>
-                          <div className="flex flex-col">
-                            <span className="truncate max-w-[150px] font-medium text-gray-700 dark:text-gray-300">{file.name}</span>
-                            <span className="text-xs text-gray-400">{(file.size / 1024).toFixed(1)} KB</span>
-                          </div>
-                          <button
-                            onClick={() => setReplyAttachments(prev => prev.filter((_, i) => i !== idx))}
-                            className="ml-2 p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Quoted text toggle */}
-                <div className="px-4 pb-2">
-                  <button className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-slate-800 text-gray-400">
-                    <MoreVertical className="w-4 h-4 rotate-90" />
-                  </button>
-                </div>
-
-                {/* Footer toolbar - Exactly like Compose Box */}
-                <div className="flex items-center justify-between px-4 py-3 bg-white dark:bg-slate-900 border-t border-gray-100 dark:border-slate-800 relative">
-                  {/* LEFT: Tool icons */}
-                  <div className="flex items-center gap-0">
-                    {/* Attach files */}
-                    <button
-                      onClick={() => replyFileInputRef.current?.click()}
-                      className="p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-slate-800 rounded transition-colors"
-                      title="Attach files"
-                    >
-                      <Paperclip className="w-5 h-5" />
-                    </button>
-
-                    {/* Insert link */}
-                    <button
-                      onClick={insertReplyLink}
-                      className="p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-slate-800 rounded transition-colors"
-                      title="Insert link"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                      </svg>
-                    </button>
-
-                    {/* Emoji picker */}
-                    <div className="relative">
-                      <button
-                        onClick={() => setShowReplyEmojiPicker(!showReplyEmojiPicker)}
-                        className={`p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-slate-800 rounded transition-colors ${showReplyEmojiPicker ? 'bg-gray-100 dark:bg-slate-800' : ''}`}
-                        title="Insert emoji"
-                      >
-                        <Smile className="w-5 h-5" />
-                      </button>
-                      {showReplyEmojiPicker && (
-                        <div className="absolute bottom-12 left-0 w-64 bg-white dark:bg-slate-800 shadow-xl rounded-lg border border-gray-200 dark:border-slate-700 p-2 grid grid-cols-6 gap-1 z-50">
-                          {emojis.map(e => (
-                            <button
-                              key={e}
-                              onClick={() => insertReplyEmoji(e)}
-                              className="text-xl p-1 hover:bg-gray-100 dark:hover:bg-slate-700 rounded transition-colors"
-                            >
-                              {e}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Drive - placeholder */}
-                    <button
-                      onClick={() => toast('Drive integration coming soon')}
-                      className="p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-slate-800 rounded transition-colors"
-                      title="Insert from Drive"
-                    >
-                      <HardDrive className="w-5 h-5" />
-                    </button>
-
-                    {/* Image - uses same file picker */}
-                    <button
-                      onClick={() => replyFileInputRef.current?.click()}
-                      className="p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-slate-800 rounded transition-colors"
-                      title="Insert photo"
-                    >
-                      <ImageIcon className="w-5 h-5" />
-                    </button>
-
-                    {/* Separator */}
-                    <div className="h-6 w-px bg-gray-300 dark:bg-slate-700 mx-2"></div>
-
-                    {/* Discard */}
-                    <button
-                      onClick={() => {
-                        setInlineReplyMode(null);
-                        setReplyBody('');
-                        setReplyAttachments([]);
-                        setShowReplyEmojiPicker(false);
-                        if (replyTextareaRef.current) {
-                          replyTextareaRef.current.style.height = 'auto';
-                        }
-                      }}
-                      className="p-2 text-gray-500 hover:text-gray-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-800 rounded transition-colors"
-                      title="Discard draft"
-                    >
-                      <Trash2 className="w-5 h-5" />
-                    </button>
-                  </div>
-
-                  {/* RIGHT: Send button */}
-                  <button
-                    onClick={sendInlineReply}
-                    className="px-6 py-2 rounded-md shadow-sm text-white text-sm font-medium bg-[#1a73e8] hover:bg-[#1557b0] flex items-center gap-2 transition-colors"
-                  >
-                    <span>Send</span>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                    </svg>
-                  </button>
-                </div>
-
-                {/* Hidden file input */}
-                <input
-                  ref={replyFileInputRef}
-                  type="file"
-                  multiple
-                  hidden
-                  onChange={handleReplyAttach}
-                />
-              </div>
-            )}
-
-            {/* Extra padding at bottom for scroll space */}
-            <div className="h-16" />
+            })}
           </div>
 
           {/* Confirm Dialog */}

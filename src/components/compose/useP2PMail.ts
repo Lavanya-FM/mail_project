@@ -29,7 +29,7 @@ export function useP2PMail(ui: any, attachments: any) {
         // 🛡️ Pre-transfer Scan (Backend) Parallelized
         try {
           scanResult = await startFileScan(file, file.name, 'P2P');
-          if (!scanResult.safe && scanResult.status !== 'not_scanned') {
+          if (!scanResult.safe) {
             toast.error(`Blocked "${file.name}": ${scanResult.message}`);
             return null;
           }

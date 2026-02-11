@@ -23,6 +23,7 @@ const db = require("./db"); // expects exported promise-based query/getConnectio
 const { sanitizeBody, normalizeEmail, isValidEmailFormat } = require("./utils");
 const storageService = require("./storageService");
 const { notifyNewEmail } = require("./p2pController");
+const threadingService = require("./services/threadingService");
 
 const router = express.Router();
 
@@ -147,6 +148,41 @@ async function initTables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    // --- THREADING SYSTEM MIGRATIONS ---
+    // 1. Create Conversations Table
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS conversations (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        subject_normalized VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_message_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        participant_hash VARCHAR(64),
+        INDEX idx_subject_norm (subject_normalized),
+        INDEX idx_last_message (last_message_at)
+      )
+    `);
+
+    // 2. Add Threading Columns to emails table
+    const addCol = async (sql) => { try { await db.query(sql); } catch (e) { /* ignore dup column */ } };
+    await addCol("ALTER TABLE emails ADD COLUMN IF NOT EXISTS subject_normalized VARCHAR(255)");
+    await addCol("ALTER TABLE emails ADD COLUMN IF NOT EXISTS references_header TEXT");
+    await addCol("ALTER TABLE emails ADD COLUMN IF NOT EXISTS conversation_id INT");
+
+    // 3. Modify columns (ensure correct type/length)
+    try { await db.query("ALTER TABLE emails MODIFY COLUMN message_id VARCHAR(255)"); } catch (e) { }
+    try { await db.query("ALTER TABLE emails MODIFY COLUMN in_reply_to VARCHAR(255)"); } catch (e) { }
+
+    // 4. Create Indices
+    const addIdx = async (sql) => { try { await db.query(sql); } catch (e) { /* ignore dup index */ } };
+    await addIdx("CREATE INDEX idx_email_message_id ON emails (message_id)");
+    await addIdx("CREATE INDEX idx_email_in_reply_to ON emails (in_reply_to)");
+    await addIdx("CREATE INDEX idx_email_conversation_id ON emails (conversation_id)");
+    await addIdx("CREATE INDEX idx_email_subject_norm ON emails (subject_normalized)");
+
+    // 5. Minimal Backfill (optional, non-blocking)
+    // db.query("UPDATE emails SET conversation_id = thread_id WHERE conversation_id IS NULL AND thread_id IS NOT NULL").catch(() => {});
+
 
   } catch (err) {
     console.error('⚠️ DB Initialization failed (Server will run in limited mode):', err.message);
@@ -1430,39 +1466,62 @@ router.post("/email/create", async (req, res) => {
     const resolvedFolderId = mailbox.id;
 
 
-    // -------------------- THREAD RESOLUTION --------------------
+    // -------------------- THREAD RESOLUTION (Gmail-like) --------------------
     resolvedThreadId = null;
 
-    if (in_reply_to) {
-      const [[parent]] = await conn.query(
-        "SELECT thread_id FROM emails WHERE id = ?",
-        [in_reply_to]
-      );
-      resolvedThreadId = parent?.thread_id || null;
+    // Normalize subject for storage
+    const normalizedSubject = threadingService.normalizeSubject(subject);
+
+    try {
+      // Use the new threading service to resolve or create thread
+      resolvedThreadId = await threadingService.resolveThreadId(conn, {
+        messageId: null, // New email, so we don't have a message-id yet (unless we generate it first?)
+        inReplyTo: in_reply_to,
+        references: null, // Incoming create usually via UI, so references might come from client?
+        subject: subject
+      });
+
+      // Update conversation timestamp
+      if (resolvedThreadId) {
+        await threadingService.updateConversation(resolvedThreadId);
+      }
+    } catch (threadingErr) {
+      console.warn("Threading service failed, falling back to new thread", threadingErr);
     }
+
+    // Fallback: If threading service returned nothing (shouldn't happen as it creates new), 
+    // or failed, standard legacy logic is effectively handled by resolveThreadId creating new.
+
     const crypto = require("crypto");
-
-    const generatedMessageId =
-      `<${crypto.randomUUID()}@jeemail.in>`;
+    const generatedMessageId = `<${crypto.randomUUID()}@jeemail.in>`;
 
 
-    // 2. INSERT email with P2P flags
-    // ✅ FIX: Removed created_at from column list (it has a default value)
+    // 2. INSERT email with Threading Columns
+    // Using conversation_id as column alias for thread_id logic or separate? 
+    // Requirements say "messages table" structure. 
+    // Our migration added conversation_id. We should populate it.
+    // Also populate subject_normalized and references_header
+
+    // We reuse thread_id column for now to keep frontend working (aliasing it to conversation_id logic)
+
     const insertSql = `INSERT INTO emails
-       (user_id, thread_id, message_id, from_name, from_email, subject, body, is_html, in_reply_to,
+       (user_id, thread_id, conversation_id, message_id, from_name, from_email, subject, subject_normalized, body, is_html, in_reply_to, references_header,
         to_header, cc_header, bcc_header, folder_id, is_draft, p2p_enabled, p2p_delivered)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
     const insertValues = [
       user_id,
       resolvedThreadId,
+      resolvedThreadId, // conversation_id
       generatedMessageId,
       sender.name,
       sender.email,
       subject || "(No Subject)",
+      normalizedSubject, // subject_normalized
       cleanBody,
-      1,
+      1, // is_html
       in_reply_to || null,
+      req.body.references || null, // references_header
       toList.join(", "),
       ccList.join(", "),
       bccList.join(", "),
@@ -2548,18 +2607,7 @@ router.post("/labels/delete", async (req, res) => {
   }
 });
 
-router.get("/activity", async (req, res) => {
-  try {
-    const userId = req.query.user_id;
-    const [rows] = await db.query(
-      "SELECT id, access_type, ip, location, created_at as date FROM activity_log WHERE user_id = ? ORDER BY created_at DESC LIMIT 10",
-      [userId]
-    );
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+
 
 // -------------------- P2P FALLBACK UPLOAD --------------------
 router.post("/email/attachment/update", async (req, res) => {

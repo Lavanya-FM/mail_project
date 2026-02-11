@@ -4,7 +4,7 @@ import App from './App.tsx';
 import './index.css';
 
 // initP2PDownloadListener removed in favor of P2PReceiverHandler
-console.log('Build Version: 2026-02-09.v265-OPT-FAST-SEND-FIXED');
+console.log('Build Version: 2026-02-11.v267-THREADING-DEPLOY');
 
 // TEMPORARILY DISABLED: Unregister ALL service workers to force fresh load
 if ('serviceWorker' in navigator) {

@@ -1,7 +1,7 @@
 // src/components/EmailList.tsx
 import { Paperclip, Inbox, Tag, Users, Square, CheckSquare, Star, RotateCw, MoreVertical, Mail, MailOpen, Trash2, Archive, AlertTriangle } from 'lucide-react';
 import { Email } from '../types/email';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { emailService, getFolderIdByName } from '../lib/emailService';
 import { authService } from '../lib/authService';
 import { p2pService } from '../lib/p2pService';
@@ -13,6 +13,7 @@ type EmailListProps = {
     onRefresh?: () => void;
     isTrash?: boolean;
     folderType?: string;
+    onShowActivityLog?: () => void;
 };
 
 export default function EmailList({
@@ -21,11 +22,41 @@ export default function EmailList({
     onSelectEmail,
     onRefresh,
     isTrash,
-    folderType
+    folderType,
+    onShowActivityLog,
 }: EmailListProps) {
     const [activeTab, setActiveTab] = useState<'primary' | 'social' | 'promotions'>('primary');
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+    // Activity Log logic
+    const [lastActivityInfo, setLastActivityInfo] = useState<{ minutesAgo: number; otherLocations: number } | null>(null);
+
+    useEffect(() => {
+        const fetchActivity = async () => {
+            try {
+                const logs = await authService.getRecentActivity();
+                if (logs && logs.length > 0) {
+                    // Assuming logs are sorted most recent first
+                    const latest = new Date(logs[0].date);
+                    const now = new Date();
+                    const diffMs = now.getTime() - latest.getTime();
+                    const mins = Math.max(0, Math.floor(diffMs / 60000));
+
+                    setLastActivityInfo({
+                        minutesAgo: mins,
+                        otherLocations: 0 // Default for now unless API provides active session count
+                    });
+                }
+            } catch (e) {
+                console.error("Failed to fetch activity", e);
+            }
+        };
+        fetchActivity();
+        // Poll every minute
+        const interval = setInterval(fetchActivity, 60000);
+        return () => clearInterval(interval);
+    }, []);
 
     const handleBulkAction = async (action: 'read' | 'unread' | 'star' | 'unstar' | 'delete' | 'archive' | 'spam' | 'inbox') => {
         const user = authService.getCurrentUser();
@@ -414,8 +445,30 @@ export default function EmailList({
                 )}
             </div>
 
-            <div className="p-2 border-t border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 text-[10px] text-center text-gray-500 flex justify-between px-4">
-                <span>{threadList.length} conversations</span>
+            <div className="px-4 py-2 border-t border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/50 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[10px] text-gray-500 dark:text-gray-400">
+                <div className="flex items-center gap-2">
+                    <span className="font-medium text-gray-600 dark:text-gray-300">{threadList.length} conversations</span>
+                    <span className="text-gray-300 dark:text-gray-700">|</span>
+                    <div className="flex items-center gap-2">
+                        <span className="hover:underline cursor-pointer">Terms</span>
+                        <span className="opacity-50">·</span>
+                        <span className="hover:underline cursor-pointer">Privacy</span>
+                        <span className="opacity-50">·</span>
+                        <span className="hover:underline cursor-pointer">Policies</span>
+                    </div>
+                </div>
+
+                {lastActivityInfo && (
+                    <div className="flex items-center gap-2 ml-auto">
+                        <span className="text-gray-400">Last account activity: {lastActivityInfo.minutesAgo}m ago</span>
+                        <button
+                            onClick={onShowActivityLog}
+                            className="text-gray-700 dark:text-gray-200 font-bold hover:underline cursor-pointer bg-transparent border-none p-0"
+                        >
+                            Details
+                        </button>
+                    </div>
+                )}
             </div>
         </div>
     );

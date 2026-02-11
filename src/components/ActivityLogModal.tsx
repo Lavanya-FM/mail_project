@@ -22,7 +22,7 @@ export default function ActivityModal({ isOpen, onClose }: ActivityModalProps) {
   const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [currentIP, setCurrentIP] = useState('');
   const [currentLocation, setCurrentLocation] = useState('');
-  const [loading, setLoading] = useState(true);
+
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
 
   // Window states
@@ -36,7 +36,7 @@ export default function ActivityModal({ isOpen, onClose }: ActivityModalProps) {
   }, [isOpen]);
 
   const fetchActivityData = async () => {
-    setLoading(true);
+
     try {
       // 1. Get Current Session Info (Client-side)
       let ipData = { ip: 'Unknown' };
@@ -100,8 +100,6 @@ export default function ActivityModal({ isOpen, onClose }: ActivityModalProps) {
 
     } catch (error) {
       console.error('Error fetching activity data:', error);
-    } finally {
-      setLoading(false);
     }
   };
 

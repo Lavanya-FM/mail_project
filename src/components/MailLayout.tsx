@@ -847,6 +847,7 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
                   onRefresh={refreshEmails}
                   isTrash={selectedFolder?.id === 'trash' || selectedFolder?.system_box === 'trash'}
                   folderType={selectedFolder?.system_box || selectedFolder?.name?.toLowerCase()}
+                  onShowActivityLog={() => setShowActivityLog(true)}
                 />
               </div>
 

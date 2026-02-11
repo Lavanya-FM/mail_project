@@ -632,6 +632,13 @@ class StrictP2PService {
     }
   }
 
+  async getFile(messageId: string): Promise<Blob | File | undefined> {
+    if (this.receivedFiles.has(messageId)) {
+      return this.receivedFiles.get(messageId);
+    }
+    return await getFile(messageId);
+  }
+
   // private normalizeEmail(email: string): string { ... } // Replaced by import
 
   isPeerOnline(email: string): boolean {
