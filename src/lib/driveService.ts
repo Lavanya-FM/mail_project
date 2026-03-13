@@ -4,35 +4,37 @@ const API = "/api/drive";
 
 export interface DriveFolder {
     id: number;
+    name: string;
     user_id: number;
     owner_id?: number;
-    parent_folder_id: number | null;
-    name: string;
+    parent_id: number | null;
+    parent_folder_id?: number | null;
+    is_deleted: boolean;
     created_at: string;
     updated_at: string;
-    color?: string;
     file_count?: number;
+    color?: string;
+    permission?: 'OWNER' | 'VIEW' | 'EDIT' | 'DOWNLOAD';
 }
 
 export interface DriveFile {
     id: number;
+    name: string;
+    size_bytes: number;
+    file_type: string;
     user_id: number;
     owner_id?: number;
     folder_id: number | null;
-    filename: string;
-    name: string;
-    path: string;
-    size_bytes: number;
-    file_type: string;
-    mime_type: string;
+    is_starred: boolean;
+    is_deleted: boolean;
     created_at: string;
     updated_at: string;
-    is_starred: boolean;
-    is_trashed: boolean;
-    tags?: string[];
-    previewUrl?: string;
+    storage_path?: string;
     is_missing?: boolean;
     version_current?: number;
+    permission?: 'OWNER' | 'VIEW' | 'EDIT' | 'DOWNLOAD';
+    tags?: string[];
+    previewUrl?: string;
 }
 
 // Helper to add auth headers without messing up FormData content-type
@@ -51,10 +53,11 @@ function getAuthHeaders(isJson = true) {
 /* ===============================
    UPLOAD FILE
 ================================ */
-export async function uploadFile(file: File, userId: number, folderId: number | null) {
+export async function uploadFile(file: File, userId: number, folderId: number | null, fileId?: number) {
     const fd = new FormData();
     fd.append("file", file);
     fd.append("folder_id", folderId ? folderId.toString() : "");
+    if (fileId) fd.append("file_id", fileId.toString());
 
     // Do NOT set Content-Type for FormData, browser sets boundary
     const headers = getAuthHeaders(false);
@@ -388,5 +391,45 @@ export async function getLargeFiles(userId: number) {
 
 export async function getDuplicateFiles(userId: number) {
     const res = await authService.fetchWithAuth(`/api/storage/duplicates?user_id=${userId}`);
+    return res.json();
+}
+/* ===============================
+   PERMISSION MANAGEMENT
+================================ */
+export async function getResourcePermissions(type: 'FILE' | 'FOLDER' | string, id: number) {
+    const user = authService.getCurrentUser();
+    const res = await authService.fetchWithAuth(`/api/permissions/resource?type=${type}&id=${id}&user_id=${user?.id}`);
+    return res.json();
+}
+
+export async function grantPermission(type: 'FILE' | 'FOLDER' | string, id: number, email: string, permission: 'VIEW' | 'EDIT' | 'DOWNLOAD') {
+    const user = authService.getCurrentUser();
+    const res = await authService.fetchWithAuth('/api/permissions/grant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            resource_type: type,
+            resource_id: id,
+            user_email: email,
+            permission: permission,
+            granted_by: user?.id
+        })
+    });
+    return res.json();
+}
+
+export async function revokePermission(type: 'FILE' | 'FOLDER' | string, id: number, userId: number, permission: 'VIEW' | 'EDIT' | 'DOWNLOAD') {
+    const user = authService.getCurrentUser();
+    const res = await authService.fetchWithAuth('/api/permissions/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            resource_type: type,
+            resource_id: id,
+            user_id: userId,
+            permission: permission,
+            revoked_by: user?.id
+        })
+    });
     return res.json();
 }

@@ -45,6 +45,11 @@ router.post('/upload/init', async (req, res) => {
     const storagePath = path.join(uploadDir, `${Date.now()}-${name}`);
 
     try {
+        // Enforce permission for non-root uploads
+        if (folder_id && !(await checkPermission('FOLDER', folder_id, user_id, 'EDIT'))) {
+            return res.status(403).json({ error: 'Permission denied: Cannot upload to this folder.' });
+        }
+
         // Rule 11: Enforce logic
         const canUpload = await storageService.hasSpace(user_id, size);
         if (!canUpload) {
@@ -90,9 +95,8 @@ router.post('/upload/chunk', upload.single('chunk'), async (req, res) => {
 
             // Insert into files table
             const [result] = await db.query(
-                `INSERT INTO files (name, folder_id, owner_id, size, mime_type, storage_path) 
-                 VALUES (?, ?, ?, ?, ?, ?)`,
-                [session.file_name, session.folder_id, session.user_id, session.file_size, session.mime_type, session.storage_path]
+                `INSERT INTO drive_files (name, folder_id, owner_id, size, mime_type, storage_path, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [session.file_name, session.folder_id, session.user_id, session.file_size, session.mime_type, session.storage_path, session.user_id]
             );
 
             await db.query('UPDATE upload_sessions SET is_completed = 1 WHERE id = ?', [sessionId]);
@@ -126,21 +130,38 @@ router.get('/contents', async (req, res) => {
     try {
         if (shared === 'true') {
             const [sharedFiles] = await db.query(
-                `SELECT f.* FROM files f JOIN file_permissions p ON f.id = p.file_id WHERE p.user_id = ? AND f.is_deleted = 0`, [userId]
+                `SELECT f.*, f.size as size_bytes, f.owner_id as user_id, f.mime_type as file_type, p.permission
+                 FROM drive_files f
+                 JOIN drive_permissions p ON f.id = p.resource_id
+                 WHERE p.user_id = ? AND p.resource_type = 'FILE' AND f.is_deleted = 0`, [userId]
             );
             const [sharedFolders] = await db.query(
-                `SELECT f.* FROM folders f JOIN file_permissions p ON f.id = p.folder_id WHERE p.user_id = ? AND f.is_deleted = 0`, [userId]
+                `SELECT f.*, f.owner_id as user_id, p.permission
+                 FROM drive_folders f
+                 JOIN drive_permissions p ON f.id = p.resource_id
+                 WHERE p.user_id = ? AND p.resource_type = 'FOLDER' AND f.is_deleted = 0`, [userId]
             );
             return res.json({ success: true, folders: sharedFolders, files: sharedFiles });
         }
 
         const fid = (folder_id === 'null' || !folder_id || folder_id === '0' || folder_id === '') ? null : folder_id;
-        if (fid && !(await checkPermission('FOLDER', fid, userId, 'VIEW'))) return res.status(403).json({ error: 'Access denied' });
+        let folders, files;
 
-        const [folders] = await db.query('SELECT * FROM folders WHERE owner_id = ? AND parent_id <=> ? AND is_deleted = 0 ORDER BY name ASC', [userId, fid]);
-        const [files] = await db.query('SELECT * FROM files WHERE owner_id = ? AND folder_id <=> ? AND is_deleted = 0 ORDER BY name ASC', [userId, fid]);
+        if (fid) {
+            // Browsing a specific folder: check permission first
+            if (!(await checkPermission('FOLDER', fid, userId, 'VIEW'))) {
+                return res.status(403).json({ error: 'Access denied' });
+            }
+            [folders] = await db.query('SELECT *, owner_id as user_id FROM drive_folders WHERE parent_folder_id = ? AND is_deleted = 0 ORDER BY name ASC', [fid]);
+            [files] = await db.query('SELECT *, size as size_bytes, owner_id as user_id, mime_type as file_type FROM drive_files WHERE folder_id = ? AND is_deleted = 0 ORDER BY name ASC', [fid]);
+        } else {
+            // Root level: only show items owned by the user
+            [folders] = await db.query('SELECT *, owner_id as user_id FROM drive_folders WHERE owner_id = ? AND parent_folder_id IS NULL AND is_deleted = 0 ORDER BY name ASC', [userId]);
+            [files] = await db.query('SELECT *, size as size_bytes, owner_id as user_id, mime_type as file_type FROM drive_files WHERE owner_id = ? AND folder_id IS NULL AND is_deleted = 0 ORDER BY name ASC', [userId]);
+        }
         res.json({ success: true, folders, files });
     } catch (err) {
+        console.error('[Drive] Error in /contents:', err);
         res.status(500).json({ error: 'Failed' });
     }
 });
@@ -150,7 +171,7 @@ router.get('/folders', async (req, res) => {
     const { user_id, parent_folder_id } = req.query;
     try {
         const pid = (parent_folder_id === 'null' || !parent_folder_id || parent_folder_id === '0' || parent_folder_id === '') ? null : parent_folder_id;
-        const [folders] = await db.query('SELECT * FROM folders WHERE owner_id = ? AND parent_id <=> ? AND is_deleted = 0', [user_id, pid]);
+        const [folders] = await db.query('SELECT * FROM drive_folders WHERE owner_id = ? AND parent_folder_id <=> ? AND is_deleted = 0', [user_id, pid]);
         res.json({ success: true, folders });
     } catch (err) {
         res.status(500).json({ error: 'Failed' });
@@ -161,9 +182,13 @@ router.get('/folders', async (req, res) => {
 router.post('/folder', async (req, res) => {
     const { user_id, parent_folder_id, name } = req.body;
     try {
-        const [result] = await db.query('INSERT INTO folders (owner_id, parent_id, name) VALUES (?, ?, ?)', [user_id, parent_folder_id || null, name]);
+        if (parent_folder_id && !(await checkPermission('FOLDER', parent_folder_id, user_id, 'EDIT'))) {
+            return res.status(403).json({ error: 'Permission denied: Cannot create folder here.' });
+        }
+        const [result] = await db.query('INSERT INTO drive_folders (owner_id, parent_folder_id, name) VALUES (?, ?, ?)', [user_id, parent_folder_id || null, name]);
         res.json({ success: true, folder_id: result.insertId });
     } catch (err) {
+        console.error('Create folder error:', err);
         res.status(500).json({ error: 'Failed' });
     }
 });
@@ -174,6 +199,11 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     if (!req.file || !user_id) return res.status(400).json({ error: 'Missing data' });
 
     try {
+        // Enforce permission
+        if (folder_id && !file_id && !(await checkPermission('FOLDER', folder_id, user_id, 'EDIT'))) {
+            return res.status(403).json({ error: 'Permission denied: Cannot upload to this folder.' });
+        }
+
         // Rule 11: Enforce logic
         const canUpload = await storageService.hasSpace(user_id, req.file.size);
         if (!canUpload) {
@@ -182,16 +212,16 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 
         if (file_id) {
             if (!(await checkPermission('FILE', file_id, user_id, 'EDIT'))) return res.status(403).json({ error: 'Forbidden' });
-            const [[current]] = await db.query('SELECT * FROM files WHERE id = ?', [file_id]);
+            const [[current]] = await db.query('SELECT * FROM drive_files WHERE id = ?', [file_id]);
             await db.query('INSERT INTO file_versions (file_id, version_number, storage_path, size) VALUES (?, ?, ?, ?)', [file_id, current.version_current, current.storage_path, current.size]);
-            await db.query('UPDATE files SET storage_path = ?, size = ?, version_current = version_current + 1, updated_at = NOW() WHERE id = ?', [req.file.path, req.file.size, file_id]);
+            await db.query('UPDATE drive_files SET storage_path = ?, size = ?, version_current = version_current + 1, updated_at = NOW() WHERE id = ?', [req.file.path, req.file.size, file_id]);
 
             // Rule 3.2: New versions count toward usage
             await storageService.updateUsage(user_id, req.file.size);
 
             return res.json({ success: true, file_id });
         } else {
-            const [result] = await db.query(`INSERT INTO files (name, folder_id, owner_id, size, mime_type, storage_path) VALUES (?, ?, ?, ?, ?, ?)`, [req.file.originalname, folder_id || null, user_id, req.file.size, req.file.mimetype, req.file.path]);
+            const [result] = await db.query(`INSERT INTO drive_files (name, folder_id, owner_id, size, mime_type, storage_path, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)`, [req.file.originalname, folder_id || null, user_id, req.file.size, req.file.mimetype, req.file.path, user_id]);
 
             // Rule 3.1: Add usage
             await storageService.updateUsage(user_id, req.file.size);
@@ -217,7 +247,7 @@ router.get('/files/:id/preview-info', async (req, res) => {
             return res.status(403).json({ error: 'View permission required' });
         }
 
-        const [[file]] = await db.query('SELECT * FROM files WHERE id = ? AND is_deleted = 0', [id]);
+        const [[file]] = await db.query('SELECT * FROM drive_files WHERE id = ? AND is_deleted = 0', [id]);
         if (!file) return res.status(404).json({ error: 'File not found' });
 
         // Generate short-lived signed token (10 minutes)
@@ -265,7 +295,7 @@ router.get('/files/:id/preview', async (req, res) => {
             return res.status(403).json({ error: 'View permission required' });
         }
 
-        const [[file]] = await db.query('SELECT * FROM files WHERE id = ? AND is_deleted = 0', [id]);
+        const [[file]] = await db.query('SELECT * FROM drive_files WHERE id = ? AND is_deleted = 0', [id]);
         if (!file || !fs.existsSync(file.storage_path)) return res.status(404).json({ error: 'File missing' });
 
         const stat = fs.statSync(file.storage_path);
@@ -299,10 +329,21 @@ router.get('/files/:id/preview', async (req, res) => {
 
 router.get('/starred', async (req, res) => {
     const { user_id } = req.query;
+    if (!user_id) return res.status(400).json({ error: 'user_id required' });
     try {
-        const [files] = await db.query('SELECT * FROM files WHERE owner_id = ? AND is_starred = 1 AND is_deleted = 0', [user_id]);
+        const [files] = await db.query(`
+            (SELECT *, size as size_bytes, owner_id as user_id, mime_type as file_type, 'OWNER' as permission
+             FROM drive_files
+             WHERE owner_id = ? AND is_starred = 1 AND is_deleted = 0)
+            UNION
+            (SELECT f.*, f.size as size_bytes, f.owner_id as user_id, f.mime_type as file_type, p.permission
+             FROM drive_files f
+             JOIN drive_permissions p ON f.id = p.resource_id
+             WHERE p.user_id = ? AND p.resource_type = 'FILE' AND f.is_starred = 1 AND f.is_deleted = 0)
+        `, [user_id, user_id]);
         res.json({ success: true, files });
     } catch (err) {
+        console.error('[Drive] Error in /starred:', err);
         res.status(500).json({ error: 'Failed' });
     }
 });
@@ -311,9 +352,22 @@ router.get('/recent', async (req, res) => {
     const { user_id, limit } = req.query;
     console.log(`[Drive] GET /recent - user_id: ${user_id}, limit: ${limit}`);
     try {
-        const [files] = await db.query('SELECT * FROM files WHERE owner_id = ? AND is_deleted = 0 ORDER BY updated_at DESC LIMIT ?', [user_id, parseInt(limit || '20')]);
+        // Fetch files owned by user OR shared with user
+        const [files] = await db.query(`
+            (SELECT *, size as size_bytes, owner_id as user_id, mime_type as file_type, 'OWNER' as permission
+             FROM drive_files
+             WHERE owner_id = ? AND is_deleted = 0)
+            UNION
+            (SELECT f.*, f.size as size_bytes, f.owner_id as user_id, f.mime_type as file_type, p.permission
+             FROM drive_files f
+             JOIN drive_permissions p ON f.id = p.resource_id
+             WHERE p.user_id = ? AND p.resource_type = 'FILE' AND f.is_deleted = 0)
+            ORDER BY updated_at DESC LIMIT ?
+        `, [user_id, user_id, parseInt(limit || '20')]);
+
         res.json({ success: true, files });
     } catch (err) {
+        console.error('[Drive] Error in /recent:', err);
         res.status(500).json({ error: 'Failed' });
     }
 });
@@ -322,7 +376,7 @@ router.post('/toggle-star', async (req, res) => {
     const { file_id, is_starred, user_id } = req.body;
     try {
         if (!(await checkPermission('FILE', file_id, user_id, 'VIEW'))) return res.status(403).json({ error: 'Forbidden' });
-        await db.query('UPDATE files SET is_starred = ? WHERE id = ?', [is_starred ? 1 : 0, file_id]);
+        await db.query('UPDATE drive_files SET is_starred = ? WHERE id = ?', [is_starred ? 1 : 0, file_id]);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: 'Failed' });
@@ -334,7 +388,7 @@ router.post('/move', async (req, res) => {
     try {
         if (!(await checkPermission('FILE', file_id, user_id, 'EDIT'))) return res.status(403).json({ error: 'Forbidden' });
         if (folder_id && !(await checkPermission('FOLDER', folder_id, user_id, 'EDIT'))) return res.status(403).json({ error: 'Forbidden' });
-        await db.query('UPDATE files SET folder_id = ? WHERE id = ?', [folder_id || null, file_id]);
+        await db.query('UPDATE drive_files SET folder_id = ? WHERE id = ?', [folder_id || null, file_id]);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: 'Failed' });
@@ -345,8 +399,9 @@ router.post('/share', async (req, res) => {
     const { type, id, user_id, target_user_id, permission_type } = req.body;
     try {
         if (!(await checkPermission(type, id, user_id, 'OWNER'))) return res.status(403).json({ error: 'Forbidden' });
-        const col = type === 'file' ? 'file_id' : 'folder_id';
-        await db.query(`INSERT INTO file_permissions (${col}, user_id, permission_type) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE permission_type = VALUES(permission_type)`, [id, target_user_id, permission_type]);
+        const col = type === 'file' ? 'resource_id' : 'resource_id'; // Both file and folder use resource_id
+        const resourceType = type === 'file' ? 'FILE' : 'FOLDER';
+        await db.query(`INSERT INTO drive_permissions (resource_id, resource_type, user_id, permission) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE permission = VALUES(permission)`, [id, resourceType, target_user_id, permission_type]);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: 'Failed' });
@@ -358,7 +413,7 @@ router.post('/restore', async (req, res) => {
     const { file_id, user_id } = req.body;
     try {
         if (!(await checkPermission('FILE', file_id, user_id, 'EDIT'))) return res.status(403).json({ error: 'Forbidden' });
-        await db.query('UPDATE files SET is_deleted = 0 WHERE id = ?', [file_id]);
+        await db.query('UPDATE drive_files SET is_deleted = 0 WHERE id = ?', [file_id]);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: 'Failed' });
@@ -370,7 +425,7 @@ router.post('/delete-permanent', async (req, res) => {
     const { file_id, user_id } = req.body;
     try {
         if (!(await checkPermission('FILE', file_id, user_id, 'OWNER'))) return res.status(403).json({ error: 'Forbidden' });
-        const [[file]] = await db.query('SELECT storage_path, size FROM files WHERE id = ?', [file_id]);
+        const [[file]] = await db.query('SELECT storage_path, size FROM drive_files WHERE id = ?', [file_id]);
         if (file && fs.existsSync(file.storage_path)) fs.unlinkSync(file.storage_path);
 
         // Rule 4.1: Permanent deletion frees space (including all versions - Rule 6)
@@ -388,7 +443,7 @@ router.post('/delete-permanent', async (req, res) => {
         }
 
         await db.query('DELETE FROM file_versions WHERE file_id = ?', [file_id]);
-        await db.query('DELETE FROM files WHERE id = ?', [file_id]);
+        await db.query('DELETE FROM drive_files WHERE id = ?', [file_id]);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: 'Failed' });
@@ -399,7 +454,7 @@ router.post('/delete-permanent', async (req, res) => {
 router.post('/empty-trash', async (req, res) => {
     const { user_id } = req.body;
     try {
-        const [files] = await db.query('SELECT id, storage_path, size FROM files WHERE owner_id = ? AND is_deleted = 1', [user_id]);
+        const [files] = await db.query('SELECT id, storage_path, size FROM drive_files WHERE owner_id = ? AND is_deleted = 1', [user_id]);
         let totalFreed = 0;
 
         for (const f of files) {
@@ -420,8 +475,8 @@ router.post('/empty-trash', async (req, res) => {
         // Rule 4.2: Empty trash frees space
         await storageService.updateUsage(user_id, -totalFreed);
 
-        await db.query('DELETE FROM files WHERE owner_id = ? AND is_deleted = 1', [user_id]);
-        await db.query('DELETE FROM folders WHERE owner_id = ? AND is_deleted = 1', [user_id]);
+        await db.query('DELETE FROM drive_files WHERE owner_id = ? AND is_deleted = 1', [user_id]);
+        await db.query('DELETE FROM drive_folders WHERE owner_id = ? AND is_deleted = 1', [user_id]);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: 'Failed' });
@@ -431,13 +486,13 @@ router.post('/empty-trash', async (req, res) => {
 router.post('/trash', async (req, res) => {
     const { file_id, folder_id, user_id } = req.body;
     try {
-        const type = file_id ? 'file' : 'folder';
+        const type = file_id ? 'FILE' : 'FOLDER';
         const id = file_id || folder_id;
         if (!(await checkPermission(type, id, user_id, 'EDIT'))) return res.status(403).json({ error: 'Forbidden' });
-        if (type === 'file') await db.query('UPDATE files SET is_deleted = 1 WHERE id = ?', [id]);
+        if (type === 'FILE') await db.query('UPDATE drive_files SET is_deleted = 1 WHERE id = ?', [id]);
         else {
-            await db.query('UPDATE folders SET is_deleted = 1 WHERE id = ?', [id]);
-            await db.query('UPDATE files SET is_deleted = 1 WHERE folder_id = ?', [id]);
+            await db.query('UPDATE drive_folders SET is_deleted = 1 WHERE id = ?', [id]);
+            await db.query('UPDATE drive_files SET is_deleted = 1 WHERE folder_id = ?', [id]);
         }
         res.json({ success: true });
     } catch (err) {
@@ -450,7 +505,7 @@ router.post('/delete', async (req, res) => {
     const { file_id, user_id } = req.body;
     try {
         if (!(await checkPermission('FILE', file_id, user_id, 'EDIT'))) return res.status(403).json({ error: 'Forbidden' });
-        await db.query('UPDATE files SET is_deleted = 1 WHERE id = ?', [file_id]);
+        await db.query('UPDATE drive_files SET is_deleted = 1 WHERE id = ?', [file_id]);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: 'Failed' });
@@ -462,10 +517,11 @@ router.get('/trash', async (req, res) => {
     if (!userId) return res.status(400).json({ error: 'user_id required' });
 
     try {
-        const [files] = await db.query('SELECT * FROM files WHERE owner_id = ? AND is_deleted = 1', [userId]);
-        const [folders] = await db.query('SELECT * FROM folders WHERE owner_id = ? AND is_deleted = 1', [userId]);
-        res.json({ success: true, files, folders });
+        const [files] = await db.query('SELECT *, size as size_bytes, owner_id as user_id, mime_type as file_type FROM drive_files WHERE owner_id = ? AND is_deleted = 1', [userId]);
+        const [folders] = await db.query('SELECT *, owner_id as user_id FROM drive_folders WHERE owner_id = ? AND is_deleted = 1', [userId]);
+        res.json({ success: true, folders, files });
     } catch (err) {
+        console.error('[Drive] Error in /trash:', err);
         res.status(500).json({ error: 'Failed' });
     }
 });
@@ -495,7 +551,7 @@ router.get('/files/:id/download', async (req, res) => {
             return res.status(403).json({ error: 'Forbidden' });
         }
 
-        const [[file]] = await db.query('SELECT * FROM files WHERE id = ?', [id]);
+        const [[file]] = await db.query('SELECT * FROM drive_files WHERE id = ?', [id]);
         if (!file || !fs.existsSync(file.storage_path)) {
             return res.status(404).json({ error: 'File not found' });
         }
@@ -517,7 +573,7 @@ router.post('/rename', async (req, res) => {
         if (!(await checkPermission(type, id, user_id, 'EDIT'))) return res.status(403).json({ error: 'Forbidden' });
 
         if (type === 'file') {
-            await db.query('UPDATE files SET name = ? WHERE id = ?', [newName, id]);
+            await db.query('UPDATE drive_files SET name = ? WHERE id = ?', [newName, id]);
         } else {
             await db.query('UPDATE folders SET name = ? WHERE id = ?', [newName, id]);
         }
@@ -535,7 +591,7 @@ router.post('/copy', async (req, res) => {
     try {
         if (!(await checkPermission('FILE', file_id, user_id, 'VIEW'))) return res.status(403).json({ error: 'Forbidden' });
 
-        const [[file]] = await db.query('SELECT * FROM files WHERE id = ?', [file_id]);
+        const [[file]] = await db.query('SELECT * FROM drive_files WHERE id = ?', [file_id]);
         if (!file) return res.status(404).json({ error: 'File not found' });
 
         // Check storage quota
@@ -552,11 +608,18 @@ router.post('/copy', async (req, res) => {
             return res.status(404).json({ error: 'Source file missing on disk' });
         }
 
+        // Determine target folder: if user doesn't have EDIT on current folder, put in root
+        let targetFolderId = file.folder_id;
+        if (targetFolderId) {
+            const hasEdit = await checkPermission('FOLDER', targetFolderId, user_id, 'EDIT');
+            if (!hasEdit) targetFolderId = null;
+        }
+
         // Insert into DB
         const [result] = await db.query(
-            `INSERT INTO files (name, folder_id, owner_id, size, mime_type, storage_path) 
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            [newName, file.folder_id, user_id, file.size, file.mime_type, newPath]
+            `INSERT INTO drive_files (name, folder_id, owner_id, size, mime_type, storage_path, user_id) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [newName, targetFolderId, user_id, file.size, file.mime_type, newPath, user_id]
         );
 
         await storageService.updateUsage(user_id, file.size);
@@ -596,7 +659,7 @@ router.post('/files/:id/versions/:versionId/restore', async (req, res) => {
     try {
         if (!(await checkPermission('FILE', id, user_id, 'EDIT'))) return res.status(403).json({ error: 'Forbidden' });
 
-        const [[file]] = await db.query('SELECT * FROM files WHERE id = ?', [id]);
+        const [[file]] = await db.query('SELECT * FROM drive_files WHERE id = ?', [id]);
         const [[version]] = await db.query('SELECT * FROM file_versions WHERE id = ? AND file_id = ?', [versionId, id]);
 
         if (!file || !version) return res.status(404).json({ error: 'File or version not found' });
@@ -610,7 +673,7 @@ router.post('/files/:id/versions/:versionId/restore', async (req, res) => {
 
         // 2. Update current file with version data
         await db.query(
-            'UPDATE files SET storage_path = ?, size = ?, version_current = version_current + 1, updated_at = NOW() WHERE id = ?',
+            'UPDATE drive_files SET storage_path = ?, size = ?, version_current = version_current + 1, updated_at = NOW() WHERE id = ?',
             [version.storage_path, version.size, id]
         );
 

@@ -114,12 +114,17 @@ export default function MainApp() {
                     <button className="p-2 -ml-2 rounded-full hover:bg-gray-100 dark:hover:bg-slate-800 lg:hidden">
                         <Menu className="w-5 h-5 text-gray-600 dark:text-slate-400" />
                     </button>
-                    <div className="flex items-center gap-2">
-                        <div className="bg-gradient-to-r from-blue-600 to-cyan-500 p-1.5 rounded-lg">
-                            <Mail className="w-5 h-5 text-white" />
+                    <div className="flex items-center gap-2.5 group cursor-pointer">
+                        <div className={`p-1.5 rounded-[10px] shadow-sm group-hover:scale-105 transition-transform ${currentView === 'drive' ? 'bg-green-600' :
+                                currentView === 'calls' ? 'bg-purple-600' : 'bg-blue-600'
+                            }`}>
+                            {currentView === 'drive' ? <HardDrive className="w-5 h-5 text-white" /> :
+                                currentView === 'calls' ? <Video className="w-5 h-5 text-white" /> :
+                                    <Mail className="w-5 h-5 text-white" />}
                         </div>
-                        <span className="text-xl font-bold bg-gradient-to-r from-blue-600 to-cyan-600 bg-clip-text text-transparent hidden sm:block">
-                            JeeMail
+                        <span className="text-xl font-bold text-gray-900 dark:text-white tracking-tight hidden sm:block">
+                            {currentView === 'drive' ? 'JeeDrive' :
+                                currentView === 'calls' ? 'JeeMeet' : 'JeeMail'}
                         </span>
                     </div>
                 </div>
@@ -127,15 +132,15 @@ export default function MainApp() {
                 {/* Center: Search Bar */}
                 <div className="flex-1 max-w-2xl px-4 lg:px-8">
                     <div className="relative group">
-                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <Search className="h-5 w-5 text-gray-400 group-focus-within:text-blue-500 transition-colors" />
+                        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                            <Search className="h-4 w-4 text-gray-400 group-focus-within:text-blue-600 transition-colors" />
                         </div>
                         <input
                             type="text"
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                             placeholder={`Search in ${currentView}...`}
-                            className="block w-full pl-10 pr-12 py-2.5 bg-gray-100/50 dark:bg-slate-800/50 border border-gray-200 dark:border-slate-700 text-gray-900 dark:text-white placeholder-gray-500 focus:outline-none focus:bg-white dark:focus:bg-slate-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500/50 focus:shadow-lg rounded-2xl transition-all duration-300 sm:text-sm"
+                            className="block w-full pl-11 pr-12 py-2.5 bg-gray-100 dark:bg-slate-800/40 border-transparent focus:border-blue-500/30 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:bg-white dark:focus:bg-slate-900 focus:ring-4 focus:ring-blue-500/10 rounded-2xl transition-all duration-300 sm:text-[14px] font-medium shadow-inner"
                         />
                         <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
                             <button className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-700 rounded-lg transition-colors">
@@ -291,7 +296,7 @@ export default function MainApp() {
                     ) : currentView === 'calls' ? (
                         <CallsView />
                     ) : (
-                        <JeeDrive />
+                        <JeeDrive searchQuery={searchQuery} />
                     )}
                 </div>
             </div>

@@ -68,6 +68,7 @@ app.use('/api', require('./mail'));
 app.use('/api', require('./draftController')); // Gmail-style draft management
 app.use('/api/scan', require('./scanController')); // File Security Scanning
 app.use('/api/carbon', require('./carbonService'));
+app.use('/api/meeting-invites', require('./meetingInvites')); // Meeting Invitations
 
 // Chat Routes
 const chatController = require('./chatController');

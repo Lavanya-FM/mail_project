@@ -351,12 +351,37 @@ export default function EmailView({ email, onClose, onRefresh, onCompose: _onCom
     return s;
   };
 
+  /* 
+    Iteratively strip HTML tags and decode entities.
+    Handles cases like "&lt;div&gt;" -> "<div>" -> "" (stripped).
+    Max 3 passes to prevent infinite loops.
+  */
   const stripHtmlTags = (s: string) => {
     if (!s) return s;
-    // remove comments and any remaining tags
-    s = s.replace(/<!--[\s\S]*?-->/g, '');
-    s = s.replace(/<\/?[^>]+(>|$)/g, '');
-    return s;
+    let current = s;
+
+    for (let i = 0; i < 3; i++) {
+      // If it looks clean, stop
+      if (!/<\/?[a-z][\s\S]*>|&[a-z#0-9]+;/i.test(current)) {
+        break;
+      }
+
+      try {
+        const tmp = document.createElement("DIV");
+        tmp.innerHTML = current;
+
+        // prefer innerText to preserve structure/newlines
+        const next = tmp.innerText || tmp.textContent || "";
+
+        if (next === current) break;
+        current = next;
+      } catch (e) {
+        break;
+      }
+    }
+
+    // Final safety net: explicit regex strip for any lingering tags
+    return current.replace(/<\/?[^>]+(>|$)/g, " ");
   };
 
   const bodyToHtml = (text?: string) => {
@@ -847,7 +872,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose: _onCom
             {getSenderName(email.from_name, email.from_email)}
           </span>
           <span className="text-sm text-gray-500 dark:text-slate-400 truncate flex-1">
-            {sanitizeBody(email.body ?? email.text_preview ?? "").substring(0, 100)}...
+            {stripHtmlTags(email.text_preview || htmlToNewlines(email.body || "")).substring(0, 100)}...
           </span>
         </div>
 
@@ -857,7 +882,7 @@ export default function EmailView({ email, onClose, onRefresh, onCompose: _onCom
             {formatShortDate(email.sent_at || email.created_at || '')}
           </span>
         </div>
-      </div>
+      </div >
     );
   }
 

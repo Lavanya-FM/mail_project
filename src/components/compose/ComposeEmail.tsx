@@ -66,6 +66,7 @@ export default function ComposeEmail(props: ComposeEmailProps) {
 
   const textareaRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const sendingRef = useRef(false);
 
   const hasLargeAttachments = attachments.some(f => f.size > LARGE_ATTACHMENT_BYTES);
 
@@ -156,7 +157,7 @@ export default function ComposeEmail(props: ComposeEmailProps) {
 
   // Draft autosave
   const saveDraft = async (manual = false) => {
-    if (!profile || sending) return;
+    if (!profile || sending || sendingRef.current) return;
 
     // Don't save if nothing changed
     const currentContent = `${to}|${subject}|${body}|${attachments.length}`;
@@ -282,10 +283,11 @@ export default function ComposeEmail(props: ComposeEmailProps) {
 
   // ==================== UNIFIED SEND HANDLER ====================
   const handleSend = async () => {
-    if (sending) return;
+    if (sending || sendingRef.current) return;
     if (!profile) { toast.error('Please log in to send email'); return; }
     if (!to.trim()) { toast.error('Please enter a recipient'); return; }
 
+    sendingRef.current = true;
     setSending(true);
 
     // 🚀 Optimistic UI: Close immediately, process in background
@@ -294,7 +296,7 @@ export default function ComposeEmail(props: ComposeEmailProps) {
 
     try {
       const recipients = to.split(',').map(e => e.trim()).filter(Boolean);
-      const P2P_THRESHOLD = 5 * 1024 * 1024; // 5MB
+      const P2P_THRESHOLD = 25 * 1024 * 1024; // 25MB threshold for P2P engine
 
       const processedAttachments = [];
       const p2pFilesToSeed: File[] = [];
@@ -371,6 +373,7 @@ export default function ComposeEmail(props: ComposeEmailProps) {
 
     } catch (err: any) {
       console.error('[SEND FAILED]', err);
+      sendingRef.current = false;
       toast.error(err?.message || 'Failed to send email');
     } finally {
       setSending(false);

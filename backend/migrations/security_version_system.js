@@ -16,8 +16,8 @@ async function up() {
                 INDEX (file_id),
                 INDEX (folder_id),
                 INDEX (user_id),
-                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE,
-                FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE,
+                FOREIGN KEY (file_id) REFERENCES drive_files(id) ON DELETE CASCADE,
+                FOREIGN KEY (folder_id) REFERENCES drive_folders(id) ON DELETE CASCADE,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             ) ENGINE=InnoDB;
         `);
@@ -32,7 +32,7 @@ async function up() {
                 size BIGINT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 INDEX (file_id),
-                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+                FOREIGN KEY (file_id) REFERENCES drive_files(id) ON DELETE CASCADE
             ) ENGINE=InnoDB;
         `);
 

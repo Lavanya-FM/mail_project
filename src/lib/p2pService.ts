@@ -442,6 +442,20 @@ class StrictP2PService {
       this.disconnect();
     });
 
+    // ✅ FIX: Handle tab visibility changes - KEEP TRANSFERS RUNNING
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        console.log('[P2P] Tab hidden - transfers will continue in background');
+        // DO NOT pause transfers - they should continue
+        // Just log for debugging
+        this.logActiveTransfers();
+      } else {
+        console.log('[P2P] Tab visible - resuming any paused transfers');
+        // Resume any transfers that may have been paused
+        this.resumeAllTransfers();
+      }
+    });
+
     // 🚀 REAL-TIME PRESENCE: Request presence updates every 15 seconds
     setInterval(() => {
       if (this.connected && this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -859,6 +873,58 @@ class StrictP2PService {
       Math.max(P2P_LIMITS.MIN_KBPS, kbps)
     );
     console.log('[P2P] User bandwidth set to', this.currentKBPS, 'KBPS');
+  }
+
+  private logActiveTransfers() {
+    const senderCount = this.senderTransferRegistry.size;
+    const receiverCount = this.receiverTransfers.size;
+    console.log(`[P2P] Active transfers - Sending: ${senderCount}, Receiving: ${receiverCount}`);
+
+    if (senderCount > 0) {
+      this.senderTransferRegistry.forEach((t, id) => {
+        console.log(`  [SENDER] ${id}: ${t.status}, ${t.acknowledgedChunks?.size || 0}/${t.totalChunks} chunks`);
+      });
+    }
+
+    if (receiverCount > 0) {
+      this.receiverTransfers.forEach((t, id) => {
+        console.log(`  [RECEIVER] ${id}: ${t.status}, ${t.receivedChunks.size}/${t.totalChunks} chunks`);
+      });
+    }
+  }
+
+  private resumeAllTransfers() {
+    console.log('[P2P] Resuming all transfers after tab became visible');
+
+    // Resume sender transfers
+    this.senderTransferRegistry.forEach((t, messageId) => {
+      if (t.status === StrictTransferState.PAUSED || t.status === StrictTransferState.WAITING_FOR_PEER) {
+        const emailLower = t.peerEmail.toLowerCase();
+        const isPeerOnline = this.peerConnectionState.get(emailLower) === PeerConnectionState.ONLINE;
+
+        if (isPeerOnline) {
+          console.log(`[P2P] Auto-resuming sender transfer ${messageId}`);
+          this.transitionTransferState(messageId, StrictTransferState.TRANSFERRING, 'tab-visible');
+          this.tryStartSender(messageId);
+        }
+      }
+    });
+
+    // Resume receiver transfers
+    this.receiverTransfers.forEach((rt, messageId) => {
+      if (rt.status === 'PAUSED' || rt.status === 'INIT') {
+        const sender = this.transferSenders.get(messageId);
+        if (sender) {
+          const senderLower = sender.toLowerCase();
+          const isSenderOnline = this.peerConnectionState.get(senderLower) === PeerConnectionState.ONLINE;
+
+          if (isSenderOnline) {
+            console.log(`[P2P] Auto-resuming receiver transfer ${messageId}`);
+            this.resumeReceive(messageId, sender);
+          }
+        }
+      }
+    });
   }
 
   async resumeReceive(messageId: string, senderEmail?: string) {

@@ -13,7 +13,7 @@ async function up() {
                 size BIGINT DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 INDEX (file_id),
-                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+                FOREIGN KEY (file_id) REFERENCES drive_files(id) ON DELETE CASCADE
             ) ENGINE=InnoDB;
         `);
 

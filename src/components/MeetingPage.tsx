@@ -4,12 +4,13 @@ import {
     Video, Mic, PhoneOff, Copy,
     Users, Lock, X, Send, MoreVertical,
     Shield, Captions, Info, Smile,
-    Sparkles, MicOff, VideoOff, MonitorUp, MessageSquare, Hand, LayoutGrid
+    Sparkles, MicOff, VideoOff, MonitorUp, MessageSquare, Hand, LayoutGrid, Mail
 } from 'lucide-react';
 import { backgroundProcessor } from '../lib/backgroundProcessor';
 import { authService } from '../lib/authService';
 import toast from 'react-hot-toast';
 import RecordingPromptModal from './RecordingPromptModal';
+import InviteModal from './InviteModal';
 import { uploadFile } from '../lib/driveService';
 
 // Helper to generate guest ID
@@ -80,6 +81,7 @@ export default function MeetingPage({ meetingId, onLeave, initialVideoOff = fals
     const [showRecordingPrompt, setShowRecordingPrompt] = useState(false);
     const [showHostControls, setShowHostControls] = useState(false);
     const [pendingAdler, setPendingAdler] = useState<{ email: string, name?: string } | null>(null);
+    const [showEmailInvite, setShowEmailInvite] = useState(false);
 
     // Refs
     const peersRef = useRef<Map<string, RTCPeerConnection>>(new Map());
@@ -774,6 +776,9 @@ export default function MeetingPage({ meetingId, onLeave, initialVideoOff = fals
                             <button onClick={() => setShowChat(!showChat)} className={`p-3 rounded-xl transition ${showChat ? 'text-blue-300 bg-blue-300/10' : 'hover:bg-white/10'}`} title="Chat">
                                 <MessageSquare size={22} />
                             </button>
+                            <button onClick={() => setShowEmailInvite(true)} className="p-3 rounded-xl hover:bg-white/10 transition" title="Send Email Invite">
+                                <Mail size={22} />
+                            </button>
                         </div>
                     </div>
 
@@ -798,6 +803,14 @@ export default function MeetingPage({ meetingId, onLeave, initialVideoOff = fals
                         onSaveToDrive={handleSaveToDrive}
                         onDownloadLocally={handleDownloadLocally}
                         isUploading={isSavingToDrive}
+                    />
+
+                    <InviteModal
+                        isOpen={showEmailInvite}
+                        onClose={() => setShowEmailInvite(false)}
+                        meetingId={meetingId}
+                        meetingTitle="Video Conference"
+                        userId={effectiveUser?.id || 0}
                     />
                 </>
             )}

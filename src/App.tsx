@@ -1,4 +1,4 @@
-// App Version: 1.0.1-v10-fixed
+// App Version: 1.0.1-v11-fixed
 import { useEffect } from 'react';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { authService } from './lib/authService';
@@ -14,7 +14,7 @@ function App() {
   const isRegularUser = authService.isAuthenticated();
 
   useEffect(() => {
-    console.log("JeeMail Build v1.0.1-v10-fixed Loaded");
+    console.log("JeeMail Build v1.0.1-v11-fixed Loaded");
   }, []);
 
   // Global toast event listener (for events from non-React code)

@@ -49,25 +49,16 @@ async function checkPermission(resourceType, resourceId, userId, requiredPermiss
 
         // 3. Check direct permissions on the resource
         const directPermission = await getDirectPermission(resourceType, resourceId, userId);
-        if (directPermission && hasPermissionLevel(directPermission, requiredPermission)) {
-            console.log(`[Permission] User ${userId} has direct ${directPermission} on ${resourceType} ${resourceId}`);
-            return true;
-        }
 
-        // 4. Check inherited permissions from parent folder (if applicable)
-        if (resourceType === 'FILE') {
-            const inheritedPermission = await getInheritedPermission(resourceId, userId);
-            if (inheritedPermission && hasPermissionLevel(inheritedPermission, requiredPermission)) {
-                console.log(`[Permission] User ${userId} has inherited ${inheritedPermission} on FILE ${resourceId}`);
-                return true;
-            }
-        } else if (resourceType === 'FOLDER') {
-            // Check parent folder permissions
-            const parentPermission = await getParentFolderPermission(resourceId, userId);
-            if (parentPermission && hasPermissionLevel(parentPermission, requiredPermission)) {
-                console.log(`[Permission] User ${userId} has parent ${parentPermission} on FOLDER ${resourceId}`);
-                return true;
-            }
+        // 4. Check inherited permissions (recursive)
+        const inheritedPermission = await getInheritedPermission(resourceType, resourceId, userId);
+
+        // Find the "best" permission between direct and inherited
+        const effectivePermission = getBestPermission(directPermission, inheritedPermission);
+
+        if (effectivePermission && hasPermissionLevel(effectivePermission, requiredPermission)) {
+            console.log(`[Permission] User ${userId} has ${effectivePermission} on ${resourceType} ${resourceId}`);
+            return true;
         }
 
         console.log(`[Permission] User ${userId} DENIED ${requiredPermission} on ${resourceType} ${resourceId}`);
@@ -79,16 +70,28 @@ async function checkPermission(resourceType, resourceId, userId, requiredPermiss
 }
 
 /**
+ * Get the stronger of two permissions
+ */
+function getBestPermission(p1, p2) {
+    if (!p1) return p2;
+    if (!p2) return p1;
+    return PERMISSION_LEVELS[p1] >= PERMISSION_LEVELS[p2] ? p1 : p2;
+}
+
+/**
  * Check if user is the owner of a resource
  */
 async function checkOwnership(resourceType, resourceId, userId) {
     const table = resourceType === 'FILE' ? 'drive_files' : 'drive_folders';
-    const [[resource]] = await db.query(
-        `SELECT owner_id FROM ${table} WHERE id = ?`,
-        [resourceId]
-    );
-
-    return resource && String(resource.owner_id) === String(userId);
+    try {
+        const [[resource]] = await db.query(
+            `SELECT owner_id FROM ${table} WHERE id = ?`,
+            [resourceId]
+        );
+        return resource && String(resource.owner_id) === String(userId);
+    } catch (e) {
+        return false;
+    }
 }
 
 /**
@@ -112,33 +115,34 @@ async function getDirectPermission(resourceType, resourceId, userId) {
 }
 
 /**
- * Get inherited permission from parent folder (for files)
+ * Get inherited permission from parent folders (recursively)
  */
-async function getInheritedPermission(fileId, userId) {
-    // Get the folder_id of the file
-    const [[file]] = await db.query(
-        `SELECT folder_id FROM drive_files WHERE id = ?`,
-        [fileId]
-    );
+async function getInheritedPermission(resourceType, resourceId, userId, depth = 0) {
+    if (depth > 10) return null; // Avoid infinite loops
 
-    if (!file || !file.folder_id) return null;
+    try {
+        let parentId = null;
+        if (resourceType === 'FILE') {
+            const [[file]] = await db.query('SELECT folder_id FROM drive_files WHERE id = ?', [resourceId]);
+            parentId = file ? file.folder_id : null;
+        } else {
+            const [[folder]] = await db.query('SELECT parent_folder_id FROM drive_folders WHERE id = ?', [resourceId]);
+            parentId = folder ? folder.parent_folder_id : null;
+        }
 
-    // Check permissions on the parent folder
-    return await getDirectPermission('FOLDER', file.folder_id, userId);
-}
+        if (!parentId) return null;
 
-/**
- * Get permission from parent folder (for folders)
- */
-async function getParentFolderPermission(folderId, userId) {
-    const [[folder]] = await db.query(
-        `SELECT parent_folder_id FROM drive_folders WHERE id = ?`,
-        [folderId]
-    );
+        // Check parent's direct permission
+        const parentDirect = await getDirectPermission('FOLDER', parentId, userId);
 
-    if (!folder || !folder.parent_folder_id) return null;
+        // Recursively check parent's own inherited permissions
+        const parentInherited = await getInheritedPermission('FOLDER', parentId, userId, depth + 1);
 
-    return await getDirectPermission('FOLDER', folder.parent_folder_id, userId);
+        return getBestPermission(parentDirect, parentInherited);
+    } catch (err) {
+        console.error('[Permission] Inheritance check failed:', err);
+        return null;
+    }
 }
 
 /**

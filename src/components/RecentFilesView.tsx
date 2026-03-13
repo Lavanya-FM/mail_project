@@ -96,15 +96,15 @@ export default function RecentFilesView() {
                                         <div className="p-2 rounded-lg bg-gray-50 dark:bg-slate-700/50">
                                             <FileIcon className="w-8 h-8" style={{ color: fileColor }} />
                                         </div>
-                                        {file.is_starred && (
+                                        {file.is_starred ? (
                                             <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />
-                                        )}
+                                        ) : null}
                                     </div>
-                                    <h3 className="font-medium text-gray-900 dark:text-white truncate mb-1" title={file.name}>
-                                        {file.name}
+                                    <h3 className="font-medium text-sm text-gray-900 dark:text-white truncate mb-2" title={file.name || 'Untitled File'}>
+                                        {file.name || 'Untitled File'}
                                     </h3>
-                                    <div className="flex items-center justify-between text-xs text-gray-500 dark:text-slate-400">
-                                        <span>{driveService.formatFileSize(file.size_bytes)}</span>
+                                    <div className="flex items-center justify-between text-xs text-gray-500 dark:text-slate-400 mt-auto">
+                                        <span>{driveService.formatFileSize(file.size_bytes || (file as any).size || 0)}</span>
                                         <span>{getRelativeTime(file.updated_at)}</span>
                                     </div>
                                 </div>

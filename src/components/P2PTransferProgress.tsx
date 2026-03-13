@@ -541,22 +541,30 @@ export default function P2PTransferProgress({
                     )}
 
                     {/* BitTorrent Style Stats Grid */}
-                    <div className="mt-4 p-4 bg-slate-50 dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700/50 grid grid-cols-2 md:grid-cols-3 gap-y-4 gap-x-6">
+                    <div className="mt-4 p-4 bg-slate-50 dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700/50 grid grid-cols-2 md:grid-cols-4 gap-y-4 gap-x-4">
                       <div className="space-y-1">
                         <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Time Elapsed</p>
                         <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">{formatElapsed(currentState.startTime)}</p>
                       </div>
                       <div className="space-y-1">
-                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Remaining</p>
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Remaining (ETA)</p>
                         <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">{formatETA(currentState.etaSeconds)}</p>
                       </div>
                       <div className="space-y-1">
-                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</p>
-                        <p className="text-xs font-semibold text-blue-600 dark:text-blue-400 flex items-center gap-1.5">
-                          {currentState.status === 'delivered' ? 'Completed' :
-                            currentState.isPaused ? 'Paused' :
-                              currentState.status === 'receiving' || currentState.status === 'sending' ? 'Transferring' : 'Ready'}
-                          {currentState.status === 'receiving' && <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-ping" />}
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Transport Mode</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase">
+                            {currentState.transportType || (file.size > 200 * 1024 * 1024 ? 'WebRTC' : 'WebSocket')}
+                          </p>
+                          {currentState.fallbackTriggered && (
+                            <span className="text-[10px] px-1 bg-orange-100 text-orange-600 rounded">Relay Fallback</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Transfer Rate</p>
+                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-baseline gap-1">
+                          {formatSpeed(currentState.speedBps)}
                         </p>
                       </div>
 
@@ -569,20 +577,21 @@ export default function P2PTransferProgress({
                         </p>
                       </div>
                       <div className="space-y-1">
-                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                          {mode === 'sender' ? 'Upload Speed' : 'Download Speed'}
-                        </p>
-                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-baseline gap-1">
-                          {formatSpeed(currentState.speedBps)}
-                          {currentState.avgSpeedBps && (
-                            <span className="text-[10px] font-medium text-slate-400">(avg {formatSpeed(currentState.avgSpeedBps)})</span>
-                          )}
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Avg Speed</p>
+                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                          {formatSpeed(currentState.avgSpeedBps)}
                         </p>
                       </div>
                       <div className="space-y-1">
-                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pieces</p>
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Segments</p>
                         <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
                           {currentState.receivedChunks || 0} <span className="text-[10px] font-medium text-slate-400">of {currentState.totalChunks || '?'}</span>
+                        </p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">RTT / Latency</p>
+                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                          {currentState.rtt ? `${currentState.rtt.toFixed(1)}ms` : '--'}
                         </p>
                       </div>
                     </div>
