@@ -31,9 +31,10 @@ function getParticipantHash(sender, recipients) {
  * This is the CORE threading logic.
  * 
  * @param {Object} emailHeaders - { messageId, inReplyTo, references, subject, sender, recipients }
+ * @param {Object} [options] - { allowHeuristic: boolean }
  * @returns {Promise<number>} conversationId
  */
-async function resolveThreadId(conn, emailHeaders) {
+async function resolveThreadId(conn, emailHeaders, options = { allowHeuristic: true }) {
     const query = (sql, params) => (conn || db).query(sql, params);
     const { messageId, inReplyTo, references, subject } = emailHeaders;
 
@@ -87,7 +88,7 @@ async function resolveThreadId(conn, emailHeaders) {
 
     // STEP 3: Heuristic Match (Normalized Subject)
     const normSubject = normalizeSubject(subject || '');
-    if (normSubject) {
+    if (normSubject && options.allowHeuristic !== false) {
         // Check existing conversations
         const [convRows] = await query(
             `SELECT id FROM conversations WHERE subject_normalized = ? ORDER BY last_message_at DESC LIMIT 1`,

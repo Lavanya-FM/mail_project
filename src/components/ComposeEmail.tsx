@@ -14,7 +14,11 @@ import { classifyAttachments } from '../lib/p2pClassifier';
 
 const getFolderIdByName = (name: string) => {
   const folders = JSON.parse(localStorage.getItem("folders") || "[]");
-  const f = folders.find((x: any) => x.name.toLowerCase() === name.toLowerCase());
+  const search = name.toLowerCase();
+  const f = folders.find((x: any) => 
+    (x.name || '').toLowerCase() === search || 
+    (x.system_box || '').toLowerCase() === search
+  );
   return f ? Number(f.id) : null;
 };
 
@@ -120,7 +124,7 @@ export default function ComposeEmail(props: ComposeEmailProps) {
             content_base64: null
           })),
           is_draft: true,
-          folder_id: getFolderIdByName('draft'),
+          folder_id: getFolderIdByName('drafts'),
           thread_id: threadId, // if replying
         });
 
@@ -427,15 +431,13 @@ export default function ComposeEmail(props: ComposeEmailProps) {
         is_draft: false,
         folder_id: getFolderIdByName('sent'),
         thread_id: threadId ?? null,
+        draft_id: draftId, // Pass the draft ID so it can be cleaned up atomically
         p2p_enabled: hasP2PAttachments,
         p2p_delivered: false,
         attachments: processedAttachments
       });
 
-      // CLEANUP DRAFT IF EXISTS
-      if (draftId) {
-        await emailService.deletePermanently(draftId, profile.id).catch(e => console.error("Draft cleanup error", e));
-      }
+      // BACKEND NOW HANDLES DRAFT CLEANUP ATOMICALLY
 
       const p2pList = p2pAttachmentsMeta.filter(a => a.is_p2p);
       const p2pFilesToStart = attachments.filter((_, idx) => classifications[idx].mode === 'P2P');

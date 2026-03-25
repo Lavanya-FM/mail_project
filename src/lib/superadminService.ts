@@ -32,6 +32,18 @@ export interface UserAnalytics {
     p2p_transfers: number;
 }
 
+export interface SysLog {
+    id: number;
+    user_id: number | null;
+    level: string;
+    message: string;
+    stack: string;
+    context: any;
+    ip: string;
+    user_agent: string;
+    created_at: string;
+}
+
 // Mock users data (empty for now, should be replaced with API calls)
 const MOCK_USERS: User[] = [];
 
@@ -142,6 +154,24 @@ export async function getP2PTransfers(): Promise<P2PTransfer[]> {
 }
 
 /**
+ * Get system logs (errors reported by users)
+ */
+export async function getSystemLogs(): Promise<SysLog[]> {
+    try {
+        const response = await fetch('/api/admin/system-logs', {
+            headers: {
+                'Authorization': `Bearer ${authService.getToken()}`
+            }
+        });
+        if (!response.ok) throw new Error('Failed to fetch logs');
+        return await response.json();
+    } catch (error) {
+        console.error('Error fetching logs:', error);
+        return [];
+    }
+}
+
+/**
  * Get user analytics
  */
 export async function getUserAnalytics(userId: number): Promise<UserAnalytics | null> {
@@ -214,6 +244,7 @@ export default {
     getHighCarbonUsers,
     getStorageUsage,
     getP2PTransfers,
+    getSystemLogs,
     getUserAnalytics,
     getDashboardStats,
     formatBytes

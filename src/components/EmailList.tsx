@@ -1,5 +1,5 @@
 // src/components/EmailList.tsx
-import { Paperclip, Inbox, Tag, Users, Square, CheckSquare, Star, RotateCw, MoreVertical, Mail, MailOpen, Trash2, Archive, AlertTriangle } from 'lucide-react';
+import { Paperclip, Inbox, Tag, Users, Square, CheckSquare, Star, RotateCw, MoreVertical, Mail, MailOpen, Trash2, Archive, AlertTriangle, Check, Clock, AlertCircle } from 'lucide-react';
 import { Email } from '../types/email';
 import { useState, useMemo, useEffect } from 'react';
 import { emailService, getFolderIdByName } from '../lib/emailService';
@@ -140,6 +140,10 @@ export default function EmailList({
         return (email || "").split('@')[0];
     };
 
+    const getInitials = (name: string) => {
+        return name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2);
+    };
+
     const toggleSelection = (e: React.MouseEvent, id: string) => {
         e.stopPropagation();
         const newSet = new Set(selectedIds);
@@ -213,7 +217,15 @@ export default function EmailList({
     const groupEmailsByThread = (list: Email[]) => {
         const map: Record<string | number, Email[]> = {};
         for (const email of list) {
-            const threadId = email.thread_id || email.id;
+            // ONLY group if it's explicitly a reply or part of a thread
+            // If it's a fresh compose (no 'Re:' and no 'in_reply_to'), we treat it as its own thread
+            const isReply = (email.subject || '').toLowerCase().startsWith('re:') || 
+                           (email.subject || '').toLowerCase().startsWith('fwd:') ||
+                           !!email.in_reply_to;
+            
+            // If it's not a reply, force it to use its own ID so it doesn't group with others
+            const threadId = isReply ? (email.thread_id || email.id) : email.id;
+            
             if (!map[threadId]) map[threadId] = [];
             map[threadId].push(email);
         }
@@ -234,7 +246,7 @@ export default function EmailList({
 
     return (
         <div className="flex flex-col h-full bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800">
-            <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100 dark:border-gray-800 h-14 bg-white dark:bg-gray-900 sticky top-0 z-10">
+            <div className="flex items-center justify-between px-4 py-1.5 border-b border-gray-100 dark:border-gray-800 h-12 bg-white dark:bg-gray-900 sticky top-0 z-10">
                 <div className="flex items-center gap-4">
                     <button
                         onClick={handleSelectAll}
@@ -337,43 +349,43 @@ export default function EmailList({
             </div>
 
             {folderType === 'inbox' && (
-                <div className="flex items-center border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900">
+                <div className="flex items-center gap-1 p-1 bg-gray-100/50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-800">
                     <button
                         onClick={() => { setActiveTab("primary"); setSelectedIds(new Set()); }}
-                        className={`flex-1 flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-[3px] transition-colors ${activeTab === "primary"
-                            ? "border-emerald-600 text-emerald-700 dark:text-emerald-400 bg-emerald-50/10"
-                            : "border-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                        className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold rounded-lg transition-all duration-200 ${activeTab === "primary"
+                            ? "bg-white dark:bg-gray-800 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                            : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-gray-700/50"
                             }`}
                     >
-                        <Inbox className={`w-4 h-4 ${activeTab === 'primary' ? 'fill-current' : ''}`} />
+                        <Inbox className={`w-3.5 h-3.5 ${activeTab === 'primary' ? 'fill-current' : ''}`} />
                         <span>Primary</span>
                     </button>
 
                     <button
                         onClick={() => { setActiveTab("social"); setSelectedIds(new Set()); }}
-                        className={`flex-1 flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-[3px] transition-colors ${activeTab === "social"
-                            ? "border-blue-600 text-blue-700 dark:text-blue-400 bg-blue-50/10"
-                            : "border-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                        className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold rounded-lg transition-all duration-200 ${activeTab === "social"
+                            ? "bg-white dark:bg-gray-800 text-blue-600 dark:text-blue-400 shadow-sm"
+                            : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-gray-700/50 transition-all"
                             }`}
                     >
-                        <Users className={`w-4 h-4 ${activeTab === 'social' ? 'fill-current' : ''}`} />
+                        <Users className={`w-3.5 h-3.5 ${activeTab === 'social' ? 'fill-current' : ''}`} />
                         <span>Social</span>
                         {socialUnread > 0 && (
-                            <span className="ml-auto bg-blue-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">{socialUnread} new</span>
+                            <span className="bg-blue-600 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold ml-1">{socialUnread}</span>
                         )}
                     </button>
 
                     <button
                         onClick={() => { setActiveTab("promotions"); setSelectedIds(new Set()); }}
-                        className={`flex-1 flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-[3px] transition-colors ${activeTab === "promotions"
-                            ? "border-gray-600 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800"
-                            : "border-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                        className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold rounded-lg transition-all duration-200 ${activeTab === "promotions"
+                            ? "bg-white dark:bg-gray-800 text-amber-600 dark:text-amber-400 shadow-sm"
+                            : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-gray-700/50"
                             }`}
                     >
-                        <Tag className={`w-4 h-4 ${activeTab === 'promotions' ? 'fill-current' : ''}`} />
+                        <Tag className={`w-3.5 h-3.5 ${activeTab === 'promotions' ? 'fill-current' : ''}`} />
                         <span className="hidden sm:inline">Promotions</span>
                         {promotionsUnread > 0 && (
-                            <span className="ml-2 bg-gray-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">{promotionsUnread} new</span>
+                            <span className="bg-amber-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold ml-1">{promotionsUnread}</span>
                         )}
                     </button>
                 </div>
@@ -405,10 +417,15 @@ export default function EmailList({
                             </button>
 
                             <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 select-none">
-                                <span className={`text-sm truncate sm:w-48 flex-shrink-0 ${!isRead ? 'text-gray-900 dark:text-white font-bold' : 'text-gray-700 dark:text-gray-300 font-medium'}`}>
-                                    {getSenderName(email.from_name, email.from_email)}
-                                    {messageCount > 1 && <span className="ml-1 text-gray-500 font-normal">({messageCount})</span>}
-                                </span>
+                                <div className="flex items-center gap-3 sm:w-48 flex-shrink-0">
+                                    <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-slate-800 dark:to-slate-700 flex items-center justify-center text-[10px] font-bold text-blue-600 dark:text-blue-300">
+                                        {getInitials(email.from_name || email.from_email || '')}
+                                    </div>
+                                    <span className={`text-sm truncate ${!isRead ? 'text-gray-900 dark:text-white font-bold' : 'text-gray-700 dark:text-gray-300 font-medium'}`}>
+                                        {getSenderName(email.from_name, email.from_email)}
+                                        {messageCount > 1 && <span className="ml-1 text-gray-500 font-normal">({messageCount})</span>}
+                                    </span>
+                                </div>
 
                                 <div className="flex-1 min-w-0 flex items-center pr-2">
                                     <span className={`text-sm truncate ${!isRead ? 'text-gray-900 dark:text-white font-semibold' : 'text-gray-600 dark:text-gray-400'}`}>
@@ -430,9 +447,26 @@ export default function EmailList({
                                     )}
                                 </div>
 
-                                <span className={`text-xs ml-2 whitespace-nowrap w-16 text-right ${!isRead ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-gray-500 dark:text-gray-500'}`}>
-                                    {formatDate(email.sent_at || email.created_at || '')}
-                                </span>
+                                <div className="flex items-center gap-1.5 min-w-[80px] justify-end">
+                                    {email.delivery_status && email.delivery_status !== 'draft' && folderType === 'sent' && (
+                                        <div 
+                                            className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold border ${
+                                                email.delivery_status === 'delivered' ? 'bg-green-50 text-green-600 border-green-200' :
+                                                email.delivery_status === 'failed' ? 'bg-red-50 text-red-600 border-red-200' :
+                                                'bg-blue-50 text-blue-600 border-blue-200 animate-pulse'
+                                            }`}
+                                            title={email.delivery_status === 'failed' ? `Error: ${email.smtp_error || 'Unknown SMTP error'}` : email.delivery_status}
+                                        >
+                                            {email.delivery_status === 'delivered' ? <Check className="w-3 h-3" /> : 
+                                             email.delivery_status === 'failed' ? <AlertCircle className="w-3 h-3" /> : 
+                                             <Clock className="w-3 h-3" />}
+                                            <span className="capitalize">{email.delivery_status}</span>
+                                        </div>
+                                    )}
+                                    <span className={`text-xs whitespace-nowrap text-right ${!isRead ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-gray-500 dark:text-gray-500'}`}>
+                                        {formatDate(email.sent_at || email.created_at || '')}
+                                    </span>
+                                </div>
                             </div>
                         </div>
                     );

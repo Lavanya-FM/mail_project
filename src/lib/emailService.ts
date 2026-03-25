@@ -192,6 +192,8 @@ export const emailService = {
       attachments: payload.attachments || [],
       p2p_enabled: !!payload.p2p_enabled,
       p2p_delivered: !!payload.p2p_delivered,
+      thread_id: payload.thread_id || payload.threadId || null,
+      draft_id: payload.draft_id || null,
     };
     const resp = await fetch(url, {
       method: "POST",

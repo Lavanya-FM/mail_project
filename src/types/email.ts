@@ -18,6 +18,8 @@ export interface Email {
   sent_at?: string;
   labels?: any[];
   status?: 'sent' | 'delivered' | 'read';
+  delivery_status?: 'sending' | 'delivered' | 'failed' | 'draft' | 'not_sent';
+  smtp_error?: string;
   scan_result?: {
     status: 'clean' | 'suspicious' | 'danger';
     flags: string[];

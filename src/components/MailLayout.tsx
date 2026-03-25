@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Inbox, Send, FileEdit, Trash2, Plus, Star, Archive,
   Circle, ChevronDown,
-  Clock, AlertTriangle, Tag, Mail, Menu, Wifi, Share2, CheckCircle2, Layers,
+  Clock, AlertTriangle, Tag, Mail, Wifi, Share2, CheckCircle2, Layers,
   ShieldCheck as Shield2
 } from 'lucide-react';
 import { emailService, getFolderIdByName } from '../lib/emailService';
@@ -11,7 +11,6 @@ import { authService } from '../lib/authService';
 import { inboxScanner } from '../lib/inboxScanner';
 import EmailList from './EmailList';
 import EmailView from './EmailView';
-import ThreadView from './ThreadView';
 import TransfersView from './TransfersView';
 import ComposeEmail from './compose/ComposeEmail';
 import GamificationBadges from './GamificationBadges';
@@ -81,7 +80,7 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
   const [emailsRaw, setEmailsRaw] = useState<any>([]);
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showBadges, setShowBadges] = useState(true);
+  const [showBadges, setShowBadges] = useState(false); // Collapsed by default for cleaner look
   const [showActivityLog, setShowActivityLog] = useState(false);
   const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
   const [showTermsOfService, setShowTermsOfService] = useState(false);
@@ -93,6 +92,12 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
   const [composeWindows, setComposeWindows] = useState<{ id: string; data?: any }[]>([]);
   const [nextComposeId, setNextComposeId] = useState(1);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    const handleToggleSidebar = () => setMobileSidebarOpen(prev => !prev);
+    window.addEventListener('toggle-sidebar', handleToggleSidebar);
+    return () => window.removeEventListener('toggle-sidebar', handleToggleSidebar);
+  }, []);
 
   // Status State
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -701,7 +706,7 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
   return (
     <div className="h-screen bg-gray-50 dark:bg-slate-950 flex flex-col lg:flex-row overflow-hidden">
       {/* Desktop Sidebar - Hidden on Mobile */}
-      <div className="hidden lg:flex w-64 bg-white dark:bg-slate-900 border-r border-gray-200 dark:border-slate-800 flex-col flex-shrink-0">
+      <div className="hidden lg:flex w-60 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-r border-gray-200 dark:border-slate-800 flex-col flex-shrink-0 z-30 transition-all duration-300 shadow-sm">
         <SidebarContent />
       </div>
 
@@ -720,19 +725,7 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col bg-gray-50 dark:bg-slate-950 lg:ml-0">
-        {/* Top Bar */}
-        <div className="h-16 bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 flex items-center px-4 lg:px-6 gap-4 shadow-sm">
-          {/* Mobile Menu Button */}
-          <button
-            className="lg:hidden p-2 text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition"
-            onClick={() => setMobileSidebarOpen(true)}
-          >
-            <Menu className="w-6 h-6" />
-          </button>
-
-
-
-        </div>
+        {/* Top Bar removed to reduce empty space as it is handled by MainApp */}
 
         {/* Email Tabs Bar */}
         {openedMailTabs.length > 0 && (
@@ -859,16 +852,6 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
                       const activeEmail = openedMailTabs.find(tab => String(tab.id) === activeTabId);
                       if (!activeEmail) return null;
 
-                      if (activeEmail.thread_id) {
-                        return (
-                          <ThreadView
-                            threadId={String(activeEmail.thread_id)}
-                            userId={String(profile?.id || '')}
-                            onClose={() => handleCloseTab(String(activeEmail.id))}
-                            onCompose={handleComposeFromEmail}
-                          />
-                        );
-                      } else {
                         return (
                           <EmailView
                             email={activeEmail}
@@ -877,18 +860,17 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
                             onCompose={handleComposeFromEmail}
                           />
                         );
-                      }
                     })()}
                   </div>
                 ) : (
                   <div className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-slate-950">
-                    <div className="text-center">
-                      <div className="w-24 h-24 bg-gray-200 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 text-gray-400">
-                        <Mail className="w-12 h-12" />
+                    <div className="text-center animate-message-appear">
+                      <div className="w-32 h-32 bg-gradient-to-br from-gray-100 to-gray-50 dark:from-slate-900 dark:to-slate-800 rounded-full flex items-center justify-center mx-auto mb-6 text-gray-400 shadow-inner border border-gray-200/50 dark:border-slate-800/50 group hover:scale-105 transition-all duration-500">
+                        <Mail className="w-16 h-16 opacity-30 group-hover:opacity-50 transition-opacity" />
                       </div>
-                      <h3 className="text-xl font-bold text-gray-900 dark:text-white">Select a message to view</h3>
-                      <p className="text-gray-500 max-w-sm mt-2">
-                        Choose an email from the list on the left to read its content.
+                      <h3 className="text-2xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-slate-400 bg-clip-text text-transparent">Select a message to view</h3>
+                      <p className="text-gray-500 dark:text-slate-400 max-w-sm mt-3 text-sm leading-relaxed mx-auto">
+                        Choose an email from the list on the left to read its full content and start a conversation.
                       </p>
                     </div>
                   </div>

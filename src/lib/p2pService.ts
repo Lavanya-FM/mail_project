@@ -31,6 +31,7 @@ import toast from 'react-hot-toast';
 import { normalizeEmail } from '../utils/normalizeEmail';
 import { setOnlinePeers, updatePeerStatus, isPeerOnline as isPeerOnlineStore, subscribePresence, getOnlinePeersSnapshot } from './presenceStore';
 import { authService } from './authService';
+import { logger } from '../utils/logger';
 
 
 /* ---------------------------------------------------- */
@@ -283,7 +284,7 @@ class StrictP2PService {
   private setPeerState(email: string, state: PeerConnectionState) {
     const normalized = normalizeEmail(email);
     this.peerConnectionState.set(normalized, state);
-    console.log(`[P2P] Peer ${normalized} state check: ${state}`);
+    logger.p2p(`[P2P] Peer ${normalized} state check: ${state}`);
 
     // Update store for UI
     if (state === PeerConnectionState.ONLINE) {
@@ -325,7 +326,7 @@ class StrictP2PService {
         // STRICT: Invalid transition
         // But for legacy compatibility with 'QUEUED' etc, we might need to be lenient during migration.
         // Let's log warning
-        console.warn(`[P2P] Suspicious transition ${oldState} -> ${newState}`);
+        logger.warn(`[P2P] Suspicious transition ${oldState} -> ${newState}`);
       }
 
       t.status = newState;
@@ -334,7 +335,7 @@ class StrictP2PService {
         t.completedAt = Date.now();
       }
 
-      console.log(`[P2P_STATE] ${messageId} (${isSender ? 'Sender' : 'Receiver'}) ${oldState} -> ${newState} [${reason || ''}]`);
+      logger.p2p(`[P2P_STATE] ${messageId} (${isSender ? 'Sender' : 'Receiver'}) ${oldState} -> ${newState} [${reason || ''}]`);
 
       // Emit UI update
       window.dispatchEvent(new CustomEvent('p2p-progress', {
@@ -354,9 +355,9 @@ class StrictP2PService {
   }
 
   private notifyConnection(connected: boolean) {
-    console.log(`[P2P] Connection status changed: ${connected}`);
+    logger.p2p(`[P2P] Connection status changed: ${connected}`);
     this.connectionListeners.forEach(cb => {
-      try { cb(connected); } catch (e) { console.error(e); }
+      try { cb(connected); } catch (e) { logger.error(e); }
     });
   }
   private receivedFiles = new Map<string, Blob>();
@@ -386,7 +387,7 @@ class StrictP2PService {
 
   private notifyPresenceListeners(peers: string[]) {
     this.presenceListeners.forEach(cb => {
-      try { cb(peers); } catch (e) { console.error(e); }
+      try { cb(peers); } catch (e) { logger.error(e); }
     });
   }
   /*
@@ -420,9 +421,9 @@ class StrictP2PService {
     // this.initialize(); // Already called by existing code effectively, or I need to check where initialize is defined. 
     // Wait, StrictP2PService usually has an initialize() method or similar logic. 
     // Looking at the code, it seems the constructor is doing initialization.
-    console.log("🚀 [P2P SERVICE] V56 LOADED - STREAMING MODE");
+    logger.p2p("🚀 [P2P SERVICE] V56 LOADED - STREAMING MODE");
     // suppress unused warnings for some members if they were to be used later
-    // console.log(this.currentProcessingMessageId); 
+    // logger.p2p(this.currentProcessingMessageId); 
 
     // ✅ FIX 8: Resume trigger when recipient comes online (Store Subscription)
     subscribePresence(() => {
@@ -431,26 +432,26 @@ class StrictP2PService {
 
     // ✅ FIX: Handle network connectivity changes
     window.addEventListener('online', () => {
-      console.log('[P2P] Network is ONLINE. Attempting to reconnect...');
+      logger.p2p('[P2P] Network is ONLINE. Attempting to reconnect...');
       if (this.email && this.userId) {
         this.reconnect();
       }
     });
 
     window.addEventListener('offline', () => {
-      console.log('Build Version: 2026-02-06.v121-CLEAN-DEPLOY');
+      logger.p2p('Build Version: 2026-02-06.v121-CLEAN-DEPLOY');
       this.disconnect();
     });
 
     // ✅ FIX: Handle tab visibility changes - KEEP TRANSFERS RUNNING
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
-        console.log('[P2P] Tab hidden - transfers will continue in background');
+        logger.p2p('[P2P] Tab hidden - transfers will continue in background');
         // DO NOT pause transfers - they should continue
         // Just log for debugging
         this.logActiveTransfers();
       } else {
-        console.log('[P2P] Tab visible - resuming any paused transfers');
+        logger.p2p('[P2P] Tab visible - resuming any paused transfers');
         // Resume any transfers that may have been paused
         this.resumeAllTransfers();
       }
@@ -468,7 +469,7 @@ class StrictP2PService {
 
   public requestPresence() {
     if (this.isConnected()) {
-      console.log('[P2P] Requesting manual presence refresh...');
+      logger.p2p('[P2P] Requesting manual presence refresh...');
       this.send({ type: 'request-presence' });
     }
   }
@@ -478,7 +479,7 @@ class StrictP2PService {
       this.ws.send(JSON.stringify(msg));
     } else {
       if (!silent) {
-        console.warn(`[P2P] Socket not open (state: ${this.ws?.readyState}), queueing signal:`, msg.type || msg);
+        logger.warn(`[P2P] Socket not open (state: ${this.ws?.readyState}), queueing signal:`, msg.type || msg);
       }
       this.pendingSignals.push(msg);
 
@@ -492,7 +493,7 @@ class StrictP2PService {
   private async waitForSocketOpen(): Promise<void> {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
 
-    console.log('[P2P] Waiting for socket to open before handshake...');
+    logger.p2p('[P2P] Waiting for socket to open before handshake...');
     return new Promise((resolve) => {
       const waitStart = Date.now();
       const check = setInterval(() => {
@@ -519,7 +520,7 @@ class StrictP2PService {
   }
 
   private resetState() {
-    console.log('[P2P] Clearing internal state...');
+    logger.p2p('[P2P] Clearing internal state...');
     this.peerSessions.clear();
     this.activeTransfers.clear();
     // Do not clear senderTransferRegistry purely? Maybe pause them?
@@ -550,17 +551,17 @@ class StrictP2PService {
 
   public async waitForConnection(timeoutMs = 15000): Promise<void> {
     if (this.connected) return;
-    console.log('[P2P] Waiting for connection...');
+    logger.p2p('[P2P] Waiting for connection...');
     return new Promise((resolve, reject) => {
       const start = Date.now();
       const check = setInterval(() => {
         if (this.connected) {
           clearInterval(check);
-          console.log('[P2P] Connection established!');
+          logger.p2p('[P2P] Connection established!');
           resolve();
         } else if (Date.now() - start > timeoutMs) {
           clearInterval(check);
-          console.warn('[P2P] Connection timed out - assuming offline mode/error');
+          logger.warn('[P2P] Connection timed out - assuming offline mode/error');
           reject(new Error('Connection timeout'));
         }
       }, 200);
@@ -582,7 +583,7 @@ class StrictP2PService {
   // ✅ FIX 6: STRICT RESUME ON PRESENCE CHANGE
   private triggerPresenceResumption() {
     if (!this.connected) {
-      console.log("[P2P][RESUME] Skipped — signaling offline");
+      logger.p2p("[P2P][RESUME] Skipped — signaling offline");
       return;
     }
 
@@ -597,7 +598,7 @@ class StrictP2PService {
 
       if (isPeerOnline && !isCompleted) {
         if (t.status === StrictTransferState.PAUSED || t.status === StrictTransferState.WAITING_FOR_PEER || t.status === StrictTransferState.IDLE) {
-          console.log(`[P2P][SENDER] Auto-resuming ${messageId} to ${emailLower}`);
+          logger.p2p(`[P2P][SENDER] Auto-resuming ${messageId} to ${emailLower}`);
           this.transitionTransferState(messageId, StrictTransferState.TRANSFERRING, 'auto-resume');
           this.tryStartSender(messageId);
         }
@@ -614,7 +615,7 @@ class StrictP2PService {
 
       if (sender && isSenderOnline && !isCompleted) {
         if (rt.status === 'PAUSED' || rt.status === 'INIT') {
-          console.log(`[P2P][RECEIVER] Auto-resuming ${messageId} from ${sender}`);
+          logger.p2p(`[P2P][RECEIVER] Auto-resuming ${messageId} from ${sender}`);
           this.resumeReceive(messageId, sender);
         }
       }
@@ -746,7 +747,7 @@ class StrictP2PService {
   }
 
   public cleanupTransfer(messageId: string, wipeFile = true) {
-    console.log(`[P2P] Cleaning up transfer data for ${messageId}, wipeFile=${wipeFile}`);
+    logger.p2p(`[P2P] Cleaning up transfer data for ${messageId}, wipeFile=${wipeFile}`);
 
     // 1. Memory cleanup
     this.activeTransfers.delete(messageId);
@@ -791,7 +792,7 @@ class StrictP2PService {
   }
 
   cancelSenderTransfer(messageId: string) {
-    console.log(`[P2P] Cancelling sender transfer ${messageId}`);
+    logger.p2p(`[P2P] Cancelling sender transfer ${messageId}`);
     const t = this.senderTransferRegistry.get(messageId);
     if (t) {
       // B2. ANY -> FAILED
@@ -815,7 +816,7 @@ class StrictP2PService {
         detail: { messageId, status: 'paused' }
       }));
     }
-    console.log('[P2P] Transfer paused:', messageId);
+    logger.p2p('[P2P] Transfer paused:', messageId);
   }
 
 
@@ -858,7 +859,7 @@ class StrictP2PService {
     const t = this.senderTransferRegistry.get(messageId);
     if (!t) return;
     t.peerEmail = to;
-    console.log(`[P2P] Offering transfer back to ${to} for message ${messageId}`);
+    logger.p2p(`[P2P] Offering transfer back to ${to} for message ${messageId}`);
 
     // Ensure we are connected
     await this.waitForConnection();
@@ -872,29 +873,29 @@ class StrictP2PService {
       P2P_LIMITS.MAX_KBPS,
       Math.max(P2P_LIMITS.MIN_KBPS, kbps)
     );
-    console.log('[P2P] User bandwidth set to', this.currentKBPS, 'KBPS');
+    logger.p2p('[P2P] User bandwidth set to', this.currentKBPS, 'KBPS');
   }
 
   private logActiveTransfers() {
     const senderCount = this.senderTransferRegistry.size;
     const receiverCount = this.receiverTransfers.size;
-    console.log(`[P2P] Active transfers - Sending: ${senderCount}, Receiving: ${receiverCount}`);
+    logger.p2p(`[P2P] Active transfers - Sending: ${senderCount}, Receiving: ${receiverCount}`);
 
     if (senderCount > 0) {
       this.senderTransferRegistry.forEach((t, id) => {
-        console.log(`  [SENDER] ${id}: ${t.status}, ${t.acknowledgedChunks?.size || 0}/${t.totalChunks} chunks`);
+        logger.p2p(`  [SENDER] ${id}: ${t.status}, ${t.acknowledgedChunks?.size || 0}/${t.totalChunks} chunks`);
       });
     }
 
     if (receiverCount > 0) {
       this.receiverTransfers.forEach((t, id) => {
-        console.log(`  [RECEIVER] ${id}: ${t.status}, ${t.receivedChunks.size}/${t.totalChunks} chunks`);
+        logger.p2p(`  [RECEIVER] ${id}: ${t.status}, ${t.receivedChunks.size}/${t.totalChunks} chunks`);
       });
     }
   }
 
   private resumeAllTransfers() {
-    console.log('[P2P] Resuming all transfers after tab became visible');
+    logger.p2p('[P2P] Resuming all transfers after tab became visible');
 
     // Resume sender transfers
     this.senderTransferRegistry.forEach((t, messageId) => {
@@ -903,7 +904,7 @@ class StrictP2PService {
         const isPeerOnline = this.peerConnectionState.get(emailLower) === PeerConnectionState.ONLINE;
 
         if (isPeerOnline) {
-          console.log(`[P2P] Auto-resuming sender transfer ${messageId}`);
+          logger.p2p(`[P2P] Auto-resuming sender transfer ${messageId}`);
           this.transitionTransferState(messageId, StrictTransferState.TRANSFERRING, 'tab-visible');
           this.tryStartSender(messageId);
         }
@@ -919,7 +920,7 @@ class StrictP2PService {
           const isSenderOnline = this.peerConnectionState.get(senderLower) === PeerConnectionState.ONLINE;
 
           if (isSenderOnline) {
-            console.log(`[P2P] Auto-resuming receiver transfer ${messageId}`);
+            logger.p2p(`[P2P] Auto-resuming receiver transfer ${messageId}`);
             this.resumeReceive(messageId, sender);
           }
         }
@@ -929,7 +930,7 @@ class StrictP2PService {
 
   async resumeReceive(messageId: string, senderEmail?: string) {
     if (await this.hasReceivedFile(messageId)) {
-      console.log(`[P2P] File ${messageId} already received, skipping resume`);
+      logger.p2p(`[P2P] File ${messageId} already received, skipping resume`);
       this.completedTransfers.add(messageId);
       return;
     }
@@ -943,7 +944,7 @@ class StrictP2PService {
 
     // 🚀 NEW: Check if sender is online before trying to pull
     if (sender && !this.isPeerOnline(sender.toLowerCase())) {
-      console.log(`[P2P] Sender ${sender} is OFFLINE. Queuing resume for ${messageId}`);
+      logger.p2p(`[P2P] Sender ${sender} is OFFLINE. Queuing resume for ${messageId}`);
       this.waitingForSender.set(messageId, sender);
 
       const rt = this.receiverTransfers.get(messageId);
@@ -989,14 +990,14 @@ class StrictP2PService {
     await this.syncReceiverStateFromDB(messageId);
 
     if (!sender) {
-      console.warn(`[P2P] No sender known for ${messageId}, cannot pull`);
+      logger.warn(`[P2P] No sender known for ${messageId}, cannot pull`);
       return;
     }
 
     // 🚀 CRITICAL: Check if transfer is already complete
     const rtCheck = this.receiverTransfers.get(messageId);
     if (rtCheck && rtCheck.receivedChunks.size === rtCheck.totalChunks) {
-      console.log(`[P2P] Transfer ${messageId} already complete (${rtCheck.receivedChunks.size}/${rtCheck.totalChunks}). Triggering assembly...`);
+      logger.p2p(`[P2P] Transfer ${messageId} already complete (${rtCheck.receivedChunks.size}/${rtCheck.totalChunks}). Triggering assembly...`);
       rtCheck.status = 'COMPLETED';
 
       // Trigger file assembly immediately
@@ -1005,7 +1006,7 @@ class StrictP2PService {
     }
 
     // 🚀 Switch to pull model for resume
-    console.log(`[P2P] Resuming pull loop for ${messageId} from ${sender}`);
+    logger.p2p(`[P2P] Resuming pull loop for ${messageId} from ${sender}`);
     if (rt) rt.status = 'RECEIVING'; // Explicitly unpause
     const emailLower = sender.toLowerCase();
     if (!this.peerSessions.has(emailLower) || !this.peerSessions.get(emailLower)?.ready) {
@@ -1018,7 +1019,7 @@ class StrictP2PService {
   async pauseReceive(messageId: string) {
     const rt = this.receiverTransfers.get(messageId);
     if (rt) {
-      console.log(`[P2P] Pausing transfer ${messageId}`);
+      logger.p2p(`[P2P] Pausing transfer ${messageId}`);
       rt.status = 'PAUSED';
       // Notify UI update
       this.syncReceiverStateFromDB(messageId); // triggers p2p-receiver-progress event
@@ -1026,7 +1027,7 @@ class StrictP2PService {
   }
 
   async cancelTransfer(messageId: string) {
-    console.log(`[P2P] Cancelling transfer ${messageId}`);
+    logger.p2p(`[P2P] Cancelling transfer ${messageId}`);
     const rt = this.receiverTransfers.get(messageId);
     if (rt) {
       rt.status = 'FAILED'; // Use FAILED to indicate stop
@@ -1060,10 +1061,10 @@ class StrictP2PService {
     const totalBytes = rt.actualSize || (total * P2P_LIMITS.CHUNK_SIZE);
     const receivedBytes = Math.min(totalBytes, count * P2P_LIMITS.CHUNK_SIZE);
 
-    console.log(`[P2P] Synced ${count}/${total} chunks for ${messageId} (${progress}%)`);
+    logger.p2p(`[P2P] Synced ${count}/${total} chunks for ${messageId} (${progress}%)`);
 
     if (progress === 100 && rt.status !== 'COMPLETED' && !this.completedTransfers.has(messageId)) {
-      console.log(`[P2P] All chunks found on disk for ${messageId}, triggering assembly`);
+      logger.p2p(`[P2P] All chunks found on disk for ${messageId}, triggering assembly`);
       rt.status = 'COMPLETED';
       this.completedTransfers.add(messageId); // 🚀 Track completion
       await this.assembleFile(messageId, rt.fileName, rt.mimeType);
@@ -1157,7 +1158,7 @@ class StrictP2PService {
         return record.blob;
       }
     } catch (e) {
-      console.error('[P2P] Failed to load blob for preview', e);
+      logger.error('[P2P] Failed to load blob for preview', e);
     }
 
     return null;
@@ -1181,7 +1182,7 @@ class StrictP2PService {
     };
 
     if (conditions.tooManyRetries || conditions.noAcksTimeout || conditions.senderOfflineTooLong) {
-      console.warn(`[P2P FALLBACK] Triggering server fallback for ${messageId}`, conditions);
+      logger.warn(`[P2P FALLBACK] Triggering server fallback for ${messageId}`, conditions);
       t.status = StrictTransferState.FAILED;
 
       window.dispatchEvent(new CustomEvent('p2p-fallback-needed', {
@@ -1207,7 +1208,7 @@ class StrictP2PService {
 
     // 🚀 FIX 5: Sender must WAIT, not handshake if recipient is offline
     if (!isPeerOnlineStore(emailLower)) {
-      console.log(`[P2P] Peer ${emailLower} is OFFLINE. Cannot handshake.`);
+      logger.p2p(`[P2P] Peer ${emailLower} is OFFLINE. Cannot handshake.`);
       if (t) {
         t.status = StrictTransferState.WAITING_FOR_PEER;
         window.dispatchEvent(new CustomEvent('p2p-progress', {
@@ -1232,7 +1233,7 @@ class StrictP2PService {
       }
     }
 
-    console.log(`[P2P] Peer ${emailLower} ONLINE -> Starting PER-PEER HANDSHAKE`);
+    logger.p2p(`[P2P] Peer ${emailLower} ONLINE -> Starting PER-PEER HANDSHAKE`);
     if (t) {
       t.status = StrictTransferState.WAITING_FOR_PEER;
       window.dispatchEvent(new CustomEvent('p2p-progress', {
@@ -1285,7 +1286,7 @@ class StrictP2PService {
     }
 
     if (!session?.ready) {
-      console.log(`[P2P] Wait: Session not ready for ${emailLower}. Handshaking...`);
+      logger.p2p(`[P2P] Wait: Session not ready for ${emailLower}. Handshaking...`);
       this.ensureSession(emailLower, messageId);
       return;
     }
@@ -1296,7 +1297,7 @@ class StrictP2PService {
     }
 
     // ALL CONDITIONS MET - SEND OFFER
-    console.log(`[P2P SEND] Triggering offer for ${messageId}`);
+    logger.p2p(`[P2P SEND] Triggering offer for ${messageId}`);
     this.transitionTransferState(messageId, StrictTransferState.TRANSFERRING);
     // t.status = StrictTransferState.TRANSFERRING; // Helper does it
     this.startActualChunkTransfer(t);
@@ -1307,7 +1308,7 @@ class StrictP2PService {
   /* ---------------------------------------------------- */
 
   private async startStreamingTransfer(t: any, resumeIndex = 0) {
-    console.log(`[P2P STREAM] 🚀 Starting Stream: ${t.file.name} (Resume: ${resumeIndex})`);
+    logger.p2p(`[P2P STREAM] 🚀 Starting Stream: ${t.file.name} (Resume: ${resumeIndex})`);
 
     // 1️⃣ Initialize State
     const segmentSize = P2P_LIMITS.SEGMENT_SIZE;
@@ -1335,7 +1336,7 @@ class StrictP2PService {
     while (segmentIndex < totalSegments) {
       // Check State
       if (t.status !== 'TRANSFERRING' && t.status !== StrictTransferState.TRANSFERRING) {
-        console.warn(`[P2P STREAM] Transfer interrupted. Status: ${t.status}`);
+        logger.warn(`[P2P STREAM] Transfer interrupted. Status: ${t.status}`);
         break;
       }
 
@@ -1371,7 +1372,7 @@ class StrictP2PService {
       let session = this.peerSessions.get(`${t.peerEmail}:${t.messageId}`) || this.peerSessions.get(t.peerEmail);
       let attempts = 0;
       while ((!session || !session.sessionKey) && attempts < 50) { // Wait up to 5s
-        if (attempts === 0) console.log(`[P2P STREAM] Waiting for session key with ${t.peerEmail}...`);
+        if (attempts === 0) logger.p2p(`[P2P STREAM] Waiting for session key with ${t.peerEmail}...`);
         await new Promise(r => setTimeout(r, 100));
         session = this.peerSessions.get(`${t.peerEmail}:${t.messageId}`) || this.peerSessions.get(t.peerEmail);
         attempts++;
@@ -1379,7 +1380,7 @@ class StrictP2PService {
 
       // Handle session/key errors gracefully
       if (!session || !session.sessionKey) {
-        console.error('[P2P STREAM] ❌ Session key missing via Worker dispatch. Aborting.');
+        logger.error('[P2P STREAM] ❌ Session key missing via Worker dispatch. Aborting.');
         t.status = 'FAILED';
         break;
       }
@@ -1406,13 +1407,13 @@ class StrictP2PService {
           isStream: true
         }, true); // Silent send
       }).catch(err => {
-        console.error(`[P2P STREAM] 💥 Encrypt Worker Failed for Chunk ${currentIdx}:`, err);
+        logger.error(`[P2P STREAM] 💥 Encrypt Worker Failed for Chunk ${currentIdx}:`, err);
       });
 
       segmentIndex++; // 🚀 Move window forward immediately
     }
 
-    console.log(`[P2P STREAM] ✅ All segments dispatched (${totalSegments}). Waiting for final ACKs...`);
+    logger.p2p(`[P2P STREAM] ✅ All segments dispatched (${totalSegments}). Waiting for final ACKs...`);
   }
 
   private async startActualChunkTransfer(t: any) {
@@ -1452,7 +1453,7 @@ class StrictP2PService {
     });
 
     t.offered = true;
-    console.log(`[P2P SERVER] Offer sent for ${t.messageId}. Standing by for Accept...`);
+    logger.p2p(`[P2P SERVER] Offer sent for ${t.messageId}. Standing by for Accept...`);
   }
 
 
@@ -1503,7 +1504,7 @@ class StrictP2PService {
 
         // 2. Flush queued signals
         if (this.pendingSignals.length > 0) {
-          console.log(`[P2P] Flushing ${this.pendingSignals.length} queued signals`);
+          logger.p2p(`[P2P] Flushing ${this.pendingSignals.length} queued signals`);
           this.pendingSignals.forEach(m => {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
               this.ws.send(JSON.stringify(m));
@@ -1525,12 +1526,12 @@ class StrictP2PService {
           const message = JSON.parse(e.data);
           await this.handle(message);
         } catch (err) {
-          console.error('[P2P] Parse error', err);
+          logger.error('[P2P] Parse error', err);
         }
       };
 
       this.ws.onclose = (event) => {
-        console.warn(`[P2P] WebSocket closed: Code=${event.code}, Reason=${event.reason}`);
+        logger.warn(`[P2P] WebSocket closed: Code=${event.code}, Reason=${event.reason}`);
         this.connected = false;
         this.isRegistering = false;
         this.notifyConnection(false);
@@ -1544,7 +1545,7 @@ class StrictP2PService {
         setOnlinePeers([]);
 
         if (!authService.getToken()) {
-          console.error('[P2P] No auth token available. Stopping reconnection loop.');
+          logger.error('[P2P] No auth token available. Stopping reconnection loop.');
           return;
         }
 
@@ -1557,7 +1558,7 @@ class StrictP2PService {
       };
 
     } catch (e) {
-      console.error('[P2P] Connection error', e);
+      logger.error('[P2P] Connection error', e);
       this.isRegistering = false;
       this.scheduleReconnectWithBackoff(userId, email);
     }
@@ -1570,7 +1571,7 @@ class StrictP2PService {
     if (!authService.getToken()) return;
 
     const delay = Math.min(30000, 1000 * Math.pow(2, this.retryCount));
-    console.log(`[P2P] Scheduling reconnection in ${delay}ms (Attempt ${this.retryCount + 1})`);
+    logger.p2p(`[P2P] Scheduling reconnection in ${delay}ms (Attempt ${this.retryCount + 1})`);
 
     this.reconnectionTimeout = setTimeout(() => {
       this.retryCount++;
@@ -1583,7 +1584,7 @@ class StrictP2PService {
       case 'registered':
         this.connected = true;
         this.isRegistering = false;
-        console.log('[P2P] Successfully registered as', msg.email);
+        logger.p2p('[P2P] Successfully registered as', msg.email);
         this.notifyConnection(true);
 
         // Start heartbeat
@@ -1596,7 +1597,7 @@ class StrictP2PService {
 
         // ✅ FIX 2: Load initial peer list from registration response
         if (msg.onlinePeers && Array.isArray(msg.onlinePeers)) {
-          console.log('[P2P] Initial online peers:', msg.onlinePeers);
+          logger.p2p('[P2P] Initial online peers:', msg.onlinePeers);
           setOnlinePeers(msg.onlinePeers);
         }
 
@@ -1616,7 +1617,7 @@ class StrictP2PService {
         const { from, publicKey, messageId } = msg;
         if (!from || !publicKey || !messageId) return;
 
-        console.log(`[P2P] Received handshake init from ${from} for ${messageId}`);
+        logger.p2p(`[P2P] Received handshake init from ${from} for ${messageId}`);
         const peerPub = await importPublicKey(new Uint8Array(publicKey).buffer);
         const sharedKey = await deriveSharedKey(this.keyPair.privateKey, peerPub);
 
@@ -1637,7 +1638,7 @@ class StrictP2PService {
           messageId
         });
 
-        console.log(`[P2P] Session key established for ${emailLower} (Responder)`);
+        logger.p2p(`[P2P] Session key established for ${emailLower} (Responder)`);
 
         // Now trigger logic for ALL transfers involving this peer
         if (messageId) {
@@ -1645,12 +1646,12 @@ class StrictP2PService {
           if (rt) {
             if (rt.status !== 'COMPLETED') {
               rt.status = 'KEY_READY';
-              console.log(`[P2P] Receiver state -> KEY_READY for ${messageId}`);
+              logger.p2p(`[P2P] Receiver state -> KEY_READY for ${messageId}`);
               // 🚀 ERASE BUFFER to prevent stale-decryption errors. Watchdog will re-fetch.
               this.receiverChunkBuffer.get(messageId)?.clear();
               this.pullMissingChunks(messageId, from);
             } else {
-              console.log(`[P2P] Transfer ${messageId} already COMPLETED. Ignoring key exchange reset.`);
+              logger.p2p(`[P2P] Transfer ${messageId} already COMPLETED. Ignoring key exchange reset.`);
             }
           }
           this.tryStartSender(messageId);
@@ -1671,7 +1672,7 @@ class StrictP2PService {
         const { from, publicKey, messageId } = msg;
         if (!from || !publicKey || !messageId) return;
 
-        console.log(`[P2P] Received handshake ack from ${from} for ${messageId}`);
+        logger.p2p(`[P2P] Received handshake ack from ${from} for ${messageId}`);
         const peerPub = await importPublicKey(new Uint8Array(publicKey).buffer);
         const sharedKey = await deriveSharedKey(this.keyPair.privateKey, peerPub);
 
@@ -1682,7 +1683,7 @@ class StrictP2PService {
           handshaking: false
         });
 
-        console.log(`[P2P] Session key established for ${emailLower} (Initiator)`);
+        logger.p2p(`[P2P] Session key established for ${emailLower} (Initiator)`);
 
         // If this ACK was for a specific transfer, trigger it
         if (messageId) {
@@ -1694,7 +1695,7 @@ class StrictP2PService {
               this.receiverChunkBuffer.get(messageId)?.clear();
               this.pullMissingChunks(messageId, from);
             } else {
-              console.log(`[P2P] Transfer ${messageId} already COMPLETED. Ignoring key exchange ack reset.`);
+              logger.p2p(`[P2P] Transfer ${messageId} already COMPLETED. Ignoring key exchange ack reset.`);
             }
           }
           this.tryStartSender(messageId);
@@ -1719,7 +1720,7 @@ class StrictP2PService {
       }
 
       case 'new-email-notification':
-        console.log('[P2P] New email notification received:', msg.email);
+        logger.p2p('[P2P] New email notification received:', msg.email);
         window.dispatchEvent(new CustomEvent('new-email', { detail: msg.email }));
         break;
 
@@ -1727,7 +1728,7 @@ class StrictP2PService {
         // ✅ FIX 1: STRICT SERVER AUTHORITY (MASTER CHECKLIST COMPLIANCE)
         if (Array.isArray(msg.online)) {
           const uniqueOnline = Array.from(new Set(msg.online));
-          console.log(`[P2P][PRESENCE] Received update with ${uniqueOnline.length} peers:`, JSON.stringify(uniqueOnline));
+          logger.p2p(`[P2P][PRESENCE] Received update with ${uniqueOnline.length} peers:`, JSON.stringify(uniqueOnline));
           setOnlinePeers(uniqueOnline);
           this.notifyPresenceListeners(uniqueOnline);
         }
@@ -1748,7 +1749,7 @@ class StrictP2PService {
           const email = normalizeEmail(msg.email);
           this.setPeerState(email, PeerConnectionState.OFFLINE);
 
-          console.log("[P2P][PRESENCE] Peer offline:", email);
+          logger.p2p("[P2P][PRESENCE] Peer offline:", email);
 
           // C1. Strict Pause Logic - Sender
           this.senderTransferRegistry.forEach((t) => {
@@ -1783,9 +1784,9 @@ class StrictP2PService {
         break;
 
       case 'error':
-        console.error('[P2P] Server error:', msg.message);
+        logger.error('[P2P] Server error:', msg.message);
         if (msg.message === 'Invalid auth token') {
-          console.error('[P2P] Auth failed. Stopping reconnection loop.');
+          logger.error('[P2P] Auth failed. Stopping reconnection loop.');
           this.isRegistering = false;
           this.connected = false;
           toast.error('Session expired. Please log in again.', { id: 'p2p-auth-error' });
@@ -1802,7 +1803,7 @@ class StrictP2PService {
       case 'transfer-complete': {
         const { messageId } = msg;
         if (messageId) {
-          console.log(`[P2P] Received transfer-complete for ${messageId}. Releasing sender resources.`);
+          logger.p2p(`[P2P] Received transfer-complete for ${messageId}. Releasing sender resources.`);
           // 🚀 FIX: Don't wipe file, just mark complete so we can show "Delivered" status
           this.cleanupTransfer(messageId, false);
 
@@ -1843,7 +1844,7 @@ class StrictP2PService {
       case 'p2p-offer': {
         const { messageId, from, data } = msg;
         if (!from || !messageId || !data) {
-          console.error('[P2P] Malformed p2p-offer', msg);
+          logger.error('[P2P] Malformed p2p-offer', msg);
           return;
         }
 
@@ -1852,7 +1853,7 @@ class StrictP2PService {
 
         // 🚀 FIX: Don't overwrite if exists
         if (this.completedTransfers.has(messageId)) {
-          console.log(`[P2P] Already have file for offer ${messageId}. Sending completion ack.`);
+          logger.p2p(`[P2P] Already have file for offer ${messageId}. Sending completion ack.`);
           this.completedTransfers.add(messageId);
 
           // Tell sender to stop
@@ -1901,7 +1902,7 @@ class StrictP2PService {
             scanStatus: data.scanStatus,
             scanMessage: data.scanMessage,
             checksum: data.checksum
-          }).catch(err => console.error('[P2P] Failed to persist meta:', err));
+          }).catch(err => logger.error('[P2P] Failed to persist meta:', err));
 
           // Sync progress from DB in case we refreshed
           await this.syncReceiverStateFromDB(messageId);
@@ -1924,7 +1925,7 @@ class StrictP2PService {
 
             // 🚀 SMART MIGRATION: If we have the FULL file, don't reset. Just update meta.
             if (await this.hasReceivedFile(messageId)) {
-              console.log(`[P2P] Migrating metadata for COMPLETED file ${messageId} (Protocol Change)`);
+              logger.p2p(`[P2P] Migrating metadata for COMPLETED file ${messageId} (Protocol Change)`);
               rt.totalChunks = data.totalChunks;
               rt.chunkSize = data.chunkSize || P2P_LIMITS.CHUNK_SIZE;
               await saveMeta(messageId, {
@@ -1944,10 +1945,10 @@ class StrictP2PService {
               return; // Skip handshake/reset
             }
 
-            console.warn(`[P2P] Metadata mismatch for ${messageId} (Protocol Change?). Resetting DB and state.`);
+            logger.warn(`[P2P] Metadata mismatch for ${messageId} (Protocol Change?). Resetting DB and state.`);
 
             // 🚀 CRITICAL: Clear DB chunks because indices are incompatible
-            clearChunks(messageId).catch(err => console.error('[P2P] Failed to clear stale chunks:', err));
+            clearChunks(messageId).catch(err => logger.error('[P2P] Failed to clear stale chunks:', err));
 
             this.receiverTransfers.set(messageId, {
               messageId: messageId,
@@ -2001,7 +2002,7 @@ class StrictP2PService {
         // 🔒 FIX: Use per-peer ID (email) instead of legacy composite ID
         const emailLower = from.toLowerCase();
         if (!this.peerSessions.has(emailLower) || !this.peerSessions.get(emailLower)?.ready) {
-          console.log(`[P2P] Offer requires handshake for ${emailLower}`);
+          logger.p2p(`[P2P] Offer requires handshake for ${emailLower}`);
           this.receiverTransfers.get(messageId)!.status = 'HANDSHAKING';
           this.ensureSession(from, messageId);
         } else {
@@ -2041,7 +2042,7 @@ class StrictP2PService {
       }
 
       case 'file-scan-update': {
-        console.log('[P2P] Received remote scan update:', msg);
+        logger.p2p('[P2P] Received remote scan update:', msg);
         window.dispatchEvent(new CustomEvent('file-scan-status', {
           detail: {
             messageId: msg.fileId,
@@ -2060,7 +2061,7 @@ class StrictP2PService {
 
         // 🚀 IGNORE if completed
         if (this.completedTransfers.has(messageId)) {
-          // console.log(`[P2P] Ignored chunk ${chunkIndex} for completed ${messageId}`);
+          // logger.p2p(`[P2P] Ignored chunk ${chunkIndex} for completed ${messageId}`);
 
           // 🚀 SEND STOP SIGNAL: Tell sender we are done so they stop sending
           this.send({
@@ -2089,7 +2090,7 @@ class StrictP2PService {
           }
 
           if (!session || !session.sessionKey) {
-            console.log(`[P2P RECEIVE] Key not ready, buffering chunk ${chunkIndex} for ${from}`);
+            logger.p2p(`[P2P RECEIVE] Key not ready, buffering chunk ${chunkIndex} for ${from}`);
             rt.reason = 'Waiting for security handshake...';
 
             // 🚀 FIX: Proactively trigger handshake if it's missing or dead
@@ -2110,12 +2111,12 @@ class StrictP2PService {
 
           // ✅ FIX: Check if chunk index is within bounds
           if (chunkIndex >= rt.totalChunks) {
-            console.warn(`[P2P RECEIVE] Ignoring out-of-bounds chunk ${chunkIndex} (Total: ${rt.totalChunks})`);
+            logger.warn(`[P2P RECEIVE] Ignoring out-of-bounds chunk ${chunkIndex} (Total: ${rt.totalChunks})`);
             return;
           }
 
           if (rt.receivedChunks.has(chunkIndex)) {
-            console.log(`[P2P RECEIVE] Chunk ${chunkIndex} already received for ${messageId}, skipping`);
+            logger.p2p(`[P2P RECEIVE] Chunk ${chunkIndex} already received for ${messageId}, skipping`);
             // Still send ACK in case sender didn't receive it
             this.send({
               type: 'chunk-ack',
@@ -2131,7 +2132,7 @@ class StrictP2PService {
           const chunkIv = payload?.iv || (msg as any).iv || [];
 
           if (!chunkIv || chunkIv.length === 0) {
-            console.error(`[P2P] ❌ Chunk ${chunkIndex} missing IV for ${messageId}`);
+            logger.error(`[P2P] ❌ Chunk ${chunkIndex} missing IV for ${messageId}`);
             return;
           }
 
@@ -2141,7 +2142,7 @@ class StrictP2PService {
             iv: new Uint8Array(chunkIv),
             encrypted: buffer
           }).catch(err => {
-            console.error(`[P2P] 💥 Decryption failed for chunk ${chunkIndex} of ${messageId}:`, err);
+            logger.error(`[P2P] 💥 Decryption failed for chunk ${chunkIndex} of ${messageId}:`, err);
             return null;
           });
 
@@ -2160,7 +2161,7 @@ class StrictP2PService {
           writePromise.then(() => {
             writeSet.delete(writePromise);
           }).catch(e => {
-            console.error('[P2P] Failed to save chunk to disk:', chunkIndex, e);
+            logger.error('[P2P] Failed to save chunk to disk:', chunkIndex, e);
             rt.receivedChunks.delete(chunkIndex); // Rollback memory state if write fails
             writeSet.delete(writePromise);
           });
@@ -2215,7 +2216,7 @@ class StrictP2PService {
           // 🚀 TRIGGER NEXT BATCH
           this.pullMissingChunks(messageId, from);
         } catch (err) {
-          console.error(`[P2P RECEIVE] Decryption failed for chunk ${chunkIndex}`, err);
+          logger.error(`[P2P RECEIVE] Decryption failed for chunk ${chunkIndex}`, err);
           // 🚀 CRITICAL FIX: If decryption fails, the key is mismatching.
           this.peerSessions.delete(from.toLowerCase());
 
@@ -2236,7 +2237,7 @@ class StrictP2PService {
         const { messageId, from, resumeIndex } = msg;
         if (messageId && from) {
           const startIndex = resumeIndex !== undefined ? resumeIndex : 0;
-          console.log(`[P2P SENDER] Offer ACK for ${messageId}. Starting from chunk ${startIndex}.`);
+          logger.p2p(`[P2P SENDER] Offer ACK for ${messageId}. Starting from chunk ${startIndex}.`);
           const t = this.senderTransferRegistry.get(messageId);
           if (t) {
             t.currentChunkIndex = startIndex;
@@ -2255,7 +2256,7 @@ class StrictP2PService {
         if (!t) return;
 
         if (requestType === 'metadata') {
-          console.log(`[P2P SENDER] Re-sending metadata for ${messageId}`);
+          logger.p2p(`[P2P SENDER] Re-sending metadata for ${messageId}`);
           const totalChunks = Math.ceil(t.file.size / P2P_LIMITS.CHUNK_SIZE);
           this.send({
             type: 'p2p-offer',
@@ -2287,11 +2288,11 @@ class StrictP2PService {
       case 'chunk-request-batch': {
         const { messageId, chunkIndices, from } = msg;
         if (!messageId || !chunkIndices || !chunkIndices.length || !from) {
-          console.warn('[P2P SERVER] Invalid batch request:', { messageId, chunkIndices, from });
+          logger.warn('[P2P SERVER] Invalid batch request:', { messageId, chunkIndices, from });
           return;
         }
 
-        console.log(`[P2P SERVER] Received batch request for ${chunkIndices.length} chunks from ${from} for ${messageId}`);
+        logger.p2p(`[P2P SERVER] Received batch request for ${chunkIndices.length} chunks from ${from} for ${messageId}`);
 
         // Process batch with parallelized preparation to fill network pipe
         (async () => {
@@ -2310,7 +2311,7 @@ class StrictP2PService {
               if (this.ws?.readyState !== WebSocket.OPEN) return Promise.resolve();
               // Stop if paused or failed or completed
               if (!t || t.status !== StrictTransferState.TRANSFERRING) {
-                console.log(`[P2P] Send loop for ${messageId} stopped (Status: ${t?.status})`);
+                logger.p2p(`[P2P] Send loop for ${messageId} stopped (Status: ${t?.status})`);
                 return Promise.resolve(); // Resolve to not block Promise.all
               }
               return this.sendSingleChunk(messageId, idx, from);
@@ -2376,7 +2377,7 @@ class StrictP2PService {
         }));
 
         if (t.acknowledgedChunks.size === t.totalChunks) {
-          console.log(`[P2P SENDER] Transfer ${messageId} complete!`);
+          logger.p2p(`[P2P SENDER] Transfer ${messageId} complete!`);
           this.transitionTransferState(messageId, StrictTransferState.COMPLETED);
           t.started = false;
         }
@@ -2388,7 +2389,7 @@ class StrictP2PService {
         if (!messageId) return;
         const st = this.senderTransferRegistry.get(messageId);
         if (st && progress !== undefined) {
-          console.log(`[P2P SENDER] Progress sync received for ${messageId}: ${progress} chunks`);
+          logger.p2p(`[P2P SENDER] Progress sync received for ${messageId}: ${progress} chunks`);
           if (!st.acknowledgedChunks) st.acknowledgedChunks = new Set();
 
           if (Array.isArray(data)) {
@@ -2434,11 +2435,11 @@ class StrictP2PService {
     // 🚀 CRITICAL: Wait for all background disk writes to complete
     const pending = this.pendingDiskWrites.get(messageId);
     if (pending && pending.size > 0) {
-      console.log(`[P2P] Waiting for ${pending.size} pending disk writes for ${messageId}...`);
+      logger.p2p(`[P2P] Waiting for ${pending.size} pending disk writes for ${messageId}...`);
       await Promise.all(Array.from(pending));
       // Clear the set after all promises resolve
       this.pendingDiskWrites.delete(messageId);
-      console.log(`[P2P] All disk writes completed for ${messageId}`);
+      logger.p2p(`[P2P] All disk writes completed for ${messageId}`);
     }
 
     const meta = await getMeta(messageId);
@@ -2450,7 +2451,7 @@ class StrictP2PService {
       if (chunkData) {
         chunks.push(new Blob([chunkData]));
       } else {
-        console.error('Missing chunk', i, 'for', messageId);
+        logger.error('Missing chunk', i, 'for', messageId);
         return; // Failed to assemble
       }
     }
@@ -2460,10 +2461,10 @@ class StrictP2PService {
     // 🛡️ A7: Verify Checksum
     const rt = this.receiverTransfers.get(messageId);
     if (rt && rt.checksum) {
-      console.log(`[P2P] Verifying checksum for ${fileName}...`);
+      logger.p2p(`[P2P] Verifying checksum for ${fileName}...`);
       const calculatedHash = await this.calculateFileHash(fileBlob);
       if (calculatedHash !== rt.checksum) {
-        console.error(`[P2P] ❌ CHECKSUM MISMATCH for ${fileName}! Expected: ${rt.checksum}, Got: ${calculatedHash}`);
+        logger.error(`[P2P] ❌ CHECKSUM MISMATCH for ${fileName}! Expected: ${rt.checksum}, Got: ${calculatedHash}`);
 
         window.dispatchEvent(new CustomEvent('p2p-error', {
           detail: { messageId, error: 'File integrity check failed (Checksum Mismatch)', code: 'INTEGRITY_FAIL' }
@@ -2477,7 +2478,7 @@ class StrictP2PService {
         rt.reason = 'Checksum mismatch';
         return; // Stop processing
       }
-      console.log(`[P2P] ✅ Checksum verified for ${fileName}`);
+      logger.p2p(`[P2P] ✅ Checksum verified for ${fileName}`);
     }
 
     this.receivedFiles.set(messageId, fileBlob);
@@ -2493,7 +2494,7 @@ class StrictP2PService {
     });
 
     // Cleanup temporary state but KEEP the file in IndexedDB
-    console.log('[P2P] Download complete, cleaning up temporary chunks');
+    logger.p2p('[P2P] Download complete, cleaning up temporary chunks');
     this.cleanupTransfer(messageId, false); // wipeFile = false
 
     // Notify sender we are done
@@ -2509,7 +2510,7 @@ class StrictP2PService {
     }
 
     // 🛡️ AUTHORITATIVE RECEIVER SCAN
-    console.log(`[P2P] Transfer complete. Running authoritative scan on ${fileName}...`);
+    logger.p2p(`[P2P] Transfer complete. Running authoritative scan on ${fileName}...`);
     window.dispatchEvent(new CustomEvent('file-scan-status', {
       detail: { messageId, status: 'SCANNING', message: 'Final security validation...' }
     }));
@@ -2556,12 +2557,12 @@ class StrictP2PService {
           detail: { messageId, fileName, blob: fileBlob, scanStatus: scanResult.status }
         }));
       } else {
-        console.warn(`[P2P] File ${messageId} is ${scanResult.status}. Access denied.`);
+        logger.warn(`[P2P] File ${messageId} is ${scanResult.status}. Access denied.`);
         // Ensure UI knows it's blocked/timeout logic
       }
 
     } catch (e) {
-      console.error('[P2P] Receiver scan failed', e);
+      logger.error('[P2P] Receiver scan failed', e);
       // Fallback to "TIMEOUT" on error -> Enforce conservative rule
       window.dispatchEvent(new CustomEvent('file-scan-status', {
         detail: { messageId, status: 'TIMEOUT', message: 'Security scan unavailable' }
@@ -2590,12 +2591,12 @@ class StrictP2PService {
   }
 
   private async startTransferToRecipient(recipientEmail: string, file: File, messageId: string) {
-    console.log(`[P2P] Registered sender transfer ${messageId} for ${recipientEmail}`);
+    logger.p2p(`[P2P] Registered sender transfer ${messageId} for ${recipientEmail}`);
 
     // Register the transfer
 
     // 🛡️ SENDER SCAN (Before Advertising)
-    console.log(`[P2P SENDER] Scanning ${file.name} before offer...`);
+    logger.p2p(`[P2P SENDER] Scanning ${file.name} before offer...`);
     window.dispatchEvent(new CustomEvent('file-scan-status', {
       detail: { messageId, status: 'SCANNING', message: 'Running security checks...' }
     }));
@@ -2652,7 +2653,7 @@ class StrictP2PService {
       });
 
     } catch (e) {
-      console.warn('Sender scan validation error', e);
+      logger.warn('Sender scan validation error', e);
       scanStatus = 'not_scanned';
       scanMessage = 'Security check failed to run';
     }
@@ -2720,9 +2721,9 @@ class StrictP2PService {
         fileId: messageId,
         fileName: file.name
       });
-      console.log(`[P2P] Persisted sender metadata for ${messageId} (No blob stored)`);
+      logger.p2p(`[P2P] Persisted sender metadata for ${messageId} (No blob stored)`);
     } catch (err) {
-      console.warn(`[P2P] Could not persist sender metadata:`, err);
+      logger.warn(`[P2P] Could not persist sender metadata:`, err);
     }
 
     // Attempt to start (will trigger handshake if needed via ensureSession)
@@ -2730,7 +2731,7 @@ class StrictP2PService {
   }
 
   private async rehydrateSenderTransfers() {
-    console.log('[P2P] Rehydrating sender transfers...');
+    logger.p2p('[P2P] Rehydrating sender transfers...');
     try {
       const allPending = await getAllPendingTransfers();
       let count = 0;
@@ -2744,7 +2745,7 @@ class StrictP2PService {
           const meta = await getMeta(messageId);
 
           if (fileData?.blob) {
-            console.log(`[P2P] Rehydrated sender transfer ${messageId} for ${peerEmail}`);
+            logger.p2p(`[P2P] Rehydrated sender transfer ${messageId} for ${peerEmail}`);
             const cSize = meta?.chunkSize || P2P_LIMITS.CHUNK_SIZE;
             this.senderTransferRegistry.set(messageId, {
               fileId: messageId,
@@ -2772,12 +2773,12 @@ class StrictP2PService {
         }
       }
       if (count > 0) {
-        console.log(`[P2P] Rehydrated ${count} sender transfers`);
+        logger.p2p(`[P2P] Rehydrated ${count} sender transfers`);
         // 🚀 Trigger presence check immediately for these rehydrated transfers
         this.triggerPresenceResumption();
       }
     } catch (err) {
-      console.error('[P2P] Failed to rehydrate sender transfers', err);
+      logger.error('[P2P] Failed to rehydrate sender transfers', err);
     }
   }
 
@@ -2827,7 +2828,7 @@ class StrictP2PService {
 
     // 🚀 STRICT ONLINE CHECK
     if (!this.isPeerOnline(senderLower)) {
-      console.log(`[P2P] Cannot pull chunks for ${messageId} - Sender ${sender} is OFFLINE`);
+      logger.p2p(`[P2P] Cannot pull chunks for ${messageId} - Sender ${sender} is OFFLINE`);
       this.waitingForSender.set(messageId, sender);
       rt.status = 'PAUSED'; // Or a dedicated 'WAITING' status internal state?
       rt.reason = "Waiting for sender to come online...";
@@ -2874,7 +2875,7 @@ class StrictP2PService {
     }
 
     if (batch.length > 0) {
-      console.log(`[P2P CLIENT] Requesting ${batch.length} chunks from ${sender} for ${messageId}`);
+      logger.p2p(`[P2P CLIENT] Requesting ${batch.length} chunks from ${sender} for ${messageId}`);
       this.send({
         type: 'chunk-request-batch' as any,
         to: sender,
@@ -2939,7 +2940,7 @@ class StrictP2PService {
 
       // 🚀 STRICT ONLINE CHECK BEFORE SENDING
       if (!this.isPeerOnline(emailLower)) {
-        // console.log(`[P2P] Aborting chunk send - Peer ${emailLower} went offline`);
+        // logger.p2p(`[P2P] Aborting chunk send - Peer ${emailLower} went offline`);
         return;
       }
 
@@ -2960,14 +2961,14 @@ class StrictP2PService {
         payload: { iv: encrypted.iv } as any
       }, true); // Silent for speed
 
-      // console.log(`[P2P SERVER] Sent chunk ${chunkIndex} to ${recipient}`);
+      // logger.p2p(`[P2P SERVER] Sent chunk ${chunkIndex} to ${recipient}`);
 
     } catch (err: any) {
-      console.error(`[P2P SERVER] Failed to serve chunk ${chunkIndex}`, err);
+      logger.error(`[P2P SERVER] Failed to serve chunk ${chunkIndex}`, err);
 
       // 🚀 ERROR RECOVERY: Handle lost file permissions / stale file handles
       if (err.name === 'NotReadableError' || err.message?.includes('could not be read')) {
-        console.warn(`[P2P] File handle lost for chunk ${chunkIndex}. Attempting rehydration from IndexedDB...`);
+        logger.warn(`[P2P] File handle lost for chunk ${chunkIndex}. Attempting rehydration from IndexedDB...`);
 
         try {
           // Try to get fresh blob from IDB
@@ -2984,7 +2985,7 @@ class StrictP2PService {
 
           const fileData = await getFile(messageId);
           if (fileData && fileData.blob) {
-            console.log(`[P2P] Successfully refreshed file handle from IDB for ${messageId}`);
+            logger.p2p(`[P2P] Successfully refreshed file handle from IDB for ${messageId}`);
             t.file = fileData.blob; // Update handle
 
             // Retry sending this chunk immediately
@@ -2994,7 +2995,7 @@ class StrictP2PService {
             throw new Error("File not found in IndexedDB");
           }
         } catch (recoveryErr) {
-          console.error('[P2P] Recovery failed:', recoveryErr);
+          logger.error('[P2P] Recovery failed:', recoveryErr);
           this.cancelSenderTransfer(messageId);
           this.send({
             type: 'transfer-error',
@@ -3009,7 +3010,7 @@ class StrictP2PService {
   }
 
   private async rehydrateReceiverTransfers() {
-    console.log('[P2P] Rehydrating transfers from storage...');
+    logger.p2p('[P2P] Rehydrating transfers from storage...');
     const metas = await getAllMetas();
 
     for (const meta of metas) {
@@ -3017,7 +3018,7 @@ class StrictP2PService {
 
       // 🚀 FIX: Skip rehydrating as a receiver if we are already the sender for this file
       if (this.senderTransferRegistry.has(messageId)) {
-        console.log(`[P2P] Skipping receiver rehydration for sent file: ${fileName}`);
+        logger.p2p(`[P2P] Skipping receiver rehydration for sent file: ${fileName}`);
         continue;
       }
 
@@ -3050,30 +3051,30 @@ class StrictP2PService {
       if (finished) {
         rt.status = 'COMPLETED';
         this.completedTransfers.add(messageId);
-        console.log(`[P2P] Rehydrated COMPLETED transfer: ${fileName}`);
+        logger.p2p(`[P2P] Rehydrated COMPLETED transfer: ${fileName}`);
       } else {
         // Only IF not finished, try to recover 'PAUSED'/'RECEIVING' state
         await this.syncReceiverStateFromDB(messageId);
 
         // 🛡️ Checklist B10: SCANNING on reload -> TIMEOUT
         if (rt.scanStatus && (rt.scanStatus.toUpperCase() === 'SCANNING' || rt.scanStatus.toUpperCase() === 'PENDING')) {
-          console.warn(`[P2P] Found interrupted scan for ${fileName}. Marking as TIMEOUT.`);
+          logger.warn(`[P2P] Found interrupted scan for ${fileName}. Marking as TIMEOUT.`);
           rt.scanStatus = 'TIMEOUT';
           rt.scanMessage = 'Scan interrupted by reload';
         }
 
-        console.log(`[P2P] Rehydrated ACTIVE transfer: ${fileName} (${rt.status})`);
+        logger.p2p(`[P2P] Rehydrated ACTIVE transfer: ${fileName} (${rt.status})`);
       }
     }
   }
 
   // Legacy stubs
   retryTransfer(msgId: string) {
-    console.log('[P2P] retryTransfer stub called for', msgId);
+    logger.p2p('[P2P] retryTransfer stub called for', msgId);
   }
 
   resumeSending(_msgId: string) {
-    console.log('[P2P] resumeSending stub called');
+    logger.p2p('[P2P] resumeSending stub called');
   }
 
   private updateSpeedInfo(state: any, currentBytes: number, totalBytes: number) {
@@ -3114,7 +3115,7 @@ class StrictP2PService {
     this.pullWatchdogs.set(messageId, setTimeout(() => {
       const rt = this.receiverTransfers.get(messageId);
       if (rt && rt.status === 'RECEIVING' && rt.receivedChunks.size < rt.totalChunks) {
-        console.log(`[P2P] Watchdog: No chunks received for 5s. Clearing pending and re-pulling ${messageId}`);
+        logger.p2p(`[P2P] Watchdog: No chunks received for 5s. Clearing pending and re-pulling ${messageId}`);
         rt.reason = 'Network is unstable. Retrying connection...';
         this.notifyReceiverProgress(rt, sender);
 

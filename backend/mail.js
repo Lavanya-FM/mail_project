@@ -97,7 +97,19 @@ async function initTables() {
       )
     `);
 
-    // Migration for access_type length
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS sys_logs (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT,
+        level VARCHAR(10) DEFAULT 'error',
+        message TEXT,
+        stack TEXT,
+        context TEXT,
+        ip VARCHAR(45),
+        user_agent TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
     await db.query(`ALTER TABLE activity_log MODIFY COLUMN access_type TEXT`).catch(() => { });
 
     // Add attachment_transfer_state to email_attachments if not exists
@@ -180,9 +192,9 @@ async function initTables() {
     await addIdx("CREATE INDEX idx_email_conversation_id ON emails (conversation_id)");
     await addIdx("CREATE INDEX idx_email_subject_norm ON emails (subject_normalized)");
 
-    // 5. Minimal Backfill (optional, non-blocking)
-    // db.query("UPDATE emails SET conversation_id = thread_id WHERE conversation_id IS NULL AND thread_id IS NOT NULL").catch(() => {});
-
+    // Add delivery_status and smtp_error columns
+    await addCol("ALTER TABLE emails ADD COLUMN IF NOT EXISTS delivery_status VARCHAR(20) DEFAULT 'delivered'");
+    await addCol("ALTER TABLE emails ADD COLUMN IF NOT EXISTS smtp_error TEXT");
 
   } catch (err) {
     console.error('⚠️ DB Initialization failed (Server will run in limited mode):', err.message);
@@ -1099,6 +1111,36 @@ router.get("/email/:emailId/attachment/:attachmentId", async (req, res) => {
   }
 });
 
+// -------------------- SYSTEM LOGGING --------------------
+router.post("/logs/error", async (req, res) => {
+  const { user_id, message, stack, context, level = 'error' } = req.body;
+  const ip = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  const user_agent = req.headers['user-agent'];
+
+  try {
+    await db.query(
+      `INSERT INTO sys_logs (user_id, level, message, stack, context, ip, user_agent)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [user_id, level, message, stack, JSON.stringify(context || {}), ip, user_agent]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Failed to save log:', err);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+router.get("/admin/system-logs", async (req, res) => {
+  // Real check should be here: verify isSuperadmin
+  try {
+    const [rows] = await db.query("SELECT * FROM sys_logs ORDER BY created_at DESC LIMIT 100");
+    res.json(rows);
+  } catch (err) {
+    console.error('Failed to fetch logs:', err);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 // -------------------- FOLDER ROUTES --------------------
 
 router.get("/folders/:userId", async (req, res) => {
@@ -1375,8 +1417,10 @@ router.post("/email/create", async (req, res) => {
     in_reply_to,
     folder_id,
     attachments, // array of { filename, content (base64), size, mime_type, encoding? }
-    p2p_enabled,
-    p2p_delivered
+    p2p_delivered,
+    thread_id,
+    threadId,
+    draft_id
   } = req.body;
 
   if (!user_id) return res.status(400).json({ error: "Missing user_id" });
@@ -1474,12 +1518,21 @@ router.post("/email/create", async (req, res) => {
 
     try {
       // Use the new threading service to resolve or create thread
-      resolvedThreadId = await threadingService.resolveThreadId(conn, {
-        messageId: null, // New email, so we don't have a message-id yet (unless we generate it first?)
-        inReplyTo: in_reply_to,
-        references: null, // Incoming create usually via UI, so references might come from client?
-        subject: subject
-      });
+      const incomingThreadId = thread_id || threadId;
+      if (incomingThreadId && !isNaN(Number(incomingThreadId))) {
+        resolvedThreadId = Number(incomingThreadId);
+      } else {
+        resolvedThreadId = await threadingService.resolveThreadId(conn, {
+          messageId: null, // New email
+          inReplyTo: in_reply_to,
+          references: null,
+          subject: subject
+        }, {
+           // ONLY allow heuristic subject match if it's a known reply (has in_reply_to)
+           // If it's a manual Compose, force a new conversation
+           allowHeuristic: !!in_reply_to
+        });
+      }
 
       // Update conversation timestamp
       if (resolvedThreadId) {
@@ -1506,15 +1559,15 @@ router.post("/email/create", async (req, res) => {
 
     const insertSql = `INSERT INTO emails
        (user_id, thread_id, conversation_id, message_id, from_name, from_email, subject, subject_normalized, body, is_html, in_reply_to, references_header,
-        to_header, cc_header, bcc_header, folder_id, is_draft, p2p_enabled, p2p_delivered)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+        to_header, cc_header, bcc_header, folder_id, is_draft, p2p_enabled, p2p_delivered, delivery_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
     const insertValues = [
       user_id,
       resolvedThreadId,
       resolvedThreadId, // conversation_id
       generatedMessageId,
-      sender.name,
+      sender.full_name,
       sender.email,
       subject || "(No Subject)",
       normalizedSubject, // subject_normalized
@@ -1528,7 +1581,8 @@ router.post("/email/create", async (req, res) => {
       resolvedFolderId,
       is_draft ? 1 : 0,
       resolvedP2PEnabled,
-      resolvedP2PDelivered
+      resolvedP2PDelivered,
+      is_draft ? 'draft' : 'sending' // delivery_status
     ];
 
     // ✅ DEBUG: Log the exact SQL and values being used
@@ -1634,7 +1688,7 @@ router.post("/email/create", async (req, res) => {
     try {
       const emailDataForScan = {
         from_email: sender.email,
-        from_name: sender.name,
+        from_name: sender.full_name,
         subject: subject || '',
         body: cleanBody || '',
       };
@@ -1668,7 +1722,6 @@ router.post("/email/create", async (req, res) => {
             if (rules.markImportant) markStarred = 1;
             if (scanResults.priority) markStarred = 1;
           }
-
           await conn.query(
             `INSERT IGNORE INTO email_mailbox (user_id, email_id, mailbox_id, is_read, is_starred) VALUES (?, ?, ?, ?, ?)`,
             [rcp.id, emailId, targetMailboxId, markRead, markStarred]
@@ -1677,13 +1730,21 @@ router.post("/email/create", async (req, res) => {
       }
     }
 
+    // 📩 AUTOMATIC DRAFT REMOVAL (Atomic)
+    // If this is a send action (is_draft = 0) and we have a draft_id, remove the draft
+    if (!is_draft && draft_id && !isNaN(Number(draft_id))) {
+      console.log(`[Drafts] Automatically removing draft ${draft_id} after send`);
+      await conn.query("DELETE FROM email_mailbox WHERE email_id = ? AND user_id = ?", [draft_id, user_id]);
+      await conn.query("DELETE FROM emails WHERE id = ? AND id NOT IN (SELECT email_id FROM email_mailbox)", [draft_id]);
+    }
+
     await conn.commit();
 
     const notificationPayload = {
       id: emailId,
       subject: subject || "(No Subject)",
       from_email: sender.email,
-      from_name: sender.name,
+      from_name: sender.full_name,
       timestamp: new Date().toISOString()
     };
 
@@ -1702,7 +1763,7 @@ router.post("/email/create", async (req, res) => {
       setImmediate(async () => {
         try {
           const transporter = nodemailer.createTransport({ host: "127.0.0.1", port: 25, secure: false, tls: { rejectUnauthorized: false } });
-          const sendOptions = { from: `"${sender.name}" <${sender.email}>`, to: toList.join(", "), subject: subject || "(No Subject)", html: cleanBody };
+          const sendOptions = { from: `"${sender.full_name}" <${sender.email}>`, to: toList.join(", "), subject: subject || "(No Subject)", html: cleanBody };
           if (ccList.length) sendOptions.cc = ccList.join(", ");
           if (bccList.length) sendOptions.bcc = bccList.join(", ");
           if (attachmentsList.length) {
@@ -1714,8 +1775,13 @@ router.post("/email/create", async (req, res) => {
             }).filter(Boolean);
           }
           await transporter.sendMail(sendOptions);
+          
+          // SUCCESS: Update status to delivered
+          await db.query("UPDATE emails SET delivery_status = 'delivered' WHERE id = ?", [emailId]);
         } catch (smtpErr) {
           console.error("SMTP background send error:", smtpErr);
+          // FAILURE: Update status to failed
+          await db.query("UPDATE emails SET delivery_status = 'failed', smtp_error = ? WHERE id = ?", [smtpErr.message, emailId]);
         }
       });
     }

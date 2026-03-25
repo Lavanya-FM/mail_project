@@ -3,8 +3,11 @@ import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 
+import { logger } from './utils/logger';
+
 // initP2PDownloadListener removed in favor of P2PReceiverHandler
-console.log('Build Version: 2026-02-11.v267-THREADING-DEPLOY');
+logger.init();
+logger.info('Build Version: 2026-03-25.v700-ADMIN-LOGGING-DEPLOY');
 
 // TEMPORARILY DISABLED: Unregister ALL service workers to force fresh load
 if ('serviceWorker' in navigator) {
