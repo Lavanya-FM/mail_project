@@ -4,7 +4,8 @@ import {
   Inbox, Send, FileEdit, Trash2, Plus, Star, Archive,
   Circle, ChevronDown,
   Clock, AlertTriangle, Tag, Mail, Wifi, Share2, CheckCircle2, Layers,
-  ShieldCheck as Shield2
+  ShieldCheck as Shield2,
+  Users, Ticket, BellRing, MessageSquare
 } from 'lucide-react';
 import { emailService, getFolderIdByName } from '../lib/emailService';
 import { authService } from '../lib/authService';
@@ -14,10 +15,8 @@ import EmailView from './EmailView';
 import TransfersView from './TransfersView';
 import ComposeEmail from './compose/ComposeEmail';
 import GamificationBadges from './GamificationBadges';
-import ActivityLogModal from './ActivityLogModal';
-import PrivacyPolicyModal from './PrivacyPolicyModal';
-import TermsOfServiceModal from './TermsOfServiceModal';
 import { animations } from '../utils/animations';
+import { useNotifications } from '../contexts/NotificationContext';
 import { Email, Folder } from '../types/email';
 import { normalizeEmailBody } from '../utils/email';
 import { encodeEmailId, decodeEmailId } from '../utils/urlEncoding';
@@ -52,7 +51,11 @@ const iconMap: Record<string, typeof Inbox> = {
   spam: AlertTriangle,
   trash: Trash2,
   snoozed: Clock,
-  transfers: Shield2
+  transfers: Shield2,
+  social: Users,
+  promotions: Ticket,
+  updates: BellRing,
+  forums: MessageSquare
 };
 
 // Color mapping for each folder type
@@ -64,6 +67,10 @@ const folderColors: Record<string, string> = {
   drafts: '#f59e0b',  // Amber
   spam: '#ef4444',     // Red
   trash: '#6b7280',   // Gray
+  social: '#10b981',   // Green
+  promotions: '#3b82f6', // Blue
+  updates: '#f59e0b',   // Amber
+  forums: '#8b5cf6',    // Purple
 };
 
 interface MailLayoutProps {
@@ -72,6 +79,7 @@ interface MailLayoutProps {
 
 export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
   const profile = authService.getCurrentUser();
+  const { addNotification } = useNotifications();
 
   // keep raw responses and normalize when using
   const [foldersRaw, setFoldersRaw] = useState<any>([]);
@@ -81,9 +89,6 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
   const [loading, setLoading] = useState(true);
   const [showBadges, setShowBadges] = useState(false); // Collapsed by default for cleaner look
-  const [showActivityLog, setShowActivityLog] = useState(false);
-  const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
-  const [showTermsOfService, setShowTermsOfService] = useState(false);
   const [labels, setLabels] = useState<any[]>([]);
   const [editingLabelId, setEditingLabelId] = useState<number | null>(null);
   const [editLabelName, setEditLabelName] = useState('');
@@ -464,8 +469,43 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
   };
 
   useEffect(() => {
-    const handleNewEmail = () => {
-      console.log('[PUSH] New email notification received! Refreshing...');
+    const handleNewEmail = (e: any) => {
+      const newEmailData = e.detail;
+      console.log('[PUSH] New email notification received! Instant local injection...', newEmailData);
+      
+      // 1. ADD TO NOTIFICATIONS UI
+      if (newEmailData && newEmailData.subject) {
+        addNotification({
+          title: `New Email: ${newEmailData.subject}`,
+          message: `From ${newEmailData.from_name || newEmailData.from_email}`,
+          type: 'mail'
+        });
+      } else {
+        addNotification({
+          title: 'New Email Received',
+          message: 'You have a new message in your inbox',
+          type: 'mail'
+        });
+      }
+      
+      // 2. INSTANT LOCAL INJECTION (THE "SAME MILLISECOND" TRICK)
+      // If we are in the folder this email belongs to, add it to the list locally
+      if (newEmailData && typeof newEmailData === 'object' && newEmailData.id) {
+        const isCurrentFolder = selectedFolder && (
+          String(newEmailData.mailbox_id) === String(selectedFolder.id) || 
+          (selectedFolder.system_box && String(newEmailData.mailbox_id) === String(getFolderIdByName(selectedFolder.system_box)))
+        );
+
+        if (isCurrentFolder) {
+           setEmailsRaw((prev: Email[]) => {
+             // Don't add if it already exists (redundancy check)
+             if (prev.some(em => String(em.id) === String(newEmailData.id))) return prev;
+             return [newEmailData, ...prev];
+           });
+        }
+      }
+
+      // 3. FULL REFRESH (Counts + Sync)
       refreshEmails();
     };
 
@@ -564,7 +604,7 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
       {/* Folders */}
       <div className="flex-1 overflow-y-auto py-2">
         <div className="px-2 space-y-1">
-          {['inbox', 'starred', 'snoozed', 'sent', 'drafts', 'spam', 'trash'].map((folderType) => {
+          {['inbox', 'social', 'promotions', 'updates', 'forums', 'starred', 'snoozed', 'sent', 'drafts', 'spam', 'trash'].map((folderType) => {
             let folder = folders.find((f) => (f.name || '').toString().toLowerCase() === folderType);
 
             // Create virtual folders for starred, snoozed if they don't exist in backend
@@ -699,6 +739,29 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
             <div className="bg-gradient-to-r from-blue-500 to-cyan-500 h-1.5 rounded-full transition-all duration-300" style={{ width: `${Math.min((storageInfo.used / storageInfo.limit) * 100, 100)}%` }}></div>
           </div>
         </div>
+      </div>
+ 
+      {/* Privacy & Terms - Sidebar Footer */}
+      <div className="px-4 pb-4 flex items-center justify-center gap-2 text-[10px] text-gray-400 dark:text-slate-500 font-medium tracking-tight">
+        <button
+           onClick={() => {
+              window.dispatchEvent(new CustomEvent('show-privacy-policy'));
+              setMobileSidebarOpen(false);
+           }}
+           className="hover:text-blue-500 transition-colors"
+        >
+          Privacy Policy
+        </button>
+        <span className="opacity-20">•</span>
+        <button
+           onClick={() => {
+              window.dispatchEvent(new CustomEvent('show-terms-of-service'));
+              setMobileSidebarOpen(false);
+           }}
+           className="hover:text-blue-500 transition-colors"
+        >
+          Terms of Service
+        </button>
       </div>
     </>
   );
@@ -840,7 +903,9 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
                   onRefresh={refreshEmails}
                   isTrash={selectedFolder?.id === 'trash' || selectedFolder?.system_box === 'trash'}
                   folderType={selectedFolder?.system_box || selectedFolder?.name?.toLowerCase()}
-                  onShowActivityLog={() => setShowActivityLog(true)}
+                  onShowActivityLog={() => window.dispatchEvent(new CustomEvent('show-activity-log'))}
+                  onShowPrivacyPolicy={() => window.dispatchEvent(new CustomEvent('show-privacy-policy'))}
+                  onShowTermsOfService={() => window.dispatchEvent(new CustomEvent('show-terms-of-service'))}
                 />
               </div>
 
@@ -886,29 +951,28 @@ export default function MailLayout({ searchQuery = '' }: MailLayoutProps) {
         <ComposeEmail
           key={win.id}
           onClose={() => handleCloseComposeWindow(win.id)}
-          onSent={() => { handleCloseComposeWindow(win.id); refreshEmails(); }}
+          onSent={(newEmail: any) => { 
+            handleCloseComposeWindow(win.id); 
+            if (newEmail) {
+              console.log('[Compose] Sent! Instant local injection...', newEmail);
+              const isSentFolder = selectedFolder && (
+                selectedFolder.system_box === 'sent' || 
+                String(selectedFolder.id) === String(getFolderIdByName('sent'))
+              );
+              if (isSentFolder) {
+                setEmailsRaw((prev: Email[]) => {
+                  if (prev.some(em => String(em.id) === String(newEmail.id))) return prev;
+                  return [newEmail, ...prev];
+                });
+              }
+            }
+            refreshEmails(); 
+          }}
           onDraftSaved={refreshEmails}
           prefilledData={win.data}
         />
       ))}
 
-      {/* Activity Log Modal */}
-      <ActivityLogModal
-        isOpen={showActivityLog}
-        onClose={() => setShowActivityLog(false)}
-      />
-
-      {/* Privacy Policy Modal */}
-      <PrivacyPolicyModal
-        isOpen={showPrivacyPolicy}
-        onClose={() => setShowPrivacyPolicy(false)}
-      />
-
-      {/* Terms of Service Modal */}
-      <TermsOfServiceModal
-        isOpen={showTermsOfService}
-        onClose={() => setShowTermsOfService(false)}
-      />
     </div>
   );
 }

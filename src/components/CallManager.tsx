@@ -13,6 +13,7 @@ import IncomingCall from './IncomingCall';
 import ActiveCall from './ActiveCall';
 import PostCallScreen from './PostCallScreen';
 import { Video } from 'lucide-react';
+import { useNotifications } from '../contexts/NotificationContext';
 
 export default function CallManager() {
     const user = authService.getCurrentUser();
@@ -21,6 +22,7 @@ export default function CallManager() {
     const notifiedCalls = useRef(new Set<string>());
     const notificationIdRef = useRef<string | null>(null);
     const [allContacts, setAllContacts] = useState<any[]>([]);
+    const { addNotification } = useNotifications();
 
     useEffect(() => {
         const fetchAllUsers = async () => {
@@ -75,6 +77,12 @@ export default function CallManager() {
 
             console.log(`[CallManager] Incoming call from ${caller}`);
             notificationIdRef.current = toast(`Incoming call from ${caller}`, { icon: '📞', duration: 10000 });
+
+            addNotification({
+                title: 'Incoming Call',
+                message: `${caller} is calling you`,
+                type: 'call'
+            });
 
             // Could show browser notification here
             if ('Notification' in window && Notification.permission === 'granted') {
@@ -179,12 +187,24 @@ export default function CallManager() {
                             </div>
                         </div>
                     ), { duration: 15000, position: 'top-center' });
+                    addNotification({
+                        title: 'Meeting Invitation',
+                        message: `${payload.inviteFrom || sender} invited you to a meeting`,
+                        type: 'call',
+                        link: `/meet/${payload.meetingId}`
+                    });
                     return;
                 }
 
                 if (sender !== user?.email) {
                     const content = payload.content || 'New message';
                     toast(`Message from ${sender.split('@')[0]}: ${content}`, { icon: '💬', duration: 4000 });
+
+                    addNotification({
+                        title: `Message from ${sender.split('@')[0]}`,
+                        message: content,
+                        type: 'info'
+                    });
                 }
             }
         };
@@ -193,6 +213,12 @@ export default function CallManager() {
             const { from, fileName } = e.detail;
             if (from !== user?.email) {
                 toast(`Incoming file from ${from.split('@')[0]}: ${fileName}`, { icon: '📂', duration: 5000 });
+
+                addNotification({
+                    title: 'File Received',
+                    message: `${fileName} from ${from.split('@')[0]}`,
+                    type: 'file'
+                });
             }
         };
 

@@ -18,8 +18,8 @@ npm run build
 # 2. Sync Files (using rsync if available, otherwise scp)
 echo "Step 3: Uploading files to server..."
 
-# Create directory if not exists
-ssh -o StrictHostKeyChecking=no $USER@$SERVER_IP "mkdir -p $DEST_DIR"
+# Create directory if not exists and clean remote dist
+ssh -o StrictHostKeyChecking=no $USER@$SERVER_IP "mkdir -p $DEST_DIR && rm -rf $DEST_DIR/dist"
 
 if command -v rsync &> /dev/null; then
     # Sync backend (excluding node_modules and version control)

@@ -14,6 +14,8 @@ type EmailListProps = {
     isTrash?: boolean;
     folderType?: string;
     onShowActivityLog?: () => void;
+    onShowPrivacyPolicy?: () => void;
+    onShowTermsOfService?: () => void;
 };
 
 export default function EmailList({
@@ -24,6 +26,8 @@ export default function EmailList({
     isTrash,
     folderType,
     onShowActivityLog,
+    onShowPrivacyPolicy,
+    onShowTermsOfService,
 }: EmailListProps) {
     const [activeTab, setActiveTab] = useState<'primary' | 'social' | 'promotions'>('primary');
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -136,12 +140,14 @@ export default function EmailList({
     };
 
     const getSenderName = (name?: string, email?: string) => {
-        if (name && !name.includes('@')) return name;
-        return (email || "").split('@')[0];
+        if (typeof name === 'string' && name && !name.includes('@')) return name;
+        return (typeof email === 'string' ? email : "").split('@')[0];
     };
 
-    const getInitials = (name: string) => {
-        return name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2);
+    const getInitials = (name: any) => {
+        const str = typeof name === 'string' ? name : (name?.full_name || name?.email || '');
+        if (!str || typeof str !== 'string') return '';
+        return str.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2);
     };
 
     const toggleSelection = (e: React.MouseEvent, id: string) => {
@@ -193,15 +199,11 @@ export default function EmailList({
         }
 
         emails.forEach(email => {
-            const textToCheck = (
-                (email.from_name || '') + ' ' +
-                (email.subject || '') + ' ' +
-                (email.labels?.map((l: any) => typeof l === 'string' ? l : l.name).join(' ') || '')
-            ).toLowerCase();
+            const cat = (email.category || 'inbox').toLowerCase();
 
-            if (textToCheck.match(/social|linkedin|twitter|facebook|instagram|slack|discord|tiktok/)) {
+            if (cat === 'social') {
                 categories.social.push(email);
-            } else if (textToCheck.match(/promotion|newsletter|offer|sale|discount|deal|marketing|update/)) {
+            } else if (cat === 'promotions') {
                 categories.promotions.push(email);
             } else {
                 categories.primary.push(email);
@@ -419,10 +421,14 @@ export default function EmailList({
                             <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 select-none">
                                 <div className="flex items-center gap-3 sm:w-48 flex-shrink-0">
                                     <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-slate-800 dark:to-slate-700 flex items-center justify-center text-[10px] font-bold text-blue-600 dark:text-blue-300">
-                                        {getInitials(email.from_name || email.from_email || '')}
+                                        {folderType === 'sent' && email.to_emails?.length 
+                                          ? getInitials(typeof email.to_emails[0] === 'string' ? email.to_emails[0] : (email.to_emails[0]?.full_name || email.to_emails[0]?.email || '')) 
+                                          : getInitials(email.from_name || email.from_email || '')}
                                     </div>
                                     <span className={`text-sm truncate ${!isRead ? 'text-gray-900 dark:text-white font-bold' : 'text-gray-700 dark:text-gray-300 font-medium'}`}>
-                                        {getSenderName(email.from_name, email.from_email)}
+                                        {folderType === 'sent' && email.to_emails?.length 
+                                          ? `To: ${getSenderName(typeof email.to_emails[0] === 'string' ? undefined : email.to_emails[0]?.full_name, typeof email.to_emails[0] === 'string' ? email.to_emails[0] : email.to_emails[0]?.email)}` 
+                                          : getSenderName(email.from_name, email.from_email)}
                                         {messageCount > 1 && <span className="ml-1 text-gray-500 font-normal">({messageCount})</span>}
                                     </span>
                                 </div>
@@ -484,11 +490,11 @@ export default function EmailList({
                     <span className="font-medium text-gray-600 dark:text-gray-300">{threadList.length} conversations</span>
                     <span className="text-gray-300 dark:text-gray-700">|</span>
                     <div className="flex items-center gap-2">
-                        <span className="hover:underline cursor-pointer">Terms</span>
+                        <span onClick={onShowTermsOfService} className="hover:underline cursor-pointer">Terms</span>
                         <span className="opacity-50">·</span>
-                        <span className="hover:underline cursor-pointer">Privacy</span>
+                        <span onClick={onShowPrivacyPolicy} className="hover:underline cursor-pointer">Privacy</span>
                         <span className="opacity-50">·</span>
-                        <span className="hover:underline cursor-pointer">Policies</span>
+                        <span onClick={onShowPrivacyPolicy} className="hover:underline cursor-pointer">Policies</span>
                     </div>
                 </div>
 

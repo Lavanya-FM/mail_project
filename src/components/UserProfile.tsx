@@ -22,9 +22,11 @@ export default function UserProfile({
   const [activeTab, setActiveTab] = useState<'overview' | 'carbon' | 'settings'>(initialTab);
   const [userStats, setUserStats] = useState({
     emailCount: 0,
-    storageUsed: 0,
-    memberSince: 'Nov 2024'
+    storageUsedBytes: 0,
+    storageLimitBytes: 1024 * 1024 * 1024,
+    memberSince: 'Oct 2024'
   });
+  const [recentActivity, setRecentActivity] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Read current profile from authService (keeps initial values consistent)
@@ -36,39 +38,50 @@ export default function UserProfile({
     created_at: undefined
   };
 
-  // Keep displayed header fields in local state so they can be updated if you later wire a switch event
   const [displayName, setDisplayName] = useState<string>(currentProfile.name || userName);
   const [displayEmail, setDisplayEmail] = useState<string>(currentProfile.email || userEmail);
 
   useEffect(() => {
-    const fetchUserStats = async () => {
+    const fetchUserData = async () => {
       try {
-        // Ensure we use the latest profile (authService may update elsewhere)
         const profile = authService.getCurrentUser?.() || currentProfile;
         if (!profile || !profile.id) {
           setLoading(false);
           return;
         }
 
+        // 1. Fetch Stats & Storage
+        const [statsRes, activityLog] = await Promise.all([
+          authService.fetchWithAuth(`${import.meta.env.VITE_API_URL || '/api'}/storage/quota?user_id=${profile.id}`),
+          authService.getRecentActivity?.() || []
+        ]);
+
+        let storageData = { used_bytes: 0, limit_bytes: 1024 * 1024 * 1024 };
+        if (statsRes.ok) {
+          const quota = await statsRes.json();
+          storageData = {
+            used_bytes: quota.used_bytes || 0,
+            limit_bytes: quota.limit_bytes || 1024 * 1024 * 1024
+          };
+        }
+
         const { data: emails } = await emailService.getEmails(profile.id);
         const emailCount = emails?.length || 0;
         
-        // Calculate storage used (based on email count and average size)
-        const avgEmailSize = 0.05; // 50KB average per email
-        const storageUsedGB = (emailCount * avgEmailSize) / 1024;
-        
-        // Get member since date from profile or default
         const memberSince = profile.created_at ? 
           new Date(profile.created_at).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) :
-          'Nov 2024';
+          'Oct 2024';
 
         setUserStats({
           emailCount,
-          storageUsed: storageUsedGB,
+          storageUsedBytes: storageData.used_bytes,
+          storageLimitBytes: storageData.limit_bytes,
           memberSince
         });
 
-        // also keep header in sync
+        // 2. Fetch Real Activity (Map to list items)
+        setRecentActivity(activityLog.slice(0, 5));
+
         setDisplayName(profile.name || userName);
         setDisplayEmail(profile.email || userEmail);
 
@@ -79,22 +92,37 @@ export default function UserProfile({
       }
     };
 
-    fetchUserStats();
-    // Note: no dependencies so runs once on mount. If you want to refresh on auth changes,
-    // you can listen to an auth event or add a small interval here.
+    fetchUserData();
   }, []);
+
+  const formatStorage = (bytes: number) => {
+    if (bytes === 0) return '0.0 GB';
+    const gb = bytes / (1024 * 1024 * 1024);
+    return gb < 0.1 ? '< 0.1 GB' : `${gb.toFixed(1)} GB`;
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
       <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-2xl shadow-2xl border border-gray-200 dark:border-slate-700 max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="sticky top-0 bg-gradient-to-r from-blue-500 to-cyan-500 px-6 py-6 flex items-center justify-between z-10">
-          <div>
-            <h2 className="text-2xl font-bold text-white mb-1">{displayName}</h2>
-            <p className="text-blue-100 flex items-center gap-2">
-              <Mail className="w-4 h-4" />
-              {displayEmail}
-            </p>
+        <div className="sticky top-0 bg-gradient-to-r from-blue-500 to-cyan-500 px-6 py-6 flex items-center justify-between z-10 font-sans">
+          <div className="flex items-center gap-5">
+            <div className="relative">
+              {currentProfile.avatar ? (
+                <img src={currentProfile.avatar} alt={displayName} className="w-20 h-20 rounded-full object-cover border-4 border-white/20 shadow-2xl" />
+              ) : (
+                <div className="w-20 h-20 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center text-white text-3xl font-bold border-4 border-white/20 shadow-2xl">
+                  {displayName?.[0]?.toUpperCase() ?? "U"}
+                </div>
+              )}
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold text-white mb-1 drop-shadow-sm">{displayName}</h2>
+              <p className="text-blue-10 flex items-center gap-2 text-sm font-medium opacity-90">
+                <Mail className="w-4 h-4" />
+                {displayEmail}
+              </p>
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -160,21 +188,21 @@ export default function UserProfile({
             <div className="space-y-6">
               {/* Profile Stats */}
               <div className="grid grid-cols-3 gap-4">
-                <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 border border-blue-200 dark:border-blue-800">
-                  <p className="text-xs text-gray-600 dark:text-slate-400 uppercase tracking-wider mb-2">Emails Sent</p>
+                <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 border border-blue-200 dark:border-blue-800 shadow-sm">
+                  <p className="text-[10px] text-gray-600 dark:text-slate-400 uppercase tracking-wider mb-2 font-bold">Emails Sent</p>
                   <p className="text-3xl font-bold text-blue-600 dark:text-blue-400">
                     {loading ? '...' : userStats.emailCount}
                   </p>
                 </div>
-                <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-4 border border-green-200 dark:border-green-800">
-                  <p className="text-xs text-gray-600 dark:text-slate-400 uppercase tracking-wider mb-2">Storage Used</p>
+                <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-4 border border-green-200 dark:border-green-800 shadow-sm">
+                  <p className="text-[10px] text-gray-600 dark:text-slate-400 uppercase tracking-wider mb-2 font-bold">Storage Used</p>
                   <p className="text-3xl font-bold text-green-600 dark:text-green-400">
-                    {loading ? '...' : userStats.storageUsed.toFixed(1)} GB
+                    {loading ? '...' : formatStorage(userStats.storageUsedBytes)}
                   </p>
                 </div>
-                <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-4 border border-purple-200 dark:border-purple-800">
-                  <p className="text-xs text-gray-600 dark:text-slate-400 uppercase tracking-wider mb-2">Member Since</p>
-                  <p className="text-lg font-bold text-purple-600 dark:text-purple-400">
+                <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-4 border border-purple-200 dark:border-purple-800 shadow-sm">
+                  <p className="text-[10px] text-gray-600 dark:text-slate-400 uppercase tracking-wider mb-2 font-bold">Member Since</p>
+                  <p className="text-xl font-bold text-purple-600 dark:text-purple-400">
                     {loading ? '...' : userStats.memberSince}
                   </p>
                 </div>
@@ -182,23 +210,26 @@ export default function UserProfile({
 
               {/* Recent Activity */}
               <div>
-                <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">Recent Activity</h3>
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">Security & Activity</h3>
                 <div className="space-y-3">
-                  <div className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-slate-800 rounded-lg">
-                    <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                    <span className="text-sm text-gray-700 dark:text-slate-300">Sent email to team@company.com</span>
-                    <span className="text-xs text-gray-500 dark:text-slate-500 ml-auto">2 hours ago</span>
-                  </div>
-                  <div className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-slate-800 rounded-lg">
-                    <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                    <span className="text-sm text-gray-700 dark:text-slate-300">Earned Bronze 2 badge</span>
-                    <span className="text-xs text-gray-500 dark:text-slate-500 ml-auto">1 day ago</span>
-                  </div>
-                  <div className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-slate-800 rounded-lg">
-                    <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                    <span className="text-sm text-gray-700 dark:text-slate-300">Scheduled 3 emails</span>
-                    <span className="text-xs text-gray-500 dark:text-slate-500 ml-auto">3 days ago</span>
-                  </div>
+                  {recentActivity.length > 0 ? (
+                    recentActivity.map((activity, idx) => (
+                      <div key={idx} className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-slate-800 rounded-lg border border-gray-100 dark:border-slate-700">
+                        <div className={`w-2 h-2 rounded-full ${activity.is_current ? 'bg-green-500' : 'bg-blue-500 animate-pulse'}`}></div>
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium text-gray-700 dark:text-slate-200">{activity.access_type} ({activity.location})</span>
+                          <span className="text-[11px] text-gray-500">{activity.ip}</span>
+                        </div>
+                        <span className="text-xs text-gray-500 dark:text-slate-500 ml-auto">
+                          {new Date(activity.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-center py-8 text-gray-500 text-sm italic">
+                      No recent security activity found.
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

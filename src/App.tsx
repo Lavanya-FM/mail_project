@@ -1,4 +1,4 @@
-// App Version: 1.0.1-v11-fixed
+// App Version: 1.0.1-v15-final
 import { useEffect } from 'react';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { authService } from './lib/authService';
@@ -9,12 +9,14 @@ import SuperAdminDashboard from './components/SuperAdminDashboard';
 import toast, { Toaster } from 'react-hot-toast';
 import SupportPage from './components/SupportPage';
 
+import { NotificationProvider } from './contexts/NotificationContext';
+
 function App() {
   const isSuperadmin = isSuperadminAuthenticated();
   const isRegularUser = authService.isAuthenticated();
 
   useEffect(() => {
-    console.log("JeeMail Build v1.0.1-v11-fixed Loaded");
+    console.log("JeeMail Build v1.0.1-v15-final Loaded (Categorization Fixed)");
   }, []);
 
   // Global toast event listener (for events from non-React code)
@@ -32,8 +34,10 @@ function App() {
   if (window.location.pathname === '/support') {
     return (
       <ThemeProvider>
-        <Toaster position="top-right" />
-        <SupportPage />
+        <NotificationProvider>
+          <Toaster position="top-right" />
+          <SupportPage />
+        </NotificationProvider>
       </ThemeProvider>
     );
   }
@@ -45,13 +49,15 @@ function App() {
 
       {/* App Theme Wrapper */}
       <ThemeProvider>
-        {isSuperadmin ? (
-          <SuperAdminDashboard />
-        ) : isRegularUser ? (
-          <MainApp />
-        ) : (
-          <Auth />
-        )}
+        <NotificationProvider>
+          {isSuperadmin ? (
+            <SuperAdminDashboard />
+          ) : isRegularUser ? (
+            <MainApp />
+          ) : (
+            <Auth />
+          )}
+        </NotificationProvider>
       </ThemeProvider>
     </>
   );

@@ -131,6 +131,7 @@ function setupP2PWebSocket(server) {
             await handleRegister(ws, connectionId, msg, wss);
             break;
 
+          case 'request-presence':
             ws.send(JSON.stringify({
               type: 'presence-update',
               online: [...new Set(getOnlinePeers().map(p => p.email))]

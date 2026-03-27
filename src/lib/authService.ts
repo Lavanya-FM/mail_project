@@ -33,6 +33,7 @@ function saveUser(user: any) {
     id: user.id,
     full_name: name,
     email: email,
+    avatar: user.avatar || user.avatar_url || null,
     storage_used: user.storage_used || 0,
     storage_limit: user.storage_limit || 1073741824
   };
@@ -206,8 +207,36 @@ export const authService = {
   isAuthenticated,
   getRecentActivity,
   fetchWithAuth,
-  switchUser
+  switchUser,
+  updateProfile
 };
+
+export async function updateProfile(data: { id?: number; name?: string; avatar_url?: string | null }) {
+  try {
+    const user = getCurrentUser();
+    if (!user || (!user.id && !data.id)) return { success: false, error: "Not logged in" };
+
+    const res = await fetchWithAuth(`${API}/users/profile`, {
+      method: "POST",
+      body: JSON.stringify({
+        user_id: data.id || user.id,
+        name: data.name,
+        avatar_url: data.avatar_url
+      }),
+    });
+
+    const result = await res.json();
+    if (res.ok && result.success) {
+      // Update local storage
+      const updatedUser = { ...user, ...result.user };
+      saveUser(updatedUser);
+      return { success: true, user: updatedUser };
+    }
+    return { success: false, error: result.error || "Update failed" };
+  } catch (err) {
+    return { success: false, error: "Network error" };
+  }
+}
 
 export function switchUser(account: any) {
   if (!account) return;

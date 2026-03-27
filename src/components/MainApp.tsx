@@ -7,13 +7,29 @@ import CallsView from './CallsView';
 import P2PTransferManager from './P2PTransferManager';
 import AccountSwitcher from './AccountSwitcher';
 import ThemeToggle from './ThemeToggle';
-import UserProfile from './UserProfile';
+import AccountManagement from './AccountManagement';
 import InboxRulesModal from './InboxRulesModal';
+import PrivacyPolicyModal from './PrivacyPolicyModal';
+import TermsOfServiceModal from './TermsOfServiceModal';
+import ActivityLogModal from './ActivityLogModal';
+import { useNotifications } from '../contexts/NotificationContext';
+
+const timeAgo = (date: Date) => {
+    const seconds = Math.floor((new Date().getTime() - date.getTime()) / 1000);
+    if (seconds < 60) return 'Just now';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days}d ago`;
+    return date.toLocaleDateString();
+};
 
 
 import P2PReceiverHandler from './P2PReceiverHandler';
 
-type View = 'mail' | 'drive' | 'calls';
+type View = 'mail' | 'drive' | 'calls' | 'account';
 
 import { authService } from '../lib/authService';
 import { p2pService } from '../lib/p2pService';
@@ -26,13 +42,44 @@ export default function MainApp() {
     const [userProfileTab, setUserProfileTab] = useState<'overview' | 'carbon' | 'settings'>('carbon');
     const [showAppsMenu, setShowAppsMenu] = useState(false);
     const [showNotifications, setShowNotifications] = useState(false);
+    const { notifications, unreadCount, markAsRead, markAllAsRead, clearNotification } = useNotifications();
+    const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
+    const [showTermsOfService, setShowTermsOfService] = useState(false);
+    const [showActivityLog, setShowActivityLog] = useState(false);
 
 
     const user = authService.getCurrentUser() || {
         email: 'user@example.com',
         name: 'User',
-        id: 0
+        id: 0,
+        avatar: null
     };
+
+    const [storageInfo, setStorageInfo] = useState({
+        used: user.storage_used_bytes || 0,
+        limit: user.storage_limit_bytes || 1073741824
+    });
+
+    useEffect(() => {
+        const fetchQuota = async () => {
+            if (!user.id) return;
+            try {
+                const res = await authService.fetchWithAuth(`${import.meta.env.VITE_API_URL || '/api'}/storage/quota?user_id=${user.id}`);
+                if (res.ok) {
+          const data = await res.json();
+          if (data.used_bytes !== undefined) {
+            setStorageInfo({
+              used: data.used_bytes,
+              limit: data.quota_bytes || 26843545600
+            });
+          }
+        }
+            } catch (err) {
+                console.error("Failed to fetch storage quota", err);
+            }
+        };
+        fetchQuota();
+    }, [user.id]);
 
     useEffect(() => {
         if (user && user.email) {
@@ -65,21 +112,33 @@ export default function MainApp() {
         window.addEventListener('app-navigate', handleNavigate as EventListener);
         window.addEventListener('popstate', handlePathChange);
 
+        const onPrivacy = () => setShowPrivacyPolicy(true);
+        const onTerms = () => setShowTermsOfService(true);
+        const onActivity = () => setShowActivityLog(true);
+
+        window.addEventListener('show-privacy-policy', onPrivacy);
+        window.addEventListener('show-terms-of-service', onTerms);
+        window.addEventListener('show-activity-log', onActivity);
+
         return () => {
             window.removeEventListener('app-navigate', handleNavigate as EventListener);
             window.removeEventListener('popstate', handlePathChange);
+            window.removeEventListener('show-privacy-policy', onPrivacy);
+            window.removeEventListener('show-terms-of-service', onTerms);
+            window.removeEventListener('show-activity-log', onActivity);
         };
     }, []);
 
     const handleViewProfile = () => {
-        setUserProfileTab('carbon');
-        setShowUserProfile(true);
+        setCurrentView('account');
+        setShowUserProfile(false);
     };
 
     const handleNavigation = (view: View) => {
         let path = '/';
         if (view === 'drive') path = '/drive';
         else if (view === 'calls') path = '/meet';
+        else if (view === 'account') path = '/account';
 
         window.history.pushState({}, '', path);
         setCurrentView(view);
@@ -108,7 +167,7 @@ export default function MainApp() {
             <P2PReceiverHandler />
 
             {/* Top Navigation Bar */}
-            <div className="h-14 px-4 flex items-center justify-between border-b border-gray-200 dark:border-slate-800 z-50 bg-white dark:bg-slate-900 shadow-sm relative">
+            <div className="h-14 px-4 flex items-center justify-between border-b border-gray-200 dark:border-slate-800 z-[100] bg-white dark:bg-slate-900 shadow-sm relative">
                 {/* Left: Logo */}
                 <div className="flex items-center gap-3 w-60 pl-2">
                     <button 
@@ -185,22 +244,93 @@ export default function MainApp() {
                             title="Notifications"
                         >
                             <Bell className="w-5 h-5" />
-                            <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white dark:border-slate-900"></span>
+                            {unreadCount > 0 && (
+                                <span className="absolute top-1.5 right-1.5 w-4 h-4 bg-red-600 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white dark:border-slate-900 animate-in zoom-in-0 duration-300">
+                                    {unreadCount > 9 ? '9+' : unreadCount}
+                                </span>
+                            )}
                         </button>
 
                         {/* Notifications Dropdown */}
                         {showNotifications && (
-                            <div className="absolute top-full right-0 mt-2 w-80 bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-gray-200 dark:border-slate-800 p-4 z-50 animate-in fade-in zoom-in-95 duration-200">
-                                <div className="flex items-center justify-between mb-2">
+                            <div className="absolute top-full right-0 mt-2 w-80 bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-gray-200 dark:border-slate-800 p-0 z-[110] animate-in fade-in zoom-in-95 duration-200 overflow-hidden">
+                                <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-slate-800">
                                     <h3 className="font-semibold text-gray-900 dark:text-white">Notifications</h3>
-                                    <button className="text-xs text-blue-600 hover:underline">Mark all read</button>
+                                    {notifications.length > 0 && (
+                                        <button 
+                                            onClick={markAllAsRead}
+                                            className="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 font-medium"
+                                        >
+                                            Mark all read
+                                        </button>
+                                    )}
                                 </div>
-                                <div className="space-y-2 max-h-64 overflow-y-auto">
-                                    <div className="py-8 text-center text-gray-500 dark:text-slate-400">
-                                        <Bell className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                                        <p className="text-sm">No new notifications</p>
+                                <div className="max-h-96 overflow-y-auto">
+                                    {notifications.length > 0 ? (
+                                        <div className="divide-y divide-gray-100 dark:divide-slate-800">
+                                            {notifications.map((notif) => (
+                                                <div 
+                                                    key={notif.id} 
+                                                    onClick={() => markAsRead(notif.id)}
+                                                    className={`p-4 hover:bg-gray-50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer relative ${!notif.isRead ? 'bg-blue-50/30 dark:bg-blue-900/10' : ''}`}
+                                                >
+                                                    {!notif.isRead && (
+                                                        <div className="absolute left-1 top-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-blue-600 rounded-full"></div>
+                                                    )}
+                                                    <div className="flex gap-3">
+                                                        <div className={`mt-1 flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+                                                            notif.type === 'mail' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600' :
+                                                            notif.type === 'file' ? 'bg-green-100 dark:bg-green-900/30 text-green-600' :
+                                                            notif.type === 'call' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-600' :
+                                                            'bg-gray-100 dark:bg-slate-800 text-gray-600'
+                                                        }`}>
+                                                            {notif.type === 'mail' ? <Mail className="w-4 h-4" /> :
+                                                             notif.type === 'file' ? <HardDrive className="w-4 h-4" /> :
+                                                             notif.type === 'call' ? <Video className="w-4 h-4" /> :
+                                                             <Bell className="w-4 h-4" />}
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                                                                {notif.title}
+                                                            </p>
+                                                            <p className="text-xs text-gray-600 dark:text-slate-400 line-clamp-2 mt-0.5">
+                                                                {notif.message}
+                                                            </p>
+                                                            <p className="text-[10px] text-gray-400 dark:text-slate-500 mt-1 font-medium italic">
+                                                                {timeAgo(notif.timestamp)}
+                                                            </p>
+                                                        </div>
+                                                        <button 
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                clearNotification(notif.id);
+                                                            }}
+                                                            className="text-gray-400 hover:text-red-500 transition-colors p-1"
+                                                        >
+                                                            &times;
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="py-12 text-center text-gray-500 dark:text-slate-400">
+                                            <Bell className="w-10 h-10 mx-auto mb-3 opacity-20" />
+                                            <p className="text-sm font-medium">No new notifications</p>
+                                            <p className="text-xs opacity-60 mt-1">We'll notify you when something happens</p>
+                                        </div>
+                                    )}
+                                </div>
+                                {notifications.length > 0 && (
+                                    <div className="p-3 border-t border-gray-100 dark:border-slate-800 text-center">
+                                        <button 
+                                            onClick={() => {/* Navigate to full notifications page if it exists */}}
+                                            className="text-xs font-semibold text-gray-500 hover:text-gray-900 dark:text-slate-400 dark:hover:text-white transition-colors"
+                                        >
+                                            View all notifications
+                                        </button>
                                     </div>
-                                </div>
+                                )}
                             </div>
                         )}
                     </div>
@@ -219,7 +349,7 @@ export default function MainApp() {
 
                         {/* Apps Dropdown */}
                         {showAppsMenu && (
-                            <div className="absolute top-full right-0 mt-2 w-72 bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-gray-200 dark:border-slate-800 p-4 z-50 animate-in fade-in zoom-in-95 duration-200">
+                            <div className="absolute top-full right-0 mt-2 w-72 bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-gray-200 dark:border-slate-800 p-4 z-[110] animate-in fade-in zoom-in-95 duration-200">
                                 <div className="grid grid-cols-3 gap-4">
                                     <button onClick={() => { handleNavigation('mail'); setShowAppsMenu(false); }} className="flex flex-col items-center gap-2 p-2 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-xl transition">
                                         <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600">
@@ -260,13 +390,15 @@ export default function MainApp() {
                                 name: user.name || user.full_name || 'User',
                                 email: user.email || '',
                                 avatar: user.avatar || null,
-                                token: authService.getToken()
+                                token: authService.getToken(),
+                                used_bytes: storageInfo.used,
+                                quota_bytes: storageInfo.limit
                             }}
                             onManageAccount={handleViewProfile}
                         >
                             <button
                                 onClick={() => { setShowRulesModal(true); }}
-                                className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg transition overflow-hidden mb-2 flex items-center gap-2 border border-blue-200 dark:border-blue-800"
+                                className="w-full px-4 py-2 text-left text-[13px] text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-xl transition overflow-hidden flex items-center gap-2 border border-blue-200 dark:border-blue-800 shadow-sm"
                             >
                                 <Shield className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                                 Inbox Rules
@@ -276,7 +408,7 @@ export default function MainApp() {
                                     handleNavigation('mail');
                                     window.location.hash = 'transfers';
                                 }}
-                                className="w-full px-4 py-3 text-left text-sm text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg transition overflow-hidden mb-2 flex items-center gap-2 border border-blue-200 dark:border-blue-800"
+                                className="w-full px-4 py-2 text-left text-[13px] text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-xl transition overflow-hidden flex items-center gap-2 border border-blue-200 dark:border-blue-800 shadow-sm"
                             >
                                 <Shield className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                                 Transfers
@@ -308,18 +440,31 @@ export default function MainApp() {
             </div>
 
             {/* Global Modals */}
-            {showUserProfile && (
-                <UserProfile
-                    onClose={() => setShowUserProfile(false)}
-                    userEmail={user.email}
-                    userName={user.name || user.full_name || 'User'}
-                    initialTab={userProfileTab}
+            {currentView === 'account' && (
+                <AccountManagement 
+                    onBack={() => setCurrentView('mail')} 
+                    currentUser={user} 
                 />
             )}
 
             {showRulesModal && (
                 <InboxRulesModal isOpen={showRulesModal} onClose={() => setShowRulesModal(false)} />
             )}
+
+            <PrivacyPolicyModal
+                isOpen={showPrivacyPolicy}
+                onClose={() => setShowPrivacyPolicy(false)}
+            />
+
+            <TermsOfServiceModal
+                isOpen={showTermsOfService}
+                onClose={() => setShowTermsOfService(false)}
+            />
+
+            <ActivityLogModal
+                isOpen={showActivityLog}
+                onClose={() => setShowActivityLog(false)}
+            />
 
 
         </div>

@@ -39,20 +39,20 @@ import { logger } from '../utils/logger';
 /* ---------------------------------------------------- */
 
 const P2P_LIMITS = {
-  // 🚀 Streaming Config
-  SEGMENT_SIZE: 1024 * 1024, // 1MB strictly
-  MACRO_CHUNK_SIZE: 64 * 1024 * 1024, // 64MB logical grouping
-  WINDOW_SIZE: 16, // Max 16 segments in flight
-  MAX_BUFFERED_AMOUNT: 32 * 1024 * 1024, // 32MB socket buffer cap
-  WORKER_COUNT: navigator.hardwareConcurrency || 8,
+  // 🚀 Streaming Config (Deeply Optimized for High-End Performance)
+  SEGMENT_SIZE: 4194304, // 4MB segments for higher throughput
+  MACRO_CHUNK_SIZE: 128 * 1024 * 1024, // 128MB logical grouping
+  WINDOW_SIZE: 32, // Max 32 segments in flight (32 * 4MB = 128MB window)
+  MAX_BUFFERED_AMOUNT: 134217728, // 128MB socket buffer cap
+  WORKER_COUNT: Math.max(8, navigator.hardwareConcurrency || 8),
 
   // Legacy/Fallback (for adaptive logic if needed)
-  BASE_KBPS: 999999,
-  MIN_KBPS: 999999,
-  MAX_KBPS: 999999,
-  CHUNK_SIZE: 1024 * 1024,
-  CONCURRENCY: 16,
-  BATCH_SIZE: 8,
+  BASE_KBPS: 2500000, 
+  MIN_KBPS: 1000000,
+  MAX_KBPS: 10000000, 
+  CHUNK_SIZE: 4194304,
+  CONCURRENCY: 32,
+  BATCH_SIZE: 16,
 };
 
 const chunkRetries = new Map<string, number>();
@@ -357,7 +357,7 @@ class StrictP2PService {
   private notifyConnection(connected: boolean) {
     logger.p2p(`[P2P] Connection status changed: ${connected}`);
     this.connectionListeners.forEach(cb => {
-      try { cb(connected); } catch (e) { logger.error(e); }
+      try { cb(connected); } catch (e) { logger.error('Connection listener error', e); }
     });
   }
   private receivedFiles = new Map<string, Blob>();
@@ -387,7 +387,7 @@ class StrictP2PService {
 
   private notifyPresenceListeners(peers: string[]) {
     this.presenceListeners.forEach(cb => {
-      try { cb(peers); } catch (e) { logger.error(e); }
+      try { cb(peers); } catch (e) { logger.error('Presence listener error', e); }
     });
   }
   /*
@@ -2451,7 +2451,7 @@ class StrictP2PService {
       if (chunkData) {
         chunks.push(new Blob([chunkData]));
       } else {
-        logger.error('Missing chunk', i, 'for', messageId);
+        logger.error(`Missing chunk ${i} for ${messageId}`, { i, messageId });
         return; // Failed to assemble
       }
     }

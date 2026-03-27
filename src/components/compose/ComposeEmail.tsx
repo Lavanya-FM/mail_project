@@ -20,7 +20,7 @@ const getFolderIdByName = (name: string) => {
 
 interface ComposeEmailProps {
   onClose: () => void;
-  onSent: () => void;
+  onSent: (email?: any) => void;
   onDraftSaved: () => void;
   prefilledData?: any;
 }
@@ -290,9 +290,7 @@ export default function ComposeEmail(props: ComposeEmailProps) {
     sendingRef.current = true;
     setSending(true);
 
-    // 🚀 Optimistic UI: Close immediately, process in background
-    onClose();
-    onSent?.();
+    // 🚀 We now wait for the response to ensure the message is visible the millisecond we close.
 
     try {
       const recipients = to.split(',').map(e => e.trim()).filter(Boolean);
@@ -347,7 +345,7 @@ export default function ComposeEmail(props: ComposeEmailProps) {
         }
       }
 
-      await emailService.createEmail({
+      const res = await emailService.createEmail({
         user_id: profile.id,
         from_email: profile.email,
         from_name: profile.full_name || profile.email,
@@ -369,7 +367,8 @@ export default function ComposeEmail(props: ComposeEmailProps) {
       }
 
       toast.success('✓ Email sent successfully');
-      // onSent/onClose called optimistically at start
+      onSent?.(res.data?.email);
+      onClose();
 
     } catch (err: any) {
       console.error('[SEND FAILED]', err);

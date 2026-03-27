@@ -182,7 +182,52 @@ async function scanEmail(email, attachments = []) {
         results.tags.push('dangerous');
     }
 
+    // 🛡️ Gmail-style Classification
+    const classification = classifyEmail(email);
+    results.category = classification.category;
+    if (classification.category !== 'inbox') {
+        results.tags.push(classification.category);
+    }
+
     return results;
+}
+
+/**
+ * Classifies email into Gmail-style categories
+ */
+function classifyEmail(email) {
+    const from = (email.from_email || '').toLowerCase();
+    const subject = (email.subject || '').toLowerCase();
+    const body = (email.body || '').toLowerCase();
+    const fullText = subject + ' ' + body;
+
+    // SOCIAL: Major networks
+    const socialDomains = ['facebook.com', 'instagram.com', 'linkedin.com', 'twitter.com', 'x.com', 'tiktok.com', 'pinterest.com', 'reddit.com', 'snapchat.com'];
+    if (socialDomains.some(d => from.includes(d)) || 
+        fullText.includes('friend request') || 
+        fullText.includes('new message from') || 
+        fullText.includes('notification from')) {
+        return { category: 'social' };
+    }
+
+    // PROMOTIONS: Keywords
+    const promoKeywords = ['discount', 'offer', 'sale', 'limited time', 'coupon', 'exclusive', 'deal', 'promo', 'unsubscribe', 'click here to view'];
+    if (promoKeywords.some(kw => fullText.includes(kw)) || from.includes('newsletter') || from.includes('marketing')) {
+        return { category: 'promotions' };
+    }
+
+    // UPDATES: Automated notifications
+    const updateKeywords = ['receipt', 'invoice', 'confirm', 'ticket', 'statement', 'shipping', 'order', 'tracking', 'verify'];
+    if (updateKeywords.some(kw => fullText.includes(kw)) || from.includes('no-reply') || from.includes('noreply') || from.includes('support')) {
+        return { category: 'updates' };
+    }
+
+    // FORUMS: Generic list signatures (if no other hit)
+    if (fullText.includes('unsubscribe from this list') || fullText.includes('group message')) {
+        return { category: 'forums' };
+    }
+
+    return { category: 'inbox' };
 }
 
 // -------------------- RULE ENGINE --------------------
@@ -281,16 +326,17 @@ async function saveScanResults(emailId, results) {
 
         await db.query(
             `INSERT INTO email_scan_results_v2 
-       (email_id, spam_score, phishing, malware, tags, extracted_keywords, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, NOW())
+       (email_id, spam_score, phishing, malware, tags, category, extracted_keywords, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
        ON DUPLICATE KEY UPDATE 
          spam_score = VALUES(spam_score),
          phishing = VALUES(phishing),
          malware = VALUES(malware),
          tags = VALUES(tags),
+         category = VALUES(category),
          extracted_keywords = VALUES(extracted_keywords)
       `,
-            [emailId, results.spamScore, results.phishing ? 1 : 0, results.malware ? 1 : 0, tagsJson, keywordsJson]
+            [emailId, results.spamScore, results.phishing ? 1 : 0, results.malware ? 1 : 0, tagsJson, results.category || 'inbox', keywordsJson]
         );
     } catch (err) {
         console.error('Failed to save scan results:', err);

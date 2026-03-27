@@ -14,7 +14,7 @@ async function updateUsage(userId, deltaBytes) {
     try {
         await db.query(`
             INSERT INTO user_storage (user_id, total_bytes_used, quota_bytes)
-            VALUES (?, ?, 1073741824)
+            VALUES (?, ?, 26843545600)
             ON DUPLICATE KEY UPDATE 
                 total_bytes_used = total_bytes_used + ?,
                 updated_at = CURRENT_TIMESTAMP
@@ -58,7 +58,7 @@ async function getUserUsage(userId) {
     );
 
     if (!storage) {
-        return { usedBytes: 0, quotaBytes: 1073741824, percentUsed: 0 };
+        return { usedBytes: 0, quotaBytes: 26843545600, percentUsed: 0 };
     }
 
     const percentUsed = storage.quotaBytes > 0

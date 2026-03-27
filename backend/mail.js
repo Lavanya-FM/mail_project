@@ -18,6 +18,7 @@ console.log('BCRYPT TYPE:', typeof bcrypt);
 if (typeof bcrypt.compare !== 'function') console.error('BCRYPT.COMPARE IS MISSING!');
 const nodemailer = require("nodemailer");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 
 const db = require("./db"); // expects exported promise-based query/getConnection interface
 const { sanitizeBody, normalizeEmail, isValidEmailFormat } = require("./utils");
@@ -46,13 +47,17 @@ async function createSystemFolders(userId) {
     ["Trash", "trash"],
     ["Starred", "starred"],
     ["Archive", "archive"],
+    ["Social", "social"],
+    ["Promotions", "promotions"],
+    ["Updates", "updates"],
+    ["Forums", "forums"]
   ];
 
   for (const [name, system_box] of folderList) {
     await db.query(
-      `INSERT INTO mailboxes (user_id, name, system_box)
+      `INSERT IGNORE INTO mailboxes (user_id, name, system_box)
        VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE name = VALUES(name)`,
+      `,
       [userId, name, system_box]
     );
   }
@@ -66,7 +71,7 @@ async function createSystemFolders(userId) {
 
   for (const [name, color] of defaultLabels) {
     await db.query(
-      "INSERT INTO labels (user_id, name, color) VALUES (?, ?, ?)",
+      "INSERT IGNORE INTO labels (user_id, name, color) VALUES (?, ?, ?)",
       [userId, name, color]
     );
   }
@@ -142,6 +147,7 @@ async function initTables() {
         phishing BOOLEAN DEFAULT 0,
         malware BOOLEAN DEFAULT 0,
         priority BOOLEAN DEFAULT 0,
+        category VARCHAR(50) DEFAULT 'inbox',
         tags TEXT,
         extracted_keywords TEXT,
         warnings TEXT,
@@ -195,6 +201,16 @@ async function initTables() {
     // Add delivery_status and smtp_error columns
     await addCol("ALTER TABLE emails ADD COLUMN IF NOT EXISTS delivery_status VARCHAR(20) DEFAULT 'delivered'");
     await addCol("ALTER TABLE emails ADD COLUMN IF NOT EXISTS smtp_error TEXT");
+    await addCol("ALTER TABLE email_scan_results_v2 ADD COLUMN IF NOT EXISTS category VARCHAR(50) DEFAULT 'inbox'");
+    await addCol("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url LONGTEXT DEFAULT NULL");
+    await addCol("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20) DEFAULT NULL");
+    await addCol("ALTER TABLE users ADD COLUMN IF NOT EXISTS language VARCHAR(50) DEFAULT 'English (United States)'");
+    await addCol("ALTER TABLE users ADD COLUMN IF NOT EXISTS birthday DATE DEFAULT NULL");
+    await addCol("ALTER TABLE users ADD COLUMN IF NOT EXISTS gender VARCHAR(20) DEFAULT NULL");
+    await addCol("ALTER TABLE users ADD COLUMN IF NOT EXISTS home_address TEXT DEFAULT NULL");
+    await addCol("ALTER TABLE users ADD COLUMN IF NOT EXISTS work_address TEXT DEFAULT NULL");
+    await addCol("ALTER TABLE users ADD COLUMN IF NOT EXISTS other_addresses TEXT DEFAULT NULL");
+    await addCol("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_password_change TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
 
   } catch (err) {
     console.error('⚠️ DB Initialization failed (Server will run in limited mode):', err.message);
@@ -625,6 +641,7 @@ router.post("/register", async (req, res) => {
       email: String(normalizedEmail || ''), // ✅ Return exactly as stored (no trim)
       date_of_birth: dobString || null,
       gender: gender || null,
+      avatar_url: null
     };
 
     // ✅ CRITICAL: Validate response doesn't contain password
@@ -735,7 +752,8 @@ router.post("/login", async (req, res) => {
       email,
       password,
       date_of_birth,
-      gender
+      gender,
+      avatar_url
     FROM users
     WHERE LOWER(TRIM(email)) = LOWER(TRIM(?))
     LIMIT 1`,
@@ -854,10 +872,11 @@ router.post("/login", async (req, res) => {
     // ✅ CRITICAL: Return name and email exactly as stored in database (no trimming)
     const responseUser = {
       id: user.id,
-      name: String(user.full_name || ''), // ✅ Return exactly as stored (no trim)
-      email: String(user.email || ''), // ✅ Return exactly as stored (no trim)
-      date_of_birth: user.date_of_birth || null,
-      gender: user.gender || null,
+      name: user.full_name,
+      email: user.email,
+      date_of_birth: user.date_of_birth,
+      gender: user.gender,
+      avatar_url: user.avatar_url
     };
 
     // ✅ CRITICAL: Validate response doesn't contain password
@@ -1145,6 +1164,13 @@ router.get("/admin/system-logs", async (req, res) => {
 
 router.get("/folders/:userId", async (req, res) => {
   const userId = req.params.userId;
+  
+  // Ensure all system folders exist (for new categories Social, Promotions, etc.)
+  try {
+    await createSystemFolders(userId);
+  } catch (e) {
+    console.warn("Failed to ensure system folders:", e);
+  }
 
   const [rows] = await db.query(
     `SELECT m.id, m.name, m.system_box,
@@ -1325,7 +1351,7 @@ router.get("/emails/:userId/:folder", async (req, res) => {
 
     const [emails] = await db.query(
       `SELECT e.*, m.is_read, m.is_starred, m.mailbox_id,
-              s.spam_score, s.phishing, s.malware, s.tags as scan_tags, s.warnings as scan_warnings, s.priority as scan_priority
+              s.spam_score, s.phishing, s.malware, s.category, s.tags as scan_tags, s.warnings as scan_warnings, s.priority as scan_priority
        FROM emails e
        JOIN email_mailbox m 
        ON e.id = m.email_id
@@ -1417,6 +1443,7 @@ router.post("/email/create", async (req, res) => {
     in_reply_to,
     folder_id,
     attachments, // array of { filename, content (base64), size, mime_type, encoding? }
+    p2p_enabled,
     p2p_delivered,
     thread_id,
     threadId,
@@ -1440,18 +1467,23 @@ router.post("/email/create", async (req, res) => {
   // Debug logging removed to prevent connection errors
 
   // normalize recipients
-  const extractEmails = arr =>
-    (arr || []).map(v =>
+  const extractEmails = val => {
+    if (!val) return [];
+    const arr = Array.isArray(val) ? val : String(val).split(',').map(s => s.trim());
+    return arr.map(v =>
       typeof v === "string" ? v.toLowerCase() :
-        typeof v === "object" && v.email ? v.email.toLowerCase() :
+        typeof v === "object" && v?.email ? v.email.toLowerCase() :
           null
     ).filter(Boolean);
+  };
 
   const toList = extractEmails(to_emails || to);
   const ccList = extractEmails(cc_emails || cc);
   const bccList = extractEmails(bcc_emails || bcc);
 
   const cleanBody = sanitizeBody(body || "");
+
+  console.log(`[CreateEmail] Request from ${user_id}. Recipients: TO=${toList.length}, CC=${ccList.length}, BCC=${bccList.length}. Draft=${is_draft}`);
 
   if (!is_draft && toList.length === 0)
     return res.status(400).json({ error: "Recipient required" });
@@ -1497,6 +1529,7 @@ router.post("/email/create", async (req, res) => {
 
     // resolve folder
     const box = is_draft ? "drafts" : "sent";
+    console.log(`[CreateEmail] Resolving mailbox '${box}' for user ${user_id}`);
 
     const [[mailbox]] = await conn.query(
       "SELECT id FROM mailboxes WHERE user_id = ? AND system_box = ? LIMIT 1",
@@ -1545,36 +1578,28 @@ router.post("/email/create", async (req, res) => {
     // Fallback: If threading service returned nothing (shouldn't happen as it creates new), 
     // or failed, standard legacy logic is effectively handled by resolveThreadId creating new.
 
-    const crypto = require("crypto");
     const generatedMessageId = `<${crypto.randomUUID()}@jeemail.in>`;
 
-
-    // 2. INSERT email with Threading Columns
-    // Using conversation_id as column alias for thread_id logic or separate? 
-    // Requirements say "messages table" structure. 
-    // Our migration added conversation_id. We should populate it.
-    // Also populate subject_normalized and references_header
-
-    // We reuse thread_id column for now to keep frontend working (aliasing it to conversation_id logic)
-
+    // 🚀 RESTORING ATOMIC SEND LOGIC
+    // 1. INSERT email with correct columns
     const insertSql = `INSERT INTO emails
        (user_id, thread_id, conversation_id, message_id, from_name, from_email, subject, subject_normalized, body, is_html, in_reply_to, references_header,
-        to_header, cc_header, bcc_header, folder_id, is_draft, p2p_enabled, p2p_delivered, delivery_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+        to_header, cc_header, bcc_header, folder_id, is_draft, p2p_enabled, p2p_delivered, delivery_status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`;
 
     const insertValues = [
       user_id,
       resolvedThreadId,
-      resolvedThreadId, // conversation_id
+      resolvedThreadId, 
       generatedMessageId,
       sender.full_name,
       sender.email,
       subject || "(No Subject)",
-      normalizedSubject, // subject_normalized
+      normalizedSubject,
       cleanBody,
-      1, // is_html
+      1,
       in_reply_to || null,
-      req.body.references || null, // references_header
+      req.body.references || null,
       toList.join(", "),
       ccList.join(", "),
       bccList.join(", "),
@@ -1582,7 +1607,7 @@ router.post("/email/create", async (req, res) => {
       is_draft ? 1 : 0,
       resolvedP2PEnabled,
       resolvedP2PDelivered,
-      is_draft ? 'draft' : 'sending' // delivery_status
+      is_draft ? 'draft' : 'delivered'
     ];
 
     // ✅ DEBUG: Log the exact SQL and values being used
@@ -1590,9 +1615,11 @@ router.post("/email/create", async (req, res) => {
     console.log('EMAIL INSERT VALUES COUNT:', insertValues.length);
     console.log('EMAIL INSERT VALUES:', insertValues.map((v, i) => `${i + 1}. ${typeof v === 'string' && v.length > 50 ? v.substring(0, 50) + '...' : v}`));
 
+    console.log('[CreateEmail] Inserting email record...');
     const [insert] = await conn.query(insertSql, insertValues);
 
     const emailId = insert.insertId;
+    console.log(`[CreateEmail] Email inserted. ID: ${emailId}`);
 
     // Debug logging removed to prevent connection errors
 
@@ -1705,6 +1732,7 @@ router.post("/email/create", async (req, res) => {
     // 🚀 IMMEDIATE LOCAL DELIVERY
     if (!is_draft) {
       const all = [...new Set([...toList, ...ccList, ...bccList])].filter(email => email.toLowerCase() !== sender.email.toLowerCase());
+      console.log(`[CreateEmail] Identifying ${all.length} local recipients...`);
       if (all.length) {
         const placeholders = all.map(() => "?").join(",");
         const [users] = await conn.query(`SELECT id, email FROM users WHERE email IN (${placeholders})`, all);
@@ -1712,20 +1740,42 @@ router.post("/email/create", async (req, res) => {
           const [[inbox]] = await conn.query("SELECT id FROM mailboxes WHERE user_id = ? AND system_box = 'inbox' LIMIT 1", [rcp.id]);
           if (!inbox) continue;
 
-          let targetMailboxId = inbox.id;
+          let targetMailboxIds = inbox ? [inbox.id] : [];
           let markRead = 0, markStarred = 0;
 
           if (scanResults) {
             const rules = await processUserRules(rcp.id, { from_email: sender.email, subject: subject || '', body: cleanBody || '', attachments: attachmentsList }, scanResults);
-            if (rules.moveToFolderId) targetMailboxId = rules.moveToFolderId;
+            
+            if (rules.moveToFolderId) {
+                targetMailboxIds = [rules.moveToFolderId]; // Explicit move overrides all
+            } else if (scanResults.spamScore >= 50) {
+                const [[spamBox]] = await conn.query(
+                    "SELECT id FROM mailboxes WHERE user_id = ? AND system_box = 'spam' LIMIT 1",
+                    [rcp.id]
+                );
+                if (spamBox) targetMailboxIds = [spamBox.id]; // Spam only goes to spam
+            } else if (scanResults.category && scanResults.category !== 'inbox') {
+                // Discover the specific category mailbox
+                const [[catBox]] = await conn.query(
+                    "SELECT id FROM mailboxes WHERE user_id = ? AND system_box = ? LIMIT 1",
+                    [rcp.id, scanResults.category]
+                );
+                if (catBox && !targetMailboxIds.includes(catBox.id)) {
+                    targetMailboxIds.push(catBox.id); // Add both! (Inbox + Category)
+                }
+            }
+
             if (rules.markRead) markRead = 1;
-            if (rules.markImportant) markStarred = 1;
-            if (scanResults.priority) markStarred = 1;
+            if (rules.markImportant || scanResults.priority) markStarred = 1;
           }
-          await conn.query(
-            `INSERT IGNORE INTO email_mailbox (user_id, email_id, mailbox_id, is_read, is_starred) VALUES (?, ?, ?, ?, ?)`,
-            [rcp.id, emailId, targetMailboxId, markRead, markStarred]
-          );
+
+          for (const boxId of targetMailboxIds) {
+            console.log(`[CreateEmail] Delivery to user ${rcp.id} mailbox ${boxId}`);
+            await conn.query(
+              `INSERT IGNORE INTO email_mailbox (user_id, email_id, mailbox_id, is_read, is_starred) VALUES (?, ?, ?, ?, ?)`,
+              [rcp.id, emailId, boxId, markRead, markStarred]
+            );
+          }
         }
       }
     }
@@ -1740,28 +1790,88 @@ router.post("/email/create", async (req, res) => {
 
     await conn.commit();
 
-    const notificationPayload = {
-      id: emailId,
-      subject: subject || "(No Subject)",
-      from_email: sender.email,
-      from_name: sender.full_name,
-      timestamp: new Date().toISOString()
-    };
+    // 🚀 UNIFIED INSTANT DELIVERY
+    // 1. Fetch full records for everyone involved
+    try {
+      const [allRows] = await db.query(
+        `SELECT e.*, m.is_read, m.is_starred, m.mailbox_id, m.user_id as mailbox_user_id,
+                s.spam_score, s.category, s.priority as scan_priority
+         FROM emails e
+         JOIN email_mailbox m ON e.id = m.email_id
+         LEFT JOIN email_scan_results_v2 s ON e.id = s.email_id
+         WHERE e.id = ?`,
+        [emailId]
+      );
 
-    // Notify sender (for sent folder sync)
-    notifyNewEmail(sender.email, notificationPayload);
+      // Get attachments once
+      const [atts] = await db.query('SELECT * FROM email_attachments WHERE email_id = ?', [emailId]);
+      
+      const prepareEmailForUser = (targetUserId) => {
+        const userRow = allRows.find(r => r.mailbox_user_id === targetUserId);
+        if (!userRow) return null;
+        const full = { ...userRow };
+        full.attachments = atts;
+        full.has_attachments = atts.length > 0;
+        return full;
+      };
 
-    // Notify all recipients
-    [...new Set([...toList, ...ccList, ...bccList])].forEach(email => {
-      notifyNewEmail(email, notificationPayload);
-    });
+      const senderEmailObj = prepareEmailForUser(user_id);
 
-    res.json({ success: true, email_id: emailId });
+      // Return success + sender's object for immediate UI injection
+      res.json({ 
+        success: true, 
+        email_id: emailId,
+        email: senderEmailObj 
+      });
 
-    // 🚀 BACKGROUND TASKS (Non-blocking for response)
+      // Notify others in background
+      setImmediate(async () => {
+        try {
+          // A. Notify Sender (Socket backup)
+          if (senderEmailObj) {
+            notifyNewEmail(sender.email, senderEmailObj);
+          }
+
+          // B. Notify Recipients
+          const [recipientUsers] = await db.query(
+            "SELECT id, email FROM users WHERE email IN (?)",
+            [[...new Set([...toList, ...ccList, ...bccList])]]
+          );
+
+          for (const rcp of recipientUsers) {
+             const rcpEmailObj = prepareEmailForUser(rcp.id);
+             if (rcpEmailObj) {
+               console.log(`[Push] Notifying recipient ${rcp.email} about ${emailId}`);
+               notifyNewEmail(rcp.email, rcpEmailObj);
+             }
+          }
+        } catch (pushErr) {
+          console.error('[PushError] Background notification failed:', pushErr);
+        }
+      });
+
+    } catch (err) {
+      console.error('[InstantDeliverySync] Critical error:', err);
+      if (!res.headersSent) {
+        res.json({ success: true, email_id: emailId });
+      }
+    }
+
+
+    // 🚀 BACKGROUND SMTP TASKS
     if (!is_draft && !p2p_enabled) {
       setImmediate(async () => {
         try {
+          const allRecipients = [...new Set([...toList, ...ccList, ...bccList])];
+          const hasExternal = allRecipients.some(e => !isValidDomain(e));
+
+          if (!hasExternal) {
+            console.log(`[CreateEmail] Local-only send detected for ${emailId}. Marking delivered.`);
+            await db.query("UPDATE emails SET delivery_status = 'delivered' WHERE id = ?", [emailId]);
+            return;
+          }
+
+          console.log(`[CreateEmail] Attempting external delivery for ${emailId} via SMTP...`);
           const transporter = nodemailer.createTransport({ host: "127.0.0.1", port: 25, secure: false, tls: { rejectUnauthorized: false } });
           const sendOptions = { from: `"${sender.full_name}" <${sender.email}>`, to: toList.join(", "), subject: subject || "(No Subject)", html: cleanBody };
           if (ccList.length) sendOptions.cc = ccList.join(", ");
@@ -2757,6 +2867,80 @@ router.delete("/rules/:id", async (req, res) => {
   } catch (err) {
     console.error("DELETE RULE ERROR:", err);
     res.status(500).json({ error: "Failed to delete rule" });
+  }
+});
+
+// GET USER PROFILE
+router.get("/users/profile", async (req, res) => {
+  try {
+    const { user_id } = req.query;
+    if (!user_id) return res.status(400).json({ error: "user_id is required" });
+
+    const [rows] = await db.query(
+      `SELECT id, full_name as name, email, avatar_url, phone, language, birthday, gender, 
+              home_address, work_address, other_addresses, last_password_change 
+       FROM users WHERE id = ?`,
+      [user_id]
+    );
+
+    if (rows.length === 0) return res.status(404).json({ error: "User not found" });
+    res.json({ success: true, user: rows[0] });
+  } catch (err) {
+    console.error("GET PROFILE ERROR:", err);
+    res.status(500).json({ error: "Failed to fetch profile" });
+  }
+});
+
+// UPDATE USER PROFILE
+router.post("/users/profile", async (req, res) => {
+  try {
+    const { 
+      user_id, name, avatar_url, phone, language, birthday, gender, 
+      home_address, work_address, other_addresses, password 
+    } = req.body;
+    if (!user_id) return res.status(400).json({ error: "user_id is required" });
+
+    const updates = [];
+    const values = [];
+
+    if (name) { updates.push("full_name = ?"); values.push(name); }
+    if (avatar_url !== undefined) { updates.push("avatar_url = ?"); values.push(avatar_url); }
+    if (phone !== undefined) { updates.push("phone = ?"); values.push(phone); }
+    if (language !== undefined) { updates.push("language = ?"); values.push(language); }
+    if (birthday !== undefined) { updates.push("birthday = ?"); values.push(birthday); }
+    if (gender !== undefined) { updates.push("gender = ?"); values.push(gender); }
+    if (home_address !== undefined) { updates.push("home_address = ?"); values.push(home_address); }
+    if (work_address !== undefined) { updates.push("work_address = ?"); values.push(work_address); }
+    if (other_addresses !== undefined) { updates.push("other_addresses = ?"); values.push(other_addresses); }
+    
+    if (password) {
+      const hash = await bcrypt.hash(password, 10);
+      updates.push("password = ?, last_password_change = NOW()");
+      values.push(hash);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: "No fields to update" });
+    }
+
+    values.push(user_id);
+    await db.query(
+      `UPDATE users SET ${updates.join(", ")} WHERE id = ?`,
+      values
+    );
+
+    // Fetch updated user with all profile fields
+    const [rows] = await db.query(
+      `SELECT id, full_name as name, email, avatar_url, phone, language, birthday, gender, 
+              home_address, work_address, other_addresses, last_password_change 
+       FROM users WHERE id = ?`,
+      [user_id]
+    );
+
+    res.json({ success: true, user: rows[0] });
+  } catch (err) {
+    console.error("PROFILE UPDATE ERROR:", err);
+    res.status(500).json({ error: "Failed to update profile" });
   }
 });
 
